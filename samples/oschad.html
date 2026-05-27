@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Виписка по рахунку - Ощадбанк</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #fafafa; color: #333; margin: 20px; }
+        h2 { color: #1e3a8a; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f3f4f6; }
+        .credit { color: green; font-weight: bold; }
+        .debit { color: red; }
+    </style>
+</head>
+<body>
+    <h2>АТ "Ощадбанк" - Виписка по рахунку 2600123456789</h2>
+    <p>Період: з 01.03.2025 по 31.03.2025</p>
+    <p>Клієнт: ФОП Петренко Іван Васильович</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Дата операції</th>
+                <th>Призначення платежу</th>
+                <th>Дебет (Витрати)</th>
+                <th>Кредит (Надходження)</th>
+                <th>Контрагент</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>10.03.2025</td>
+                <td>Оплата послуг хостингу згідно рах. 102</td>
+                <td class="debit">-450.00</td>
+                <td>0.00</td>
+                <td>ТОВ ХОСТІНГ-УКРАЇНА</td>
+            </tr>
+            <tr>
+                <td>20.03.2025</td>
+                <td>Оплата за послуги дизайну згідно договору №12</td>
+                <td>0.00</td>
+                <td class="credit">25000.00</td>
+                <td>ТОВ Креатив Дизайн</td>
+            </tr>
+            <tr>
+                <td>25.03.2025</td>
+                <td>Сплата єдиного податку за 1 кв 2025 року</td>
+                <td class="debit">-1250.00</td>
+                <td>0.00</td>
+                <td>ДПС України</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>

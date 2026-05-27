@@ -1,0 +1,9 @@
+{
+  "form_code": "F0110210",
+  "name": "Податкова декларація з ПДВ",
+  "fields": [
+    {"id": "vat_out", "label": "Вихідний ПДВ", "type": "number", "required": true},
+    {"id": "vat_in", "label": "Вхідний ПДВ", "type": "number", "required": true},
+    {"id": "vat_to_pay", "label": "ПДВ до сплати", "type": "calculated", "formula": "vat_out - vat_in"}
+  ]
+}

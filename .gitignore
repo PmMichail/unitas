@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+unitas.db
+temp_bot/
+backend/temp_uploads/
+node_modules/
+.next/
+dist/
+build/
+.DS_Store
