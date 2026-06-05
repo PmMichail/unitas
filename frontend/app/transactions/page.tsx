@@ -1,0 +1,591 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
+import { useApp } from "@/context/AppContext";
+import { api } from "@/lib/api";
+import { useDropzone } from "react-dropzone";
+import {
+  Receipt,
+  Search,
+  Filter,
+  ArrowUpRight,
+  ArrowDownRight,
+  Upload,
+  CheckCircle,
+  AlertTriangle,
+  Info,
+  Edit2,
+  Calendar,
+  X,
+  Trash2
+} from "lucide-react";
+
+export default function Transactions() {
+  const { profiles, selectedProfile } = useApp();
+
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [periodFilter, setPeriodFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Statement Upload State
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Edit State
+  const [editingTx, setEditingTx] = useState<any>(null);
+  const [editTaxable, setEditTaxable] = useState(true);
+  const [editTxType, setEditTxType] = useState<any>("income");
+  const [editContragent, setEditContragent] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editDirection, setEditDirection] = useState("in");
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+
+  const activeProfileId = selectedProfile?.id;
+
+  const fetchTransactions = async () => {
+    if (!activeProfileId) return;
+    setLoading(true);
+    try {
+      const data = await api.getTransactions(activeProfileId, startDate || undefined, endDate || undefined);
+      setTransactions(data);
+    } catch (err) {
+      console.error("Failed to fetch transactions:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTransactions();
+  }, [activeProfileId, startDate, endDate]);
+
+  // Dropzone setup
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    accept: {
+      "application/pdf": [".pdf"],
+      "text/csv": [".csv"],
+      "text/html": [".html", ".htm"],
+      "text/plain": [".txt"]
+    },
+    maxFiles: 1,
+    onDrop: async (acceptedFiles) => {
+      if (!activeProfileId || acceptedFiles.length === 0) return;
+      
+      const file = acceptedFiles[0];
+      setIsUploading(true);
+      setUploadSuccess(null);
+      setUploadError(null);
+
+      try {
+        const res = await api.uploadStatement(activeProfileId, file);
+        setUploadSuccess(res.message || "Виписку успішно завантажено та розпізнано!");
+        fetchTransactions();
+      } catch (err: any) {
+        setUploadError(err.response?.data?.detail || "Помилка при завантаженні або розпізнаванні виписки");
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  });
+
+  // Handle Edit Save
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTx) return;
+
+    setSubmittingEdit(true);
+    try {
+      await api.updateTransaction(editingTx.id, {
+        taxable: editTaxable,
+        transaction_type: editTxType,
+        contragent: editContragent,
+        amount: editAmount ? parseFloat(editAmount) : undefined,
+        direction: editDirection
+      });
+      setEditingTx(null);
+      fetchTransactions();
+    } catch (err) {
+      alert("Не вдалося оновити транзакцію");
+    } finally {
+      setSubmittingEdit(false);
+    }
+  };
+
+  // Open edit modal
+  const openEditModal = (tx: any) => {
+    setEditingTx(tx);
+    setEditTaxable(tx.taxable);
+    setEditTxType(tx.transaction_type || tx.type || "income");
+    setEditContragent(tx.contragent || "");
+    setEditAmount(String(tx.amount || ""));
+    setEditDirection(tx.direction || "in");
+  };
+
+  // Period change helpers
+  const handlePeriodChange = (period: string) => {
+    setPeriodFilter(period);
+    const today = new Date();
+    const year = today.getFullYear();
+    
+    if (period === "all" || period === "") {
+      setStartDate("");
+      setEndDate("");
+      return;
+    }
+
+    let start = "";
+    let end = "";
+
+    const pad = (num: number) => String(num).padStart(2, '0');
+
+    if (period === "current_month") {
+      const month = today.getMonth() + 1;
+      start = `${year}-${pad(month)}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      end = `${year}-${pad(month)}-${pad(lastDay)}`;
+    } else if (period === "prev_month") {
+      let month = today.getMonth();
+      let yr = year;
+      if (month === 0) {
+        month = 12;
+        yr = year - 1;
+      }
+      start = `${yr}-${pad(month)}-01`;
+      const lastDay = new Date(yr, month, 0).getDate();
+      end = `${yr}-${pad(month)}-${pad(lastDay)}`;
+    } else if (period === "q1") {
+      start = `${year}-01-01`;
+      end = `${year}-03-31`;
+    } else if (period === "q2") {
+      start = `${year}-04-01`;
+      end = `${year}-06-30`;
+    } else if (period === "q3") {
+      start = `${year}-07-01`;
+      end = `${year}-09-30`;
+    } else if (period === "q4") {
+      start = `${year}-10-01`;
+      end = `${year}-12-31`;
+    } else if (period === "current_year") {
+      start = `${year}-01-01`;
+      end = `${year}-12-31`;
+    } else if (period === "prev_year") {
+      start = `${year - 1}-01-01`;
+      end = `${year - 1}-12-31`;
+    }
+
+    setStartDate(start);
+    setEndDate(end);
+  };
+
+  const handleStartDateChange = (val: string) => {
+    setStartDate(val);
+    setPeriodFilter("custom");
+  };
+
+  const handleEndDateChange = (val: string) => {
+    setEndDate(val);
+    setPeriodFilter("custom");
+  };
+
+  const handleClearStatements = async () => {
+    if (!activeProfileId) return;
+    if (!window.confirm("Ви впевнені, що хочете видалити всі завантажені виписки та транзакції для цього профілю? Цю дію неможливо скасувати.")) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api.clearStatements(activeProfileId);
+      alert(res.message || "Усі виписки успішно видалено");
+      fetchTransactions();
+    } catch (err) {
+      console.error("Failed to clear statements:", err);
+      alert("Не вдалося видалити виписки");
+      setLoading(false);
+    }
+  };
+
+  // Filter local results by search and transaction type
+  const filteredTransactions = transactions.filter((tx) => {
+    const matchesSearch = 
+      (tx.purpose || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (tx.contragent || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(tx.amount).includes(searchTerm);
+    
+    const matchesType = typeFilter === "all" || tx.transaction_type === typeFilter || tx.type === typeFilter;
+    
+    return matchesSearch && matchesType;
+  });
+
+  return (
+    <div className="space-y-8">
+      {/* Header */}
+      <div>
+        <h2 className="text-3xl font-extrabold bg-gradient-to-r from-slate-900 via-slate-700 to-indigo-600 dark:from-white dark:via-slate-200 dark:to-indigo-400 bg-clip-text text-transparent">
+          Транзакції
+        </h2>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          Аналізуйте доходи та витрати, імпортуйте банківські виписки та оптимізуйте taxable-статуси.
+        </p>
+      </div>
+
+      {/* Grid: Left - Upload, Right - Filters */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Upload card (1 col) */}
+        <div className="p-6 rounded-2xl glass-panel flex flex-col justify-between min-h-[220px]">
+          <div>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+              <Upload className="w-4 h-4 text-indigo-500" />
+              Імпорт виписки
+            </h3>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Завантажте виписку ПриватБанк, Монобанк або А-Банк. AI автоматично категоризує кожну транзакцію.
+            </p>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div
+              {...getRootProps()}
+              className={`border border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
+                isDragActive
+                  ? "border-indigo-500 bg-indigo-500/10"
+                  : "border-slate-300 dark:border-slate-800 hover:border-indigo-500/40 bg-slate-50/50 dark:bg-slate-950/20"
+              }`}
+            >
+              <input {...getInputProps()} />
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                {isUploading ? "Обробка AI..." : "Перетягніть виписку сюди"}
+              </p>
+              <p className="text-[9px] text-slate-400 mt-1">або натисніть для вибору файлу</p>
+            </div>
+
+            {uploadSuccess && (
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-500 flex items-start gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{uploadSuccess}</span>
+              </div>
+            )}
+
+            {uploadError && (
+              <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-500 flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{uploadError}</span>
+              </div>
+            )}
+
+            {transactions.length > 0 && (
+              <button
+                onClick={handleClearStatements}
+                className="w-full py-2 px-4 mt-2 rounded-xl border border-red-500/25 bg-red-500/10 hover:bg-red-500/20 text-red-500 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Видалити всі виписки
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Filters card (2 cols) */}
+        <div className="lg:col-span-2 p-6 rounded-2xl glass-panel flex flex-col justify-between">
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <Filter className="w-4 h-4 text-indigo-500" />
+              Пошук та фільтрація
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
+                  Період
+                </label>
+                <select
+                  value={periodFilter}
+                  onChange={(e) => handlePeriodChange(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold"
+                >
+                  <option value="all">За весь час</option>
+                  <option value="current_month">Поточний місяць</option>
+                  <option value="prev_month">Попередній місяць</option>
+                  <option value="q1">1 Квартал</option>
+                  <option value="q2">2 Квартал</option>
+                  <option value="q3">3 Квартал</option>
+                  <option value="q4">4 Квартал</option>
+                  <option value="current_year">Поточний рік</option>
+                  <option value="prev_year">Попередній рік</option>
+                  <option value="custom">Довільний</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
+                  Дата з
+                </label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => handleStartDateChange(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
+                  Дата по
+                </label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => handleEndDateChange(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
+                  Категорія
+                </label>
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-semibold"
+                >
+                  <option value="all">Всі транзакції</option>
+                  <option value="income">Оподатковувані доходи</option>
+                  <option value="expense">Витрати</option>
+                  <option value="own_funds">Власні кошти / Поповнення</option>
+                  <option value="refund">Повернення</option>
+                  <option value="loan">Позики / Кредити</option>
+                  <option value="tax_payment">Сплачені податки</option>
+                  <option value="salary_payment">Виплата зарплати</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="relative mt-4">
+            <input
+              type="text"
+              placeholder="Пошук за призначенням, контрагентом або сумою..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+            />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+          </div>
+        </div>
+      </div>
+
+      {/* Grid: Transactions Table */}
+      <div className="p-6 rounded-2xl glass-panel">
+        {loading ? (
+          <div className="py-24 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+          </div>
+        ) : filteredTransactions.length > 0 ? (
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-sm text-left text-slate-400">
+              <thead className="text-xs text-slate-400 uppercase bg-slate-950/20 border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th className="px-6 py-4">Дата / Час</th>
+                  <th className="px-6 py-4">Контрагент / Призначення</th>
+                  <th className="px-6 py-4">Тип</th>
+                  <th className="px-6 py-4 text-right">Сума</th>
+                  <th className="px-6 py-4">Оподатковується</th>
+                  <th className="px-6 py-4">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.map((tx) => {
+                  const isIncome = tx.direction === "in";
+                  
+                  // Label translations
+                  const typeLabels: Record<string, string> = {
+                    income: "Дохід",
+                    expense: "Витрата",
+                    own_funds: "Власні кошти",
+                    refund: "Повернення",
+                    loan: "Позика",
+                    tax_payment: "Податок",
+                    salary_payment: "Зарплата"
+                  };
+
+                  return (
+                    <tr key={tx.id} className="border-b border-slate-200 dark:border-slate-800/40 bg-slate-900/5 hover:bg-slate-900/10 transition-colors">
+                      <td className="px-6 py-4 font-semibold text-slate-800 dark:text-slate-300">
+                        {tx.date || "—"}
+                      </td>
+                      <td className="px-6 py-4 max-w-sm truncate">
+                        <div className="font-bold text-slate-900 dark:text-white truncate">
+                          {tx.contragent || "Невідомий контрагент"}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5" title={tx.purpose}>
+                          {tx.purpose}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                          {typeLabels[tx.transaction_type || tx.type] || tx.transaction_type || tx.type}
+                        </span>
+                      </td>
+                      <td className={`px-6 py-4 text-right font-extrabold ${isIncome ? "text-emerald-500" : "text-slate-800 dark:text-slate-200"}`}>
+                        <div className="flex items-center justify-end gap-1">
+                          {isIncome ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                          {tx.amount.toLocaleString("uk-UA")} грн
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          tx.taxable
+                            ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 border border-indigo-500/20"
+                            : "bg-slate-100 text-slate-600 dark:bg-slate-900/40 dark:text-slate-500 border border-slate-500/20"
+                        }`}>
+                          {tx.taxable ? "Так" : "Ні"}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => openEditModal(tx)}
+                          className="flex items-center gap-1 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 transition-all"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" /> Змінити
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="py-24 text-center text-slate-500">
+            Транзакцій за обраний період не виявлено. Будь ласка, завантажте виписку банку.
+          </div>
+        )}
+      </div>
+
+      {/* Edit transaction modal */}
+      {editingTx && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Редагувати транзакцію</h3>
+                <p className="text-xs text-slate-400 mt-1">Категоризація та статус оподаткування для розрахунків.</p>
+              </div>
+              <button
+                onClick={() => setEditingTx(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm font-semibold"
+              >
+                Закрити
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-850 space-y-2">
+              <div className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">Опис платежу</div>
+              <div className="text-xs text-slate-800 dark:text-slate-200 font-semibold">{editingTx.purpose}</div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-slate-400 font-bold">Сума:</span>
+                <span className="text-sm font-extrabold text-indigo-500">{editingTx.amount.toLocaleString("uk-UA")} грн</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              {/* Contragent edit */}
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                  Контрагент
+                </label>
+                <input
+                  type="text"
+                  value={editContragent}
+                  onChange={(e) => setEditContragent(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  placeholder="Введіть назву контрагента"
+                />
+              </div>
+
+              {/* Grid for Amount and Direction */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                    Сума
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                    placeholder="Сума в грн"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                    Напрямок платежу
+                  </label>
+                  <select
+                    value={editDirection}
+                    onChange={(e) => setEditDirection(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  >
+                    <option value="in">Надходження (дохід)</option>
+                    <option value="out">Витрата (списання)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Type select */}
+              <div>
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                  Тип / Категорія транзакції
+                </label>
+                <select
+                  value={editTxType}
+                  onChange={(e) => setEditTxType(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                >
+                  <option value="income">Дохід від бізнесу</option>
+                  <option value="expense">Витрати господарські</option>
+                  <option value="own_funds">Власні кошти (не оклад)</option>
+                  <option value="refund">Повернення коштів</option>
+                  <option value="loan">Позики, кредити, фіндопомога</option>
+                  <option value="tax_payment">Сплачені податки / бюджет</option>
+                  <option value="salary_payment">Виплата зарплати</option>
+                </select>
+              </div>
+
+              {/* Taxable checkbox */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="taxableCheckbox"
+                  checked={editTaxable}
+                  onChange={(e) => setEditTaxable(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 bg-slate-50 dark:bg-slate-900 dark:border-slate-800"
+                />
+                <label htmlFor="taxableCheckbox" className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                  Ця операція підлягає оподаткуванню (Taxable)
+                </label>
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={submittingEdit}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-lg disabled:opacity-50 glow-button"
+              >
+                {submittingEdit ? "Збереження..." : "Зберегти зміни"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

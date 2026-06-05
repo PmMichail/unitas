@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY telegram_bot/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY telegram_bot/ ./telegram_bot/
+COPY backend/ ./backend/
+
+ENV PYTHONPATH=/app
+ENV TELEGRAM_BOT_TOKEN=8566492902:AAHfWmB6vXNHLZ1GTNBxo8hJGRKB3H1MzKo
+
+CMD ["python", "telegram_bot/bot.py"]

@@ -40,6 +40,7 @@ services:
       - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-unitas}
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_URL=http://ollama:11434
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     ports:
       - "8000:8000"
     volumes:

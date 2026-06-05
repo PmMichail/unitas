@@ -1,0 +1,20 @@
+app = "unitas-backend"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile.backend.render"
+
+[env]
+  REDIS_URL = "redis://unitas-redis.fly.dev:6379"
+
+[[services]]
+  internal_port = 8000
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]

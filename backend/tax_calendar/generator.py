@@ -3,14 +3,14 @@ from datetime import datetime, date, timedelta
 
 class TaxCalendarGenerator:
     def __init__(self):
-        # Мінімальна зарплата в Україні (станом на 2025/2026 рік: 8000 грн)
-        self.min_salary = 8000.0
-        # Ставка ЄСВ за себе (22% від мін. зарплати = 1760 грн на місяць, або 5280 грн на квартал)
+        # Мінімальна зарплата в Україні (станом на 2026 рік: 8647 грн)
+        self.min_salary = 8647.0
+        # Ставка ЄСВ за себе (1562 грн на місяць, або 4686 грн на квартал)
         self.esv_rate = 0.22
-        self.esv_fop_monthly = self.min_salary * self.esv_rate # 1760 UAH
-        self.esv_fop_quarterly = self.esv_fop_monthly * 3 # 5280 UAH
+        self.esv_fop_monthly = 1562.0
+        self.esv_fop_quarterly = self.esv_fop_monthly * 3 # 4686 UAH
 
-    def generate_calendar(self, tax_system, group=None, rate=None, has_employees=False, reg_date_str=None, start_date=None, is_vat_payer=False):
+    def generate_calendar(self, tax_system, group=None, rate=None, has_employees=False, reg_date_str=None, start_date=None, is_vat_payer=False, esv_paid_by_employer=False):
         """
         Генерує податковий календар на 12 місяців вперед від start_date.
         
@@ -22,6 +22,7 @@ class TaxCalendarGenerator:
         - has_employees: наявність працівників (True/False)
         - reg_date_str: дата реєстрації (формат "YYYY-MM-DD")
         - start_date: дата, з якої починати генерацію (datetime або date, default=сьогодні)
+        - esv_paid_by_employer: чи сплачує ЄСВ роботодавець за основним місцем роботи
         """
         if start_date is None:
             start_date = date.today()
@@ -101,9 +102,20 @@ class TaxCalendarGenerator:
                             "status": "pending"
                         })
 
+                        events.append({
+                            "due_date": pay_due.strftime("%Y-%m-%d"),
+                            "title": f"Сплата Військового збору за {q_num} квартал {q_year} р.",
+                            "type": "payment",
+                            "tax_name": "military_tax",
+                            "description": "Сплата військового збору за ставкою 1% від отриманого доходу за квартал для ФОП 3-ї групи.",
+                            "amount_desc": "1% від доходу за квартал",
+                            "form_code": None,
+                            "status": "pending"
+                        })
+
                 # Квартальна сплата ЄСВ за себе (для всіх груп ФОП ЄП)
                 # Подається/сплачується до 20 числа місяця, наступного за кварталом (квітень, липень, жовтень, січень)
-                if month in (4, 7, 10, 1):
+                if not esv_paid_by_employer and month in (4, 7, 10, 1):
                     q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
                     q_year = year if month != 1 else year - 1
                     
@@ -151,7 +163,7 @@ class TaxCalendarGenerator:
                     })
                 
                 # Квартальна сплата ЄСВ за себе (до 20 числа наступного за кварталом місяця)
-                if month in (4, 7, 10, 1):
+                if not esv_paid_by_employer and month in (4, 7, 10, 1):
                     q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
                     q_year = year if month != 1 else year - 1
                     due_date = date(year, month, 19)
@@ -216,6 +228,47 @@ class TaxCalendarGenerator:
                         "status": "pending"
                     })
 
+            # 3a. Події для Підприємств (ТОВ на єдиному податку)
+            elif tax_system == "llc_ep":
+                # Квартальна сплата та звітність
+                if month in (4, 7, 10, 1):
+                    q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
+                    q_year = year if month != 1 else year - 1
+                    
+                    # Декларація єдинника-юридичної особи (J0103508) - 40 днів
+                    if month == 1:
+                        dec_due = date(year, 2, 9)
+                    else:
+                        dec_due = date(year, month + 1, 10)
+                        
+                    # Сплата ЄП - 50 днів
+                    if month == 1:
+                        pay_due = date(year, 2, 19)
+                    else:
+                        pay_due = date(year, month + 1, 20)
+                        
+                    events.append({
+                        "due_date": dec_due.strftime("%Y-%m-%d"),
+                        "title": f"Подання декларації з Єдиного податку (юрид. особи) за {q_num} квартал {q_year} р.",
+                        "type": "report",
+                        "tax_name": "unified_tax",
+                        "description": "Подання квартальної декларації платника єдиного податку третьої групи (юридичні особи).",
+                        "amount_desc": "Форма J0103508",
+                        "form_code": "J0103508",
+                        "status": "pending"
+                    })
+                    
+                    events.append({
+                        "due_date": pay_due.strftime("%Y-%m-%d"),
+                        "title": f"Сплата Єдиного податку за {q_num} квартал {q_year} р.",
+                        "type": "payment",
+                        "tax_name": "unified_tax",
+                        "description": f"Сплата єдиного податку за ставкою {rate or 5}% від отриманого доходу за квартал для юрид. осіб.",
+                        "amount_desc": f"{rate or 5}% від доходу за квартал",
+                        "form_code": None,
+                        "status": "pending"
+                    })
+
             # 4. Щомісячні події по працівниках (якщо вони є)
             if has_employees:
                 # Зарплатні податки сплачуються при виплаті зарплати, але крайній термін без виплати - 30 число наступного місяця
@@ -227,8 +280,8 @@ class TaxCalendarGenerator:
                     "title": f"Сплата податків із зарплати працівників за {self._ukr_month(month)} {year}",
                     "type": "payment",
                     "tax_name": "employee_taxes",
-                    "description": "Сплата ПДФО (18%), Військового збору (1.5%) та ЄСВ (22%) нарахованих на заробітну плату працівників.",
-                    "amount_desc": "ПДФО 18% + ВЗ 1.5% + ЄСВ 22% від фонду оплати праці",
+                    "description": "Сплата ПДФО (18%), Військового збору (5%) та ЄСВ (22%) нарахованих на заробітну плату працівників.",
+                    "amount_desc": "ПДФО 18% + ВЗ 5% + ЄСВ 22% від фонду оплати праці",
                     "form_code": None,
                     "status": "pending"
                 })
@@ -284,6 +337,17 @@ class TaxCalendarGenerator:
         # Сортуємо події по даті
         events.sort(key=lambda x: x["due_date"])
         return events
+
+    def calculate_military_tax(self, profile_type, income, period=None):
+        """
+        Розрахунок військового збору:
+        - Для ФОП 3 групи (profile_type == 'fop'): income * 0.01 (1% від доходу)
+        - Для найманого працівника (profile_type == 'company'): income * 0.05 (5% від зарплати)
+        """
+        if profile_type == 'fop':
+            return income * 0.01
+        else:
+            return income * 0.05
 
     def _add_months(self, source_date, months):
         month = source_date.month - 1 + months
