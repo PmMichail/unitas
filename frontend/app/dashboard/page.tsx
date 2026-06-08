@@ -1319,12 +1319,27 @@ export default function Dashboard() {
                               <span className="font-normal text-slate-100">{(dashboardData?.tax_due || 0).toLocaleString("uk-UA")} грн</span>
                             </div>
                             
-                            {/* Військовий збір ФОП за себе (1% від доходу) або загальна система (5% від прибутку) */}
+                            {/* Військовий збір ФОП за себе (1% від доходу) або загальна система (1% від прибутку) */}
                             {isFop && (
                               <div className="flex justify-between border-t border-slate-800/60 pt-2 mt-1">
                                 <span className="text-slate-400">Військовий збір за себе (ФОП):</span>
-                                <span className="font-normal text-slate-300 text-xs">
-                                  {(dashboardData?.tax_system === "ednuy-3-5%" || selectedProfile?.tax_system === "ednuy-3-5%") ? "1% від доходу" : "5% від прибутку"}
+                                <span className="font-normal text-slate-350 text-xs">
+                                  {isSimplified 
+                                    ? (dashboardData?.group === 1 || dashboardData?.group === 2 || selectedProfile?.group === 1 || selectedProfile?.group === 2 ? "10% від мін. зарплати" : "1% від доходу") 
+                                    : "1% від прибутку"}
+                                </span>
+                                <span className="font-normal text-slate-100">
+                                  {Math.max(0, (dashboardData?.military_tax_due || 0) - (dashboardData?.employee_mil_due || 0)).toLocaleString("uk-UA")} грн
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Військовий збір ТОВ/компанії (1% від доходу) або загальна система (1% від прибутку) */}
+                            {!isFop && (
+                              <div className="flex justify-between border-t border-slate-800/60 pt-2 mt-1">
+                                <span className="text-slate-400">Військовий збір (ТОВ):</span>
+                                <span className="font-normal text-slate-350 text-xs">
+                                  {isSimplified ? "1% від доходу" : "1% від прибутку"}
                                 </span>
                                 <span className="font-normal text-slate-100">
                                   {Math.max(0, (dashboardData?.military_tax_due || 0) - (dashboardData?.employee_mil_due || 0)).toLocaleString("uk-UA")} грн

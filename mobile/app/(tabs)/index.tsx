@@ -1285,6 +1285,15 @@ export default function DashboardScreen() {
                         </View>
                       </>
                     )}
+
+                    {!isFop && (
+                      <View style={[styles.mobileStatRow, { borderTopWidth: 0.5, borderTopColor: colors.border, paddingTop: 6, marginTop: 6 }]}>
+                        <Text style={{ color: colors.textMuted, fontSize: 13 }}>Військовий збір (ТОВ) (1%):</Text>
+                        <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>
+                          {Math.max(0, (dashboardData?.military_tax_due || 0) - (dashboardData?.employee_mil_due || 0)).toLocaleString('uk-UA')} ₴
+                        </Text>
+                      </View>
+                    )}
                   </View>
 
                   {((dashboardData?.employee_pit_due || 0) > 0 || (dashboardData?.employee_mil_due || 0) > 0 || (dashboardData?.employee_esv_due || 0) > 0) && (
