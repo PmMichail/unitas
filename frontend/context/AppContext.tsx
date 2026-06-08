@@ -21,6 +21,11 @@ interface Profile {
   default_bank?: string;
   director_name?: string;
   phone?: string;
+  is_blocked?: boolean;
+  block_reason?: string;
+  bank_name?: string;
+  mfo?: string;
+  iban?: string;
 }
 
 interface AppContextType {
@@ -47,6 +52,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Load telegram_id from URL or localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
+      const path = window.location.pathname;
+      if (path.startsWith("/admin") || ["/login", "/privacy", "/terms"].includes(path)) {
+        // Unconditionally bypass client-side auth checks for admin and exempt routes
+        return;
+      }
+
       const params = new URLSearchParams(window.location.search);
       const urlId = params.get("telegram_id");
       const savedId = localStorage.getItem("telegram_id");
@@ -56,10 +67,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setTelegramIdState(finalId);
         localStorage.setItem("telegram_id", finalId);
       } else {
-        const exemptPaths = ["/login", "/admin", "/privacy", "/terms"];
-        if (!exemptPaths.includes(window.location.pathname)) {
-          window.location.href = "/login";
-        }
+        window.location.href = "/login";
       }
     }
   }, []);

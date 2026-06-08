@@ -90,11 +90,73 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Налаштування", href: "/settings", icon: SettingsIcon },
   ];
 
-  const noLayoutPaths = ["/login", "/admin", "/privacy", "/terms"];
-  if (noLayoutPaths.includes(pathname)) {
+  const isNoLayout = ["/login", "/privacy", "/terms"].includes(pathname) || pathname.startsWith("/admin");
+  if (isNoLayout) {
     return (
       <div className="min-h-screen bg-[#fafbfd] dark:bg-[#090d16] text-[#090e1a] dark:text-[#f1f5f9] font-sans">
         {children}
+      </div>
+    );
+  }
+
+  const isBlocked = selectedProfile?.is_blocked === true;
+  if (isBlocked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#fafbfd] dark:bg-[#090d16] p-4 text-[#090e1a] dark:text-[#f1f5f9] font-sans transition-colors duration-300">
+        <div className="w-full max-w-lg p-8 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/30 backdrop-blur-xl shadow-2xl relative overflow-hidden text-center space-y-6">
+          <div className="absolute top-[-20%] left-[-20%] w-[50%] h-[50%] rounded-full bg-rose-500/5 blur-[100px] pointer-events-none" />
+          
+          <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-rose-500/5 animate-pulse">
+            <Shield className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <h1 className="text-2xl font-black bg-gradient-to-r from-slate-900 via-slate-700 to-rose-600 dark:from-white dark:via-slate-200 dark:to-rose-450 bg-clip-text text-transparent tracking-tight">
+              Кабінет тимчасово заблоковано
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-405">
+              Доступ до підприємства <span className="font-bold text-indigo-550 dark:text-indigo-400">{selectedProfile.name}</span> тимчасово обмежено адміністратором.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/15 text-left text-xs space-y-1.5">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Причина блокування:</span>
+            <p className="font-semibold text-rose-600 dark:text-rose-400 leading-relaxed">
+              {selectedProfile.block_reason || "Порушення правил користування сервісом або несплата послуг."}
+            </p>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800/60 flex flex-col sm:flex-row gap-3">
+            {profiles.length > 1 && (
+              <div className="flex-1 relative">
+                <select
+                  value={selectedProfile?.id || ""}
+                  onChange={(e) => {
+                    const found = profiles.find((p) => String(p.id) === e.target.value);
+                    if (found) {
+                      setSelectedProfile(found);
+                      router.push("/dashboard");
+                    }
+                  }}
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-semibold focus:outline-none focus:border-indigo-500 transition-all text-left"
+                >
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.is_blocked ? " (Заблоковано)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            
+            <button
+              onClick={() => setTelegramId("")}
+              className="flex-1 py-2.5 rounded-xl border border-rose-500/20 bg-rose-500/5 hover:bg-rose-500/10 text-rose-500 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Вийти з акаунта
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

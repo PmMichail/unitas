@@ -47,6 +47,9 @@ export const api = {
     default_bank?: string;
     director_name?: string;
     phone?: string;
+    bank_name?: string;
+    mfo?: string;
+    iban?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.post("/api/profiles", formData);
@@ -71,6 +74,9 @@ export const api = {
       default_bank?: string;
       director_name?: string;
       phone?: string;
+      bank_name?: string;
+      mfo?: string;
+      iban?: string;
     }
   ) => {
     const formData = toFormData(data);
@@ -334,7 +340,23 @@ export const api = {
     return response.data;
   },
   getCurrentSubscription: async (profileId: number) => {
-    const response = await client.get(`/api/subscriptions/current/${profileId}`);
+    const response = await client.get(`/api/subscription/current/${profileId}`);
+    return response.data;
+  },
+  getSubscriptionUsage: async (profileId: number) => {
+    const response = await client.get(`/api/subscription/usage/${profileId}`);
+    return response.data;
+  },
+  cancelSubscription: async (profileId: number) => {
+    const response = await client.post(`/api/subscription/cancel/${profileId}`);
+    return response.data;
+  },
+  upgradeToBusiness: async (profileId: number) => {
+    const response = await client.post(`/api/subscription/upgrade/${profileId}`);
+    return response.data;
+  },
+  getProfilePayments: async (profileId: number) => {
+    const response = await client.get(`/api/payments/profile/${profileId}`);
     return response.data;
   },
   adminLogin: async (data: Record<string, any>) => {
@@ -355,8 +377,45 @@ export const api = {
     return response.data;
   },
   adminUpdateUserSubscription: async (userId: number, data: Record<string, any>, token: string) => {
-    const formData = toFormData(data);
-    const response = await client.put(`/api/admin/users/${userId}/subscription`, formData, {
+    const response = await client.put(`/api/admin/users/${userId}/subscription`, data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminDeleteProfile: async (profileId: number, token: string) => {
+    const response = await client.delete(`/api/admin/profiles/${profileId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminBlockProfile: async (profileId: number, data: { is_blocked: boolean; block_reason?: string }, token: string) => {
+    const response = await client.post(`/api/admin/profiles/${profileId}/block`, data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  getPricing: async () => {
+    const response = await client.get("/api/pricing");
+    return response.data;
+  },
+  createPayment: async (data: { profile_id: number; plan_type: string; payment_period: string }) => {
+    const response = await client.post("/api/payments/create", data);
+    return response.data;
+  },
+  adminUpdatePricing: async (data: { plan_type: string; payment_period: string; price: number }, token: string) => {
+    const response = await client.put("/api/admin/pricing", data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminGetPayments: async (token: string) => {
+    const response = await client.get("/api/admin/payments", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminGetStats: async (token: string) => {
+    const response = await client.get("/api/admin/stats", {
       headers: { Authorization: `Bearer ${token}` }
     });
     return response.data;
@@ -580,6 +639,18 @@ export const legislationApi = {
   adminUpdateUserSubscription: async (userId: number, data: Record<string, any>, token: string) => {
     const formData = toFormData(data);
     const response = await client.put(`/api/admin/users/${userId}/subscription`, formData, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminDeleteProfile: async (profileId: number, token: string) => {
+    const response = await client.delete(`/api/admin/profiles/${profileId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminBlockProfile: async (profileId: number, data: { is_blocked: boolean; block_reason?: string }, token: string) => {
+    const response = await client.post(`/api/admin/profiles/${profileId}/block`, data, {
       headers: { Authorization: `Bearer ${token}` }
     });
     return response.data;

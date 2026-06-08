@@ -88,7 +88,8 @@ class LiqPayService:
         self, 
         profile_id: int, 
         plan: str, 
-        period: str = "month"
+        period: str = "month",
+        amount: Optional[float] = None
     ) -> Dict:
         """
         Створити рекурентний платіж для підписки
@@ -97,16 +98,18 @@ class LiqPayService:
             profile_id: ID профілю
             plan: План підписки ('free', 'business')
             period: Період ('month', 'year')
+            amount: Опціональна сума платежу
             
         Returns:
             Dict з data та signature для CNB форми
         """
-        if plan == "free":
-            amount = 0
-        elif plan == "business":
-            amount = 499  # 499 грн/міс
-        else:
-            raise ValueError(f"Unknown plan: {plan}")
+        if amount is None:
+            if plan == "free":
+                amount = 0
+            elif plan == "business":
+                amount = 499 if period == "month" else 4989  # Default prices
+            else:
+                raise ValueError(f"Unknown plan: {plan}")
         
         if amount == 0:
             # Free plan - no payment needed
@@ -127,7 +130,10 @@ class LiqPayService:
             "subscribe_periodicity": "month" if period == "month" else "year"
         }
         
-        return self._cnb_form(data)
+        form = self._cnb_form(data)
+        form["order_id"] = order_id
+        form["amount"] = amount
+        return form
     
     def verify_callback(self, data: str, signature: str) -> bool:
         """
