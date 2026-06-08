@@ -6096,7 +6096,7 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
             api_key=gemini_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
-        model_to_use = "gemini-2.5-flash"
+        model_to_use = "gemini-flash-latest"
         
     if not client_to_use:
         # Багатий оффлайн-відповідач
