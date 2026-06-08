@@ -440,8 +440,8 @@ def get_tax_calculator(db: Session):
     from services.tax_calculator import TaxCalculator
     config_rates = {
         "min_salary": get_config_val(db, "min_salary", 8647.0),
-        "military_tax_fop_rate": get_config_val(db, "military_tax_fop_rate", 5.0),
-        "military_tax_employee_rate": get_config_val(db, "military_tax_employee_rate", 1.5),
+        "military_tax_fop_rate": get_config_val(db, "military_tax_fop_rate", 1.0),
+        "military_tax_employee_rate": get_config_val(db, "military_tax_employee_rate", 5.0),
         "pit_employee_rate": get_config_val(db, "pit_employee_rate", 18.0),
         "esv_employee_rate": get_config_val(db, "esv_employee_rate", 22.0),
         "esv_fop_monthly": get_config_val(db, "esv_fop_monthly", 1562.0),
@@ -808,6 +808,12 @@ try:
     db.execute(text("UPDATE profiles SET type = 'fop' WHERE type = 'company' AND (name LIKE '%ФОП%' OR name LIKE '%FOP%' OR tax_system LIKE '%fop%')"))
     db.commit()
     print("Database profiles self-corrected successfully.")
+    
+    # Self-correct system config rates to ensure correct military tax rates are saved in database
+    db.execute(text("UPDATE system_configs SET value = '1.0' WHERE key = 'military_tax_fop_rate'"))
+    db.execute(text("UPDATE system_configs SET value = '5.0' WHERE key = 'military_tax_employee_rate'"))
+    db.commit()
+    print("Database system config rates self-corrected successfully.")
 except Exception as fix_err:
     print(f"Failed to auto-correct profiles database table: {fix_err}")
     db.rollback()
@@ -1777,16 +1783,15 @@ def get_dashboard(
             
         # Military tax due
         m_mil_due = 0.0
-        if is_fop_profile(profile):
-            if is_simplified_tax(tax_system):
-                if profile.group in (1, 2):
-                    m_mil_due = min_sal * 0.10
-                else:
-                    m_mil_due = m_taxable_income * (mil_fop_rate / 100.0)
-            elif is_general_tax(tax_system):
-                m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
-                m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
-                m_mil_due = m_net_profit * (mil_emp_rate / 100.0)
+        if is_fop_profile(profile) and is_simplified_tax(tax_system) and profile.group in (1, 2):
+            m_mil_due = min_sal * 0.10
+        elif is_general_tax(tax_system):
+            m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
+            m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
+            m_mil_due = m_net_profit * (mil_fop_rate / 100.0)
+        else:
+            # FOP Group 3 or LLC (simplified)
+            m_mil_due = m_taxable_income * (mil_fop_rate / 100.0)
                 
         # ESV due
         m_esv_due = 0.0
@@ -5995,8 +6000,8 @@ def get_system_config(db: Session = Depends(get_db)):
         "fop_limit_group_1": 1444049.0,
         "fop_limit_group_2": 7211598.0,
         "fop_limit_group_3": 10091049.0,
-        "military_tax_fop_rate": 5.0,
-        "military_tax_employee_rate": 1.5,
+        "military_tax_fop_rate": 1.0,
+        "military_tax_employee_rate": 5.0,
         "unified_tax_rate_group_3": 5.0,
         "esv_fop_monthly": 1562.0,
         "pit_employee_rate": 18.0,
@@ -6044,8 +6049,8 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
     limit_1 = get_config_val(db, "fop_limit_group_1", 1444049.0)
     limit_2 = get_config_val(db, "fop_limit_group_2", 7211598.0)
     limit_3 = get_config_val(db, "fop_limit_group_3", 10091049.0)
-    mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 5.0)
-    mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 1.5)
+    mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 1.0)
+    mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 5.0)
     pit_rate = get_config_val(db, "pit_employee_rate", 18.0)
     esv_rate = get_config_val(db, "esv_employee_rate", 22.0)
     esv_fop = get_config_val(db, "esv_fop_monthly", 1562.0)
