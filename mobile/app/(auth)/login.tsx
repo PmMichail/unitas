@@ -30,6 +30,8 @@ export default function LoginScreen() {
     loginWithTelegram,
     verify2FACode,
     register,
+    logout,
+    loginAsGuest,
     isBiometricSupported,
     isBiometricEnabled,
     authenticateBiometrics,
@@ -106,6 +108,32 @@ export default function LoginScreen() {
       Alert.alert(
         'Помилка входу',
         e.message || 'Не вдалося увійти. Перевірте правильність Email та пароля.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRequestTempPassword = async () => {
+    if (!emailInput.trim()) {
+      Alert.alert('Помилка', 'Будь ласка, спочатку введіть ваш Email.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      setIsTelegramLogin(false);
+      const response = await login(emailInput.trim(), "temp_password_request");
+      
+      if (response.status === 'verification_required') {
+        setVerificationEmail(response.email || emailInput.trim());
+        setVerificationModalVisible(true);
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(
+        'Помилка',
+        e.message || 'Не вдалося надіслати тимчасовий код. Перевірте правильність Email.'
       );
     } finally {
       setLoading(false);
@@ -207,6 +235,18 @@ export default function LoginScreen() {
     }
   };
 
+  const handleGuestLogin = async () => {
+    setLoading(true);
+    try {
+      await loginAsGuest();
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Помилка', e.message || 'Не вдалося розпочати гостьову сесію.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleOpenBot = async () => {
     const botUrl = 'https://t.me/UniTaxUA_Bot';
     const supported = await Linking.canOpenURL(botUrl);
@@ -287,6 +327,15 @@ export default function LoginScreen() {
                   secureTextEntry
                   autoCapitalize="none"
                 />
+
+                <Pressable
+                  onPress={handleRequestTempPassword}
+                  style={{ marginTop: 2, marginBottom: 12, alignSelf: 'flex-end' }}
+                >
+                  <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' }}>
+                    Увійти за допомогою коду Telegram
+                  </Text>
+                </Pressable>
               </>
             ) : (
               <>
@@ -345,6 +394,14 @@ export default function LoginScreen() {
                 style={styles.secondaryBtn}
               />
             )}
+
+            <Button
+              title="Спробувати гостьовий доступ"
+              onPress={handleGuestLogin}
+              variant="outline"
+              isLoading={loading}
+              style={[styles.secondaryBtn, { marginTop: 8 }]}
+            />
 
             <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
               <Text style={[styles.toggleModeText, { color: colors.primary }]}>

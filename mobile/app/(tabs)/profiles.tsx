@@ -15,6 +15,8 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Linking,
+  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
@@ -30,6 +32,25 @@ export default function ProfilesScreen() {
   const { colors } = useTheme();
   const { telegramId } = useAuth();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardHeight(0)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const modalMaxHeight = Math.min(windowHeight * 0.8, windowHeight - keyboardHeight - 100);
 
   const [profiles, setProfiles] = useState<ProfileData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -764,29 +785,44 @@ export default function ProfilesScreen() {
       )}
 
       {/* Add / Edit Profile Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
+      {modalVisible && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={modalVisible}
+          onRequestClose={() => setModalVisible(false)}
+        >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ width: '100%', justifyContent: 'flex-end' }}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.modalContent,
+                {
+                  backgroundColor: colors.background,
+                  borderColor: colors.cardBorder,
+                  maxHeight: modalMaxHeight,
+                  paddingBottom: Math.max(insets.bottom, 16),
+                  width: '100%',
+                  flexGrow: 0,
+                  flexShrink: 1,
+                },
+              ]}
             >
-              <View style={[styles.modalContent, { backgroundColor: colors.background, borderColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, 16) }]}>
-                <View style={styles.modalHeader}>
-                  <Text style={[styles.modalTitle, { color: colors.text }]}>
-                    {editingProfile ? 'Редагувати профіль' : 'Новий профіль'}
-                  </Text>
-                  <Pressable onPress={() => setModalVisible(false)} style={styles.closeBtn}>
-                    <X size={24} color={colors.text} />
-                  </Pressable>
-                </View>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  {editingProfile ? 'Редагувати профіль' : 'Новий профіль'}
+                </Text>
+                <Pressable onPress={() => setModalVisible(false)} style={styles.closeBtn}>
+                  <X size={24} color={colors.text} />
+                </Pressable>
+              </View>
 
-                <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
+                <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
                   <Input
                     label="Назва підприємства / ПІБ ФОП"
                     placeholder="Наприклад: ФОП Петренко Іван"
@@ -943,43 +979,58 @@ export default function ProfilesScreen() {
                     style={styles.saveBtn}
                   />
                 </ScrollView>
-              </View>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
+      )}
 
       {/* Employees Management Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={employeesModalVisible}
-        onRequestClose={() => setEmployeesModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ width: '100%', alignItems: 'center', justifyContent: 'flex-end' }}
+      {employeesModalVisible && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={employeesModalVisible}
+          onRequestClose={() => setEmployeesModalVisible(false)}
+        >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setEmployeesModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ width: '100%', justifyContent: 'flex-end' }}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.modalContent,
+                {
+                  backgroundColor: colors.background,
+                  borderColor: colors.cardBorder,
+                  maxHeight: modalMaxHeight,
+                  paddingBottom: Math.max(insets.bottom, 16),
+                  width: '100%',
+                  flexGrow: 0,
+                  flexShrink: 1,
+                },
+              ]}
             >
-              <View style={[styles.modalContent, { backgroundColor: colors.background, borderColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, 16) }]}>
-                <View style={styles.modalHeader}>
-                  <View>
-                    <Text style={[styles.modalTitle, { color: colors.text }]}>
-                      Працівники {selectedProfile?.name}
-                    </Text>
-                    <Text style={[styles.modalSubtitle, { color: colors.textMuted }]}>
-                      Управління штатом та зарплатами
-                    </Text>
-                  </View>
-                  <Pressable onPress={() => setEmployeesModalVisible(false)} style={styles.closeBtn}>
-                    <X size={24} color={colors.text} />
-                  </Pressable>
+              <View style={styles.modalHeader}>
+                <View>
+                  <Text style={[styles.modalTitle, { color: colors.text }]}>
+                    Працівники {selectedProfile?.name}
+                  </Text>
+                  <Text style={[styles.modalSubtitle, { color: colors.textMuted }]}>
+                    Управління штатом та зарплатами
+                  </Text>
                 </View>
+                <Pressable onPress={() => setEmployeesModalVisible(false)} style={styles.closeBtn}>
+                  <X size={24} color={colors.text} />
+                </Pressable>
+              </View>
 
                 {employeeFormVisible ? (
                   // Add/Edit Employee Form
-                  <View style={styles.employeeForm}>
+                  <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={styles.employeeForm} keyboardShouldPersistTaps="handled">
                     <Text style={[styles.formSectionTitle, { color: colors.text }]}>
                       {editingEmployee ? 'Редагувати дані працівника' : 'Додати нового працівника'}
                     </Text>
@@ -1021,10 +1072,10 @@ export default function ProfilesScreen() {
                         style={styles.halfBtn}
                       />
                     </View>
-                  </View>
+                  </ScrollView>
                 ) : (
                   // Employees List
-                  <View style={{ flex: 1, minHeight: 300, maxHeight: 500 }}>
+                  <View style={{ flexShrink: 1, minHeight: 150, maxHeight: 400 }}>
                     <View style={styles.listHeader}>
                       <Text style={[styles.listCount, { color: colors.textMuted }]}>
                         Всього працівників: {employees.length}
@@ -1053,6 +1104,7 @@ export default function ProfilesScreen() {
                       </View>
                     ) : (
                       <FlatList
+                        style={{ flexGrow: 0, flexShrink: 1 }}
                         data={employees}
                         keyExtractor={(item) => item.id.toString()}
                         contentContainerStyle={[styles.empList, { paddingBottom: 100 }]}
@@ -1084,26 +1136,41 @@ export default function ProfilesScreen() {
                     )}
                   </View>
                 )}
-              </View>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
+      )}
 
       {/* Invoices & Acts Management Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={invoicesModalVisible}
-        onRequestClose={() => setInvoicesModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ width: '100%', justifyContent: 'flex-end', maxHeight: '90%' }}
+      {invoicesModalVisible && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={invoicesModalVisible}
+          onRequestClose={() => setInvoicesModalVisible(false)}
+        >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setInvoicesModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ width: '100%', justifyContent: 'flex-end' }}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.modalContent,
+                {
+                  width: '100%',
+                  backgroundColor: colors.background,
+                  borderColor: colors.cardBorder,
+                  maxHeight: modalMaxHeight,
+                  paddingBottom: Math.max(insets.bottom, 16),
+                  flexGrow: 0,
+                  flexShrink: 1,
+                },
+              ]}
             >
-              <View style={[styles.modalContent, { width: '100%', backgroundColor: colors.background, borderColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, 16) }]}>
                 <View style={styles.modalHeader}>
                   <View style={{ flex: 1, marginRight: 8 }}>
                     <Text style={[styles.modalTitle, { color: colors.text }]} numberOfLines={1}>
@@ -1167,7 +1234,7 @@ export default function ProfilesScreen() {
                 {invActiveTab === 'schedules' && (
                   invoiceFormVisible ? (
                     // Add Recurring Invoice Form
-                    <ScrollView contentContainerStyle={styles.formScroll} showsVerticalScrollIndicator={false}>
+                    <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={styles.formScroll} showsVerticalScrollIndicator={false}>
                       <Text style={[styles.formSectionTitle, { color: colors.text, marginTop: 8 }]}>
                         Новий шаблон авто-надсилання
                       </Text>
@@ -1352,7 +1419,7 @@ export default function ProfilesScreen() {
                     </ScrollView>
                   ) : (
                     // Schedules list
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flexShrink: 1 }}>
                       <View style={styles.listHeader}>
                         <Text style={[styles.listCount, { color: colors.textMuted }]}>
                           Активних розкладів: {recurringInvoices.length}
@@ -1381,6 +1448,7 @@ export default function ProfilesScreen() {
                         </View>
                       ) : (
                         <FlatList
+                          style={{ flexGrow: 0, flexShrink: 1 }}
                           data={recurringInvoices}
                           keyExtractor={(item) => item.id.toString()}
                           contentContainerStyle={[styles.empList, { paddingBottom: 100 }]}
@@ -1439,7 +1507,7 @@ export default function ProfilesScreen() {
 
                 {invActiveTab === 'oneoff' && (
                   // One-off Invoice Form
-                  <ScrollView contentContainerStyle={styles.formScroll} showsVerticalScrollIndicator={false}>
+                  <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={styles.formScroll} showsVerticalScrollIndicator={false}>
                     <Text style={[styles.formSectionTitle, { color: colors.text, marginTop: 8 }]}>
                       Новий разовий рахунок
                     </Text>
@@ -1567,7 +1635,7 @@ export default function ProfilesScreen() {
 
                 {invActiveTab === 'history' && (
                   // Invoices & Acts history list
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flexShrink: 1 }}>
                     <View style={styles.listHeader}>
                       <Text style={[styles.listCount, { color: colors.textMuted }]}>
                         Всього згенеровано документів: {invoicesHistory.length}
@@ -1590,6 +1658,7 @@ export default function ProfilesScreen() {
                       </View>
                     ) : (
                       <FlatList
+                        style={{ flexGrow: 0, flexShrink: 1 }}
                         data={invoicesHistory}
                         keyExtractor={(item) => item.id.toString()}
                         contentContainerStyle={[styles.empList, { paddingBottom: 100 }]}
@@ -1724,27 +1793,40 @@ export default function ProfilesScreen() {
                     )}
                   </View>
                 )}
-              </View>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
+      )}
 
       {/* Custom Send Date Confirmation Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={sendConfirmModalVisible}
-        onRequestClose={() => setSendConfirmModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ width: '100%', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+      {sendConfirmModalVisible && (
+        <Modal
+          animationType="fade"
+          transparent={true}
+          visible={sendConfirmModalVisible}
+          onRequestClose={() => setSendConfirmModalVisible(false)}
+        >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setSendConfirmModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ width: '100%', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.dialogContent,
+                {
+                  backgroundColor: colors.background,
+                  borderColor: colors.cardBorder,
+                  maxHeight: Math.min(windowHeight * 0.85, windowHeight - keyboardHeight - 60),
+                  flexGrow: 0,
+                  flexShrink: 1,
+                },
+              ]}
             >
-              <View style={[styles.dialogContent, { backgroundColor: colors.background, borderColor: colors.cardBorder, maxHeight: '90%' }]}>
-                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
                   <View style={styles.modalHeader}>
                     <Text style={[styles.modalTitle, { color: colors.text, fontSize: 18 }]}>Надіслати рахунок та акт</Text>
                     <Pressable onPress={() => setSendConfirmModalVisible(false)} style={styles.closeBtn}>
@@ -1815,11 +1897,11 @@ export default function ProfilesScreen() {
                     />
                   </View>
                 </ScrollView>
-              </View>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
+      )}
     </View>
   );
 }
@@ -1950,7 +2032,13 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 1,
-    maxHeight: '90%',
+    maxHeight: Dimensions.get('window').height * 0.80,
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 1,
+    overflow: 'hidden',
     padding: 16,
   },
   dialogContent: {
@@ -1959,6 +2047,9 @@ const styles = StyleSheet.create({
     padding: 20,
     width: '95%',
     maxWidth: 400,
+    maxHeight: Dimensions.get('window').height * 0.80,
+    flexGrow: 0,
+    flexShrink: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
@@ -1980,6 +2071,7 @@ const styles = StyleSheet.create({
   },
   formScroll: {
     paddingBottom: 120,
+    flexGrow: 0,
   },
   sectionLabel: {
     fontSize: 13,
@@ -2034,6 +2126,7 @@ const styles = StyleSheet.create({
   },
   employeeForm: {
     paddingBottom: 20,
+    flexGrow: 0,
   },
   formSectionTitle: {
     fontSize: 16,
@@ -2083,6 +2176,7 @@ const styles = StyleSheet.create({
   },
   empList: {
     paddingBottom: 24,
+    flexGrow: 0,
   },
   empCard: {
     flexDirection: 'row',

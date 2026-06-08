@@ -1,0 +1,14 @@
+{
+  "form_code": "F0600101",
+  "name": "Декларація податку на доходи фізичних осіб (ПДФО)",
+  "description": "Декларація з податку на доходи фізичних осіб",
+  "period_type": "quarterly",
+  "fields": [
+    {"id": "total_income", "label": "Загальний дохід", "type": "number", "required": true},
+    {"id": "taxable_income", "label": "Оподатковуваний дохід", "type": "number", "required": true},
+    {"id": "tax_due", "label": "Нараховано ПДФО", "type": "number", "required": true},
+    {"id": "tax_paid", "label": "Сплачено ПДФО", "type": "number", "required": true},
+    {"id": "military_tax_due", "label": "Нараховано військовий збір", "type": "number", "required": true},
+    {"id": "military_tax_paid", "label": "Сплачено військовий збір", "type": "number", "required": true}
+  ]
+}

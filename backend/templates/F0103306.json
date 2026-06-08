@@ -1,0 +1,12 @@
+{
+  "form_code": "F0103306",
+  "name": "Декларація єдиного податку (ФОП)",
+  "description": "Декларація платника єдиного податку - фізичної особи - підприємця",
+  "period_type": "quarterly",
+  "fields": [
+    {"id": "taxable_income", "label": "Оподатковуваний дохід", "type": "number", "required": true},
+    {"id": "tax_due", "label": "Сума єдиного податку до сплати", "type": "number", "required": true},
+    {"id": "tax_paid", "label": "Сума сплаченого податку", "type": "number", "required": true},
+    {"id": "tax_diff", "label": "Сума до сплати (борг)", "type": "calculated", "formula": "tax_due - tax_paid"}
+  ]
+}

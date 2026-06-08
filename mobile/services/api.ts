@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { Platform } from 'react-native';
 
 const API_BASE_URL = 'https://unitas-backend.fly.dev';
 
@@ -205,9 +206,9 @@ export const api = {
     return response.data;
   },
 
-  generateReport: async (profileId: number, period: string, formCode: string) => {
+  generateReport: async (profileId: number, period: string, formCode: string, year?: number) => {
     const response = await client.post(`/api/generate-report/${profileId}/${formCode}`, null, {
-      params: { period },
+      params: { period, year },
     });
     return response.data;
   },
@@ -269,8 +270,18 @@ export const api = {
     return response.data;
   },
 
+  loginAsGuest: async () => {
+    const response = await client.post('/api/auth/guest');
+    return response.data;
+  },
+
   deleteUserAccount: async (identifier: string) => {
     const response = await client.delete(`/api/users/${identifier}`);
+    return response.data;
+  },
+
+  deleteReport: async (reportId: number) => {
+    const response = await client.delete(`/api/reports/${reportId}`);
     return response.data;
   },
 
@@ -361,6 +372,31 @@ export const api = {
       profile_id: profileId,
       message,
     });
+    return response.data;
+  },
+
+  // Taxes & Payments
+  getTaxLiabilities: async (profileId: number) => {
+    const response = await client.get('/api/tax-liabilities', {
+      params: { profile_id: profileId },
+    });
+    return response.data;
+  },
+
+  generatePayment: async (data: {
+    profile_id: number;
+    tax_type: string;
+    amount: number;
+    period: string;
+    bank_code?: string;
+    region?: string;
+  }) => {
+    const response = await client.post('/api/payments/generate', data);
+    return response.data;
+  },
+
+  confirmPayment: async (paymentId: number) => {
+    const response = await client.post(`/api/payments/${paymentId}/confirm`);
     return response.data;
   },
 };

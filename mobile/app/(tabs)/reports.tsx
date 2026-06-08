@@ -18,7 +18,7 @@ import { Button } from '../../components/ui/Button';
 import { api, ProfileData } from '../../services/api';
 import { haptics } from '../../services/haptics';
 import { useFocusEffect } from 'expo-router';
-import { FileText, Calendar, PlusCircle, Share2, Clipboard, ShieldCheck } from 'lucide-react-native';
+import { FileText, Calendar, PlusCircle, Share2, Clipboard, ShieldCheck, Trash2 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ReportsScreen() {
@@ -33,8 +33,57 @@ export default function ReportsScreen() {
   const [generating, setGenerating] = useState(false);
 
   // Form State
-  const [period, setPeriod] = useState('2025-Q1');
+  const [period, setPeriod] = useState('1 Квартал');
   const [formCode, setFormCode] = useState('F0103306');
+
+  // Sync default form on profile change
+  React.useEffect(() => {
+    if (selectedProfile) {
+      if (selectedProfile.type === 'company') {
+        setFormCode('J0500109');
+      } else {
+        setFormCode('F0103306');
+      }
+    }
+  }, [selectedProfile]);
+
+  const getPeriodsForForm = () => {
+    return [
+      { key: '1 Квартал', label: 'Q1' },
+      { key: 'Півріччя', label: 'Q2' },
+      { key: 'Три Квартали', label: 'Q3' },
+      { key: 'Рік', label: 'Рік' },
+      { key: 'Січень', label: 'Січ' },
+      { key: 'Лютий', label: 'Лют' },
+      { key: 'Березень', label: 'Бер' },
+      { key: 'Квітень', label: 'Кві' },
+      { key: 'Травень', label: 'Тра' },
+      { key: 'Червень', label: 'Чер' },
+      { key: 'Липень', label: 'Лип' },
+      { key: 'Серпень', label: 'Сер' },
+      { key: 'Вересень', label: 'Вер' },
+      { key: 'Жовтень', label: 'Жов' },
+      { key: 'Листопад', label: 'Лис' },
+      { key: 'Грудень', label: 'Гру' },
+    ];
+  };
+
+  const getFormsForProfile = () => {
+    if (selectedProfile?.type === 'company') {
+      return [
+        { key: 'J0500109', label: "J0500109 (Об'єднаний ТОВ)" },
+        { key: 'F0110210', label: 'F0110210 (ПДВ ТОВ)' },
+      ];
+    } else {
+      return [
+        { key: 'F0103306', label: 'F0103306 (Єдинник)' },
+        { key: 'F0510101', label: "F0510101 (Об'єднаний ФОП)" },
+        { key: 'F3007012', label: 'F3007012 (ЄСВ)' },
+        { key: 'F0120109', label: 'F0120109 (Військовий)' },
+        { key: 'F0600101', label: 'F0600101 (ПДФО)' },
+      ];
+    }
+  };
 
   // Load profiles and history on focus
   useFocusEffect(
@@ -108,18 +157,45 @@ export default function ReportsScreen() {
     }
   };
 
-  const handleShareReport = async (reportId: number, reportTitle: string) => {
-    const downloadUrl = api.getReportDownloadUrl(reportId, 'xml');
+  const handleShareReport = async (reportId: number, reportTitle: string, format: 'xml' | 'pdf' = 'xml') => {
+    const downloadUrl = api.getReportDownloadUrl(reportId, format);
     try {
       await Share.share({
-        message: `Декларація UniTax (${reportTitle}): ${downloadUrl}`,
+        message: `Декларація UniTax ${format.toUpperCase()} (${reportTitle}): ${downloadUrl}`,
         url: downloadUrl,
-        title: `Завантажити XML звіт UniTax`,
+        title: `Завантажити ${format.toUpperCase()} звіт UniTax`,
       });
       haptics.light();
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleDeleteReport = async (reportId: number) => {
+    Alert.alert(
+      'Видалити звіт',
+      'Ви впевнені, що хочете видалити цей звіт?',
+      [
+        { text: 'Скасувати', style: 'cancel' },
+        {
+          text: 'Видалити',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.deleteReport(reportId);
+              haptics.success();
+              Alert.alert('Успіх', 'Звіт успішно видалено');
+              if (selectedProfile) {
+                fetchReports(selectedProfile.id);
+              }
+            } catch (e) {
+              console.error(e);
+              Alert.alert('Помилка', 'Не вдалося видалити звіт');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const getPeriodLabel = (p: string) => {
@@ -176,44 +252,61 @@ export default function ReportsScreen() {
 
             {/* Period Selector */}
             <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Звітний період</Text>
-            <View style={styles.segmentedContainer}>
-              {[
-                { key: '2025-Q1', label: '1 Кв' },
-                { key: '2025-Q2', label: '2 Кв' },
-                { key: '2025-Q3', label: '3 Кв' },
-                { key: '2025-Q4', label: '4 Кв' },
-                { key: '2025-year', label: 'Рік' },
-              ].map((item) => (
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
+            >
+              {getPeriodsForForm().map((item) => (
                 <Pressable
                   key={item.key}
                   style={[
-                    styles.segment,
-                    period === item.key && { backgroundColor: colors.primary },
+                    styles.segmentButton,
+                    period === item.key ? { backgroundColor: colors.primary } : { backgroundColor: colors.border + '30' },
                   ]}
-                  onPress={() => setPeriod(item.key)}
+                  onPress={() => {
+                    setPeriod(item.key);
+                    haptics.light();
+                  }}
                 >
-                  <Text style={[styles.segmentText, period === item.key && { color: '#ffffff' }, { color: colors.text }]}>
+                  <Text style={[
+                    styles.segmentButtonText, 
+                    period === item.key ? { color: '#ffffff', fontWeight: 'bold' } : { color: colors.text }
+                  ]}>
                     {item.label}
                   </Text>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
 
             {/* Template Selector */}
             <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Форма звіту</Text>
-            <View style={styles.segmentedContainer}>
-              <Pressable
-                style={[
-                  styles.segment,
-                  formCode === 'F0103306' && { backgroundColor: colors.primary },
-                ]}
-                onPress={() => setFormCode('F0103306')}
-              >
-                <Text style={[styles.segmentText, formCode === 'F0103306' && { color: '#ffffff' }, { color: colors.text }]}>
-                  F0103306 (ФОП ЄП 3 група)
-                </Text>
-              </Pressable>
-            </View>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              contentContainerStyle={{ gap: 8, paddingBottom: 8, marginTop: 4 }}
+            >
+              {getFormsForProfile().map((item) => (
+                <Pressable
+                  key={item.key}
+                  style={[
+                    styles.segmentButton,
+                    formCode === item.key ? { backgroundColor: colors.primary } : { backgroundColor: colors.border + '30' },
+                  ]}
+                  onPress={() => {
+                    setFormCode(item.key);
+                    haptics.light();
+                  }}
+                >
+                  <Text style={[
+                    styles.segmentButtonText, 
+                    formCode === item.key ? { color: '#ffffff', fontWeight: 'bold' } : { color: colors.text }
+                  ]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
 
             <Button
               title="Згенерувати XML звіт"
@@ -252,15 +345,34 @@ export default function ReportsScreen() {
                     </Text>
                   </View>
 
-                  <Pressable
-                    style={[styles.shareActionBtn, { backgroundColor: colors.primaryMuted }]}
-                    onPress={() =>
-                      handleShareReport(report.id, `${report.form_code} - ${report.period}`)
-                    }
-                  >
-                    <Share2 size={16} color={colors.primary} />
-                    <Text style={[styles.shareActionText, { color: colors.primary }]}>XML</Text>
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Pressable
+                      style={[styles.shareActionBtn, { backgroundColor: colors.primaryMuted }]}
+                      onPress={() =>
+                        handleShareReport(report.id, `${report.form_code} - ${report.period}`, 'xml')
+                      }
+                    >
+                      <Share2 size={16} color={colors.primary} />
+                      <Text style={[styles.shareActionText, { color: colors.primary }]}>XML</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[styles.shareActionBtn, { backgroundColor: colors.primaryMuted, marginLeft: 8 }]}
+                      onPress={() =>
+                        handleShareReport(report.id, `${report.form_code} - ${report.period}`, 'pdf')
+                      }
+                    >
+                      <FileText size={16} color={colors.primary} />
+                      <Text style={[styles.shareActionText, { color: colors.primary }]}>PDF</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[styles.deleteActionBtn, { backgroundColor: colors.errorMuted, marginLeft: 8 }]}
+                      onPress={() => handleDeleteReport(report.id)}
+                    >
+                      <Trash2 size={16} color={colors.error} />
+                    </Pressable>
+                  </View>
                 </View>
               </Card>
             ))
@@ -388,6 +500,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: 6,
   },
+  deleteActionBtn: {
+    padding: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   emptyIcon: {
     marginBottom: 20,
   },
@@ -400,5 +518,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  segmentButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(120, 120, 128, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 70,
+  },
+  segmentButtonText: {
+    fontSize: 13,
   },
 });

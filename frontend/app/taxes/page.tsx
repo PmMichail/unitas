@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Wallet,
   Building,
-  Info
+  Info,
+  Download
 } from "lucide-react";
 
 export default function TaxesPage() {
@@ -22,13 +23,34 @@ export default function TaxesPage() {
   const [liabilities, setLiabilities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedBank, setSelectedBank] = useState("privat24");
+  const [selectedRegion, setSelectedRegion] = useState("kyiv");
   const [paymentData, setPaymentData] = useState<any>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingId, setGeneratingId] = useState<number | null>(null);
+  const [isConfirmingId, setIsConfirmingId] = useState<number | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState("csv");
   
   // Notification states
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Auto-detect region on profile change
+  useEffect(() => {
+    if (selectedProfile && selectedProfile.address) {
+      const addr = selectedProfile.address.toLowerCase();
+      if (addr.includes("дніпро") || addr.includes("dnipro")) {
+        setSelectedRegion("dnipro");
+      } else if (addr.includes("львів") || addr.includes("lviv")) {
+        setSelectedRegion("lviv");
+      } else if (addr.includes("одес") || addr.includes("odesa")) {
+        setSelectedRegion("odesa");
+      } else if (addr.includes("харк") || addr.includes("kharkiv")) {
+        setSelectedRegion("kharkiv");
+      } else {
+        setSelectedRegion("kyiv");
+      }
+    }
+  }, [selectedProfile]);
 
   const fetchLiabilities = useCallback(async () => {
     if (!selectedProfile) {
@@ -74,7 +96,7 @@ export default function TaxesPage() {
 
   const handlePay = async (liability: any) => {
     if (!selectedProfile) return;
-    setIsGenerating(true);
+    setGeneratingId(liability.id);
     setErrorMsg(null);
     try {
       const data = await paymentsApi.generatePayment({
@@ -89,7 +111,57 @@ export default function TaxesPage() {
       console.error("Failed to generate payment:", err);
       setErrorMsg("Не вдалося згенерувати платіжні реквізити.");
     } finally {
-      setIsGenerating(false);
+      setGeneratingId(null);
+    }
+  };
+
+  const handleLiqPay = async (liability: any) => {
+    if (!selectedProfile) return;
+    setGeneratingId(liability.id);
+    setErrorMsg(null);
+    try {
+      const response = await fetch("https://unitas-backend.fly.dev/api/payments/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile_id: selectedProfile.id,
+          tax_type: liability.tax_type,
+          period: liability.period,
+          amount: liability.amount
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.data && data.signature) {
+        // Create LiqPay form and submit
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = "https://www.liqpay.ua/api/3/checkout";
+        form.acceptCharset = "utf-8";
+        
+        const dataInput = document.createElement("input");
+        dataInput.type = "hidden";
+        dataInput.name = "data";
+        dataInput.value = data.data;
+        
+        const signatureInput = document.createElement("input");
+        signatureInput.type = "hidden";
+        signatureInput.name = "signature";
+        signatureInput.value = data.signature;
+        
+        form.appendChild(dataInput);
+        form.appendChild(signatureInput);
+        document.body.appendChild(form);
+        form.submit();
+      } else {
+        setErrorMsg("Не вдалося створити платіж LiqPay");
+      }
+    } catch (err) {
+      console.error("Failed to create LiqPay payment:", err);
+      setErrorMsg("Помилка при створенні платежу LiqPay");
+    } finally {
+      setGeneratingId(null);
     }
   };
 
@@ -108,10 +180,61 @@ export default function TaxesPage() {
     }
   };
 
+  const handleDirectConfirmPaid = async (liability: any) => {
+    if (!selectedProfile) return;
+    setIsConfirmingId(liability.id);
+    setErrorMsg(null);
+    try {
+      const payment = await paymentsApi.generatePayment({
+        profile_id: selectedProfile.id,
+        tax_type: liability.tax_type,
+        amount: liability.amount,
+        period: liability.period,
+        bank_code: selectedBank
+      });
+      await paymentsApi.confirmPayment(payment.id);
+      setSuccessMsg("Податкове зобов'язання позначено як сплачене!");
+      fetchLiabilities();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error("Failed to confirm payment directly:", err);
+      setErrorMsg("Не вдалося позначити зобов'язання як сплачене.");
+    } finally {
+      setIsConfirmingId(null);
+    }
+  };
+
   const copyToClipboard = (text: string, fieldName: string) => {
     navigator.clipboard.writeText(text);
     setCopiedField(fieldName);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleExportTaxes = () => {
+    if (!selectedProfile) return;
+    const currentYear = new Date().getFullYear();
+    const params = new URLSearchParams({
+      profile_id: String(selectedProfile.id),
+      format: exportFormat,
+      year: String(currentYear)
+    });
+    window.location.href = `/api/export/taxes?${params.toString()}`;
+  };
+
+  const handleRegenerateCalendar = async () => {
+    if (!selectedProfile) return;
+    if (!window.confirm("Ви впевнені, що хочете перегенерувати податковий календар? Всі існуючі події будуть видалені та створені нові.")) {
+      return;
+    }
+    try {
+      const data = await paymentsApi.regenerateCalendar(selectedProfile.id);
+      setSuccessMsg(data.message || "Календар успішно перегенеровано");
+      fetchLiabilities();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to regenerate calendar:", err);
+      setErrorMsg(err.response?.data?.detail || "Помилка при перегенерації календаря");
+    }
   };
 
   const banks = [
@@ -143,13 +266,34 @@ export default function TaxesPage() {
             Швидка оплата зобов'язань через українські банки без ручного введення реквізитів
           </p>
         </div>
-        <button
-          onClick={fetchLiabilities}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 transition-colors border border-slate-200 dark:border-slate-700/60"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Оновити
-        </button>
+        <div className="flex items-center gap-2">
+          <select 
+            value={exportFormat} 
+            onChange={(e) => setExportFormat(e.target.value)}
+            className="border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-semibold bg-white dark:bg-slate-900"
+          >
+            <option value="csv">CSV</option>
+            <option value="xlsx">Excel (XLSX)</option>
+          </select>
+          
+          <button
+            onClick={handleExportTaxes}
+            disabled={!selectedProfile}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Експорт календаря
+          </button>
+          
+          <button
+            onClick={handleRegenerateCalendar}
+            disabled={!selectedProfile}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Оновити календар
+          </button>
+        </div>
       </div>
 
       {/* Notifications */}
@@ -207,6 +351,31 @@ export default function TaxesPage() {
             </div>
           </div>
 
+          {/* Tax Office Region Selector */}
+          <div className="p-5 bg-white dark:bg-slate-900/30 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-slate-800/50 shadow-sm space-y-4">
+            <div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <Building className="w-5 h-5 text-indigo-500" />
+                Податкова інспекція (Регіон)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Оберіть регіон вашої податкової реєстрації для правильного формування реквізитів
+              </p>
+            </div>
+            
+            <select
+              value={selectedRegion}
+              onChange={(e) => setSelectedRegion(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-semibold focus:outline-none text-slate-800 dark:text-slate-200"
+            >
+              <option value="kyiv">м. Київ (Шевченківський р-н)</option>
+              <option value="dnipro">ГУ ДПС у Дніпропетровській обл. (м. Дніпро)</option>
+              <option value="lviv">ГУ ДПС у Львівській обл. (м. Львів)</option>
+              <option value="odesa">ГУ ДПС в Одеській обл. (м. Одеса)</option>
+              <option value="kharkiv">ГУ ДПС у Харківській обл. (м. Харків)</option>
+            </select>
+          </div>
+
           {/* Liabilities List */}
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Поточні зобов'язання</h3>
@@ -251,13 +420,31 @@ export default function TaxesPage() {
 
                     <div className="flex items-center gap-3">
                       {item.status !== "paid" ? (
-                        <button
-                          onClick={() => handlePay(item)}
-                          disabled={isGenerating}
-                          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/15 hover:shadow-indigo-600/25 transition-all text-sm"
-                        >
-                          {isGenerating ? "Зведення..." : "Сплатити"}
-                        </button>
+                        <>
+                          <button
+                            onClick={() => handleLiqPay(item)}
+                            disabled={generatingId !== null || isConfirmingId !== null}
+                            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-semibold rounded-xl shadow-sm transition-all text-xs"
+                          >
+                            {generatingId === item.id ? "Обробка..." : "LiqPay"}
+                          </button>
+                          
+                          <button
+                            onClick={() => handlePay(item)}
+                            disabled={generatingId !== null || isConfirmingId !== null}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl shadow-sm transition-all text-xs"
+                          >
+                            {generatingId === item.id ? "Зведення..." : "Сплатити"}
+                          </button>
+                          
+                          <button
+                            onClick={() => handleDirectConfirmPaid(item)}
+                            disabled={generatingId !== null || isConfirmingId !== null}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold rounded-xl shadow-sm transition-all text-xs"
+                          >
+                            {isConfirmingId === item.id ? "Позначення..." : "Позначити як сплачений"}
+                          </button>
+                        </>
                       ) : (
                         <span className="text-slate-400 text-sm font-medium flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 text-emerald-500" />

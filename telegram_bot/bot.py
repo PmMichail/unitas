@@ -44,6 +44,9 @@ ES_CHOOSING_PROFILE, ES_CHOOSING_EMPLOYEE, ES_ENTERING_SALARY = range(20, 23)
 # States for Delete Employee Conversation
 DE_CHOOSING_PROFILE, DE_CHOOSING_EMPLOYEE = range(23, 25)
 
+# States for AI Chat
+AI_CHAT = range(25, 26)
+
 
 def get_main_menu_keyboard():
     keyboard = [
@@ -51,7 +54,8 @@ def get_main_menu_keyboard():
         ["📤 Завантажити виписку", "📄 Звіти"],
         ["👥 Працівники", "➕ Додати підприємство"],
         ["📊 Податковий аналіз", "💵 Сплата податків"],
-        ["🔏 Підписати документи", "❓ Допомога"]
+        ["📥 Експорт даних", "🔏 Підписати документи"],
+        ["❓ Допомога"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -271,7 +275,58 @@ async def enter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Реєстрацію скасовано.")
+    context.user_data['awaiting_ai_question'] = False
     return ConversationHandler.END
+
+async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Чат з ШІ-асистентом"""
+    context.user_data['awaiting_ai_question'] = True
+    await update.message.reply_text(
+        "🤖 *ШІ-асистент з податків*\n\n"
+        "Задайте мені будь-яке питання про податки, звіти або законодавство.\n"
+        "Наприклад:\n"
+        "- Які терміни сплати ЄП для ФОП 3 групи?\n"
+        "- Як змінився військовий збір у 2026?\n"
+        "- Чи потрібно подавати звіт якщо доходу не було?\n\n"
+        "Надішлішіть /cancel щоб вийти.",
+        parse_mode="Markdown"
+    )
+
+async def handle_ai_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка питання до ШІ"""
+    if not context.user_data.get('awaiting_ai_question'):
+        return
+        
+    question = update.message.text
+    await update.message.reply_text("🤔 Аналізую питання...")
+    
+    try:
+        # Отримуємо profile_id
+        telegram_id = str(update.effective_user.id)
+        res_profiles = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+        if res_profiles.status_code != 200 or len(res_profiles.json()) == 0:
+            await update.message.reply_text("Спершу зареєструйте профіль через /start")
+            context.user_data['awaiting_ai_question'] = False
+            return
+            
+        profile_id = res_profiles.json()[0]["id"]
+        
+        response = requests.post(
+            f"{BACKEND_URL}/api/ai/chat",
+            json={"profile_id": profile_id, "question": question},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            await update.message.reply_text(f"🤖 *Відповідь:*\n\n{data.get('answer', 'Відповідь не отримана')}", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Не вдалося отримати відповідь від ШІ-асистента")
+    except Exception as e:
+        logger.error(f"Помилка ШІ-чату: {e}")
+        await update.message.reply_text("⚠️ Сервер бекенду зараз недоступний")
+    
+    context.user_data['awaiting_ai_question'] = False
 
 # Інші команди бота
 async def mydata(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,6 +600,9 @@ async def upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- monobank (CSV)\n"
         "- Приват24 (PDF)\n"
         "- А-Банк (PDF)\n"
+        "- ПУМБ (PDF, CSV)\n"
+        "- Райффайзен Банк Аваль (PDF, Excel)\n"
+        "- Sense Bank (PDF, Excel)\n"
         "- Ощадбанк (HTML)"
     )
 
@@ -646,6 +704,9 @@ async def generate_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
                     [
                         InlineKeyboardButton("Завантажити XML (для ДПС)", callback_data=f"dl_xml_{report['report_id']}"),
                         InlineKeyboardButton("Завантажити JSON", callback_data=f"dl_json_{report['report_id']}"),
+                    ],
+                    [
+                        InlineKeyboardButton("🚀 Подати до ДПС", callback_data=f"txsub_start_{report['report_id']}")
                     ]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2268,6 +2329,9 @@ async def handle_report_selection(update: Update, context: ContextTypes.DEFAULT_
                     [
                         InlineKeyboardButton("Завантажити XML (для ДПС)", callback_data=f"dl_xml_{report['report_id']}"),
                         InlineKeyboardButton("Завантажити JSON", callback_data=f"dl_json_{report['report_id']}"),
+                    ],
+                    [
+                        InlineKeyboardButton("🚀 Подати до ДПС", callback_data=f"txsub_start_{report['report_id']}")
                     ]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2638,6 +2702,460 @@ async def handle_payment_callbacks(update: Update, context: ContextTypes.DEFAULT
             logger.error(f"Error confirming payment in bot: {e}")
             await query.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
 
+# --- DPS integration commands ---
+
+async def submit_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відправити звіт до ДПС (вибір профілю)"""
+    telegram_id = str(update.effective_user.id)
+    try:
+        res = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+        if res.status_code == 200:
+            profiles = res.json()
+            if not profiles:
+                await update.message.reply_text("⚠️ У вас немає зареєстрованих профілів.")
+                return
+            
+            if len(profiles) == 1:
+                await list_ready_reports(update.message, profiles[0]["id"])
+            else:
+                keyboard = [
+                    [InlineKeyboardButton(p["name"], callback_data=f"subrep_p_{p['id']}")]
+                    for p in profiles
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    "📄 **Відправка звіту до ДПС**\n\nОберіть підприємство/профіль:",
+                    reply_markup=reply_markup
+                )
+        else:
+            await update.message.reply_text("⚠️ Не вдалося отримати профілі з бекенду.")
+    except Exception as e:
+        logger.error(f"Error in submit_report_command: {e}")
+        await update.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def list_ready_reports(message, profile_id: int):
+    try:
+        res = requests.get(f"{BACKEND_URL}/api/reports/ready?profile_id={profile_id}", timeout=5)
+        if res.status_code == 200:
+            reports = res.json()
+            if not reports:
+                await message.reply_text("Немає готових звітів для відправки.")
+                return
+            
+            msg = "📄 *Готові звіти для відправки:*\n\n"
+            for report in reports:
+                msg += f"• {report['report_name']} ({report['period']})\n"
+                msg += f"  /submit_{report['id']}\n\n"
+            
+            await message.reply_text(msg, parse_mode="Markdown")
+        else:
+            await message.reply_text("⚠️ Не вдалося отримати готові звіти.")
+    except Exception as e:
+        logger.error(f"Error in list_ready_reports: {e}")
+        await message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_submit_report_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    profile_id = int(query.data.split("_")[2])
+    await list_ready_reports(query.message, profile_id)
+
+async def report_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перевірити статус поданих звітів"""
+    telegram_id = str(update.effective_user.id)
+    try:
+        res = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+        if res.status_code == 200:
+            profiles = res.json()
+            if not profiles:
+                await update.message.reply_text("⚠️ У вас немає зареєстрованих профілів.")
+                return
+            
+            if len(profiles) == 1:
+                await show_submissions_status(update.message, profiles[0]["id"])
+            else:
+                keyboard = [
+                    [InlineKeyboardButton(p["name"], callback_data=f"substat_p_{p['id']}")]
+                    for p in profiles
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    "📊 **Статус поданих звітів**\n\nОберіть підприємство/профіль:",
+                    reply_markup=reply_markup
+                )
+        else:
+            await update.message.reply_text("⚠️ Не вдалося отримати профілі з бекенду.")
+    except Exception as e:
+        logger.error(f"Error in report_status_command: {e}")
+        await update.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def show_submissions_status(message, profile_id: int):
+    try:
+        res = requests.get(f"{BACKEND_URL}/api/reports/submissions?profile_id={profile_id}", timeout=5)
+        if res.status_code == 200:
+            submissions = res.json()
+            if not submissions:
+                await message.reply_text("Немає поданих звітів.")
+                return
+            
+            msg = "📊 *Статус поданих звітів:*\n\n"
+            for sub in submissions:
+                emoji = "✅" if sub['submission_status'] == 'accepted' else "⏳" if sub['submission_status'] == 'sent' else "❌"
+                msg += f"{emoji} *{sub['report_name']}* ({sub['report_period']})\n"
+                msg += f"   Статус: {sub['submission_status']}\n"
+                if sub['confirmation_number']:
+                    msg += f"   Квитанція: {sub['confirmation_number']}\n"
+                msg += "\n"
+            
+            await message.reply_text(msg, parse_mode="Markdown")
+        else:
+            await message.reply_text("⚠️ Не вдалося отримати статус звітів.")
+    except Exception as e:
+        logger.error(f"Error in show_submissions_status: {e}")
+        await message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_report_status_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    profile_id = int(query.data.split("_")[2])
+    await show_submissions_status(query.message, profile_id)
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Експорт даних - вибір типу експорту"""
+    keyboard = [
+        [InlineKeyboardButton("📊 Транзакції CSV", callback_data="exp_tx_csv")],
+        [InlineKeyboardButton("📊 Транзакції Excel", callback_data="exp_tx_xlsx")],
+        [InlineKeyboardButton("📄 Звіти CSV", callback_data="exp_rep_csv")],
+        [InlineKeyboardButton("📄 Звіти Excel", callback_data="exp_rep_xlsx")],
+        [InlineKeyboardButton("📅 Податковий календар", callback_data="exp_tax")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="exp_cancel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "📥 **Експорт даних**\n\nОберіть тип даних для експорту:",
+        reply_markup=reply_markup
+    )
+
+async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка вибору типу експорту"""
+    query = update.callback_query
+    await query.answer()
+    
+    action = query.data
+    telegram_id = str(update.effective_user.id)
+    
+    try:
+        # Отримати профілі користувача
+        res = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+        if res.status_code != 200 or not res.json():
+            await query.edit_message_text("⚠️ У вас немає зареєстрованих профілів.")
+            return
+        
+        profiles = res.json()
+        if len(profiles) == 1:
+            profile_id = profiles[0]["id"]
+            await perform_export(query.message, action, profile_id)
+        else:
+            # Показати вибір профілю
+            keyboard = [
+                [InlineKeyboardButton(p["name"], callback_data=f"exp_prof_{action}_{p['id']}")]
+                for p in profiles
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                "Оберіть профіль для експорту:",
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.error(f"Error in handle_export_callback: {e}")
+        await query.edit_message_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_export_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка вибору профілю для експорту"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    action = "_".join(parts[2:4])  # exp_tx_csv or exp_tx_xlsx
+    profile_id = int(parts[4])
+    
+    await perform_export(query.message, action, profile_id)
+
+async def perform_export(message, action: str, profile_id: int):
+    """Виконання експорту"""
+    try:
+        export_url = None
+        filename = ""
+        
+        if action == "exp_tx_csv":
+            export_url = f"{BACKEND_URL}/api/export/transactions?profile_id={profile_id}&format=csv"
+            filename = "transactions.csv"
+        elif action == "exp_tx_xlsx":
+            export_url = f"{BACKEND_URL}/api/export/transactions?profile_id={profile_id}&format=xlsx"
+            filename = "transactions.xlsx"
+        elif action == "exp_rep_csv":
+            export_url = f"{BACKEND_URL}/api/export/reports?profile_id={profile_id}&format=csv"
+            filename = "reports.csv"
+        elif action == "exp_rep_xlsx":
+            export_url = f"{BACKEND_URL}/api/export/reports?profile_id={profile_id}&format=xlsx"
+            filename = "reports.xlsx"
+        elif action == "exp_tax":
+            current_year = date.today().year
+            export_url = f"{BACKEND_URL}/api/export/taxes?profile_id={profile_id}&format=csv&year={current_year}"
+            filename = f"taxes_{current_year}.csv"
+        elif action == "exp_cancel":
+            await message.reply_text("Експорт скасовано.", reply_markup=get_main_menu_keyboard())
+            return
+        else:
+            await message.reply_text("⚠️ Невідомий тип експорту.")
+            return
+        
+        # Отримати файл з бекенду
+        res = requests.get(export_url, timeout=30)
+        if res.status_code == 200:
+            # Надіслати файл користувачу
+            await message.reply_document(
+                document=res.content,
+                filename=filename,
+                caption=f"✅ Експорт успішно завершено: {filename}"
+            )
+        else:
+            await message.reply_text(f"⚠️ Помилка експорту: {res.text}")
+    except Exception as e:
+        logger.error(f"Error in perform_export: {e}")
+        await message.reply_text("⚠️ Помилка при виконанні експорту.")
+
+async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати тарифи та посилання на оплату"""
+    telegram_id = str(update.effective_user.id)
+    try:
+        # Fetch profiles to see which one to subscribe
+        res = requests.get(f"{BACKEND_URL}/api/profiles?telegram_id={telegram_id}", timeout=5)
+        if res.status_code == 200:
+            profiles = res.json()
+            if not profiles:
+                await update.message.reply_text("⚠️ У вас немає зареєстрованих профілів. Будь ласка, спочатку створіть профіль.")
+                return
+            
+            keyboard = []
+            for p in profiles:
+                try:
+                    payload = {
+                        "profile_id": p['id'],
+                        "plan": "pro",
+                        "success_url": "https://unitas-frontend.fly.dev/dashboard",
+                        "cancel_url": "https://unitas-frontend.fly.dev/dashboard"
+                    }
+                    res_pro = requests.post(f"{BACKEND_URL}/api/subscriptions/create-checkout", params=payload, timeout=5)
+                    url_pro = res_pro.json().get("checkout_url") if res_pro.status_code == 200 else None
+                    
+                    payload["plan"] = "business"
+                    res_biz = requests.post(f"{BACKEND_URL}/api/subscriptions/create-checkout", params=payload, timeout=5)
+                    url_biz = res_biz.json().get("checkout_url") if res_biz.status_code == 200 else None
+                    
+                    buttons = []
+                    if url_pro:
+                        buttons.append(InlineKeyboardButton(f"💰 Pro ({p['name']})", url=url_pro))
+                    if url_biz:
+                        buttons.append(InlineKeyboardButton(f"🏢 Business ({p['name']})", url=url_biz))
+                    if buttons:
+                        keyboard.append(buttons)
+                except Exception as err:
+                    logger.error(f"Error fetching checkout URL for profile {p['id']}: {err}")
+            
+            if not keyboard:
+                await update.message.reply_text("⚠️ Не вдалося згенерувати посилання на оплату. Перевірте з'єднання з сервером.")
+                return
+                
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "💎 *Платні тарифи UniTax*\n\n"
+                "• *Pro* (299 грн/міс): безліміт транзакцій, всі звіти, синхронізація з банком\n"
+                "• *Business* (899 грн/міс): Pro + працівники, API доступ, пріоритетна підтримка\n\n"
+                "Оберіть тариф для оформлення підписки:",
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text("⚠️ Не вдалося завантажити ваші профілі з сервера.")
+    except Exception as e:
+        logger.error(f"Error in subscribe_command: {e}")
+        await update.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def my_subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перевірити статус підписки"""
+    telegram_id = str(update.effective_user.id)
+    try:
+        res_prof = requests.get(f"{BACKEND_URL}/api/profiles?telegram_id={telegram_id}", timeout=5)
+        if res_prof.status_code == 200:
+            profiles = res_prof.json()
+            if not profiles:
+                await update.message.reply_text("🆓 *Безкоштовний доступ*\n\nУ вас немає активних профілів. Демо-доступ діє 30 хвилин.")
+                return
+                
+            text = "📋 *Статус підписок ваших підприємств:*\n\n"
+            for p in profiles:
+                res_sub = requests.get(f"{BACKEND_URL}/api/subscriptions/current/{p['id']}", timeout=5)
+                if res_sub.status_code == 200:
+                    sub = res_sub.json()
+                    plan = sub.get("plan", "free").upper()
+                    status = sub.get("status", "active")
+                    expires = sub.get("expires_at")
+                    
+                    text += f"▪️ *{p['name']}*:\n"
+                    if plan == "FREE":
+                        text += f"   Тариф: `Безкоштовний` (Демо-режим)\n"
+                    else:
+                        text += f"   Тариф: *{plan}* ({status})\n"
+                        if expires:
+                            from datetime import datetime
+                            try:
+                                dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                                text += f"   Діє до: {dt.strftime('%d.%m.%Y')}\n"
+                            except Exception:
+                                text += f"   Діє до: {expires}\n"
+                    text += "\n"
+            
+            await update.message.reply_text(text, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("⚠️ Не вдалося завантажити статус з бекенду.")
+    except Exception as e:
+        logger.error(f"Error in my_subscription_command: {e}")
+        await update.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_submit_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Початок підписання звіту за ID (вибір сертифіката КЕП)"""
+    text = update.message.text
+    try:
+        report_id = int(text.split("_")[1])
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Неправильний формат команди.")
+        return
+        
+    try:
+        # 1. Отримати деталі звіту
+        res = requests.get(f"{BACKEND_URL}/api/reports/detail/{report_id}", timeout=5)
+        if res.status_code != 200:
+            await update.message.reply_text("❌ Звіт не знайдено.")
+            return
+            
+        report = res.json()
+        profile_id = report.get("profile_id")
+        
+        # 2. Отримати сертифікати КЕП для профілю
+        res_certs = requests.get(f"{BACKEND_URL}/api/certificates/{profile_id}", timeout=5)
+        certs = []
+        if res_certs.status_code == 200:
+            certs = res_certs.json()
+            
+        if not certs:
+            await update.message.reply_text(
+                f"⚠️ **У вас немає завантажених КЕП сертифікатів для цього профілю.**\n\n"
+                f"Будь ласка, завантажте ваш КЕП у веб-кабінеті UniTax: /settings/certificates"
+            )
+            return
+            
+        keyboard = []
+        for cert in certs:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🔑 {cert['cert_owner_name']} ({cert['cert_issuer']})",
+                    callback_data=f"txsub_cert_{report_id}_{cert['id']}"
+                )
+            ])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"✍️ **Відправка звіту {report.get('form_code')} ({report.get('period')} {report.get('year')} р.)**\n\n"
+            f"Оберіть сертифікат для підпису та відправки до ДПС:",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Error in handle_submit_by_id: {e}")
+        await update.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_submit_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка відправки звіту після вибору КЕП"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    report_id = int(parts[2])
+    cert_id = int(parts[3])
+    
+    await query.edit_message_text("⏳ Підписуємо звіт та надсилаємо до ДПС...")
+    
+    try:
+        payload = {"certificate_id": cert_id}
+        res = requests.post(f"{BACKEND_URL}/api/reports/{report_id}/submit", json=payload, timeout=15)
+        if res.status_code == 200:
+            result = res.json()
+            if result.get("success"):
+                msg = (
+                    f"✅ **Звіт успішно відправлено до ДПС!**\n\n"
+                    f"Номер квитанції: `{result.get('confirmation_number')}`\n"
+                    f"Повідомлення: {result.get('message', 'Прийнято до обробки')}"
+                )
+            else:
+                msg = f"❌ **Помилка відправки:**\n{result.get('message', 'Невідома помилка')}"
+        else:
+            msg = f"⚠️ Помилка сервера: {res.text}"
+            
+        await query.edit_message_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error in handle_submit_report_callback: {e}")
+        await query.edit_message_text("⚠️ Виникла помилка зв'язку з бекендом.")
+
+async def handle_txsub_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка старту підписання з inline кнопки під звітом"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split("_")
+    report_id = int(parts[2])
+    
+    try:
+        # 1. Отримати деталі звіту
+        res = requests.get(f"{BACKEND_URL}/api/reports/detail/{report_id}", timeout=5)
+        if res.status_code != 200:
+            await query.message.reply_text("❌ Звіт не знайдено.")
+            return
+            
+        report = res.json()
+        profile_id = report.get("profile_id")
+        
+        # 2. Отримати сертифікати КЕП для профілю
+        res_certs = requests.get(f"{BACKEND_URL}/api/certificates/{profile_id}", timeout=5)
+        certs = []
+        if res_certs.status_code == 200:
+            certs = res_certs.json()
+            
+        if not certs:
+            await query.message.reply_text(
+                f"⚠️ **У вас немає завантажених КЕП сертифікатів для цього профілю.**\n\n"
+                f"Будь ласка, завантажте ваш КЕП у веб-кабінеті UniTax: /settings/certificates"
+            )
+            return
+            
+        keyboard = []
+        for cert in certs:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🔑 {cert['cert_owner_name']} ({cert['cert_issuer']})",
+                    callback_data=f"txsub_cert_{report_id}_{cert['id']}"
+                )
+            ])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            f"✍️ **Відправка звіту {report.get('form_code')} ({report.get('period')} {report.get('year')} р.)**\n\n"
+            f"Оберіть сертифікат для підпису та відправки до ДПС:",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Error in handle_txsub_start_callback: {e}")
+        await query.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
 def main() -> None:
     """Запуск бота."""
     if TOKEN == "MOCK_TOKEN_FOR_TESTS":
@@ -2753,6 +3271,15 @@ def main() -> None:
     application.add_handler(CommandHandler("validate", validate_command))
     application.add_handler(CommandHandler("tax_news", tax_news_command))
     application.add_handler(CommandHandler("tax_subscribe", tax_subscribe_command))
+    application.add_handler(CommandHandler("submit_report", submit_report_command))
+    application.add_handler(CommandHandler("report_status", report_status_command))
+    application.add_handler(CommandHandler("export", export_command))
+    application.add_handler(CommandHandler("ai", ai_command))
+    application.add_handler(CommandHandler("subscribe", subscribe_command))
+    application.add_handler(CommandHandler("my_subscription", my_subscription_command))
+    
+    # Dynamic /submit_{id} command handler
+    application.add_handler(MessageHandler(filters.Regex(r"^/submit_(\d+)$"), handle_submit_by_id))
     
     # Callback handlers
     application.add_handler(CallbackQueryHandler(handle_callback_download, pattern="^dl_"))
@@ -2771,8 +3298,13 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_validate_callback, pattern="^valst_p_"))
     application.add_handler(CallbackQueryHandler(handle_tax_news_callback, pattern="^taxnews_p_"))
     application.add_handler(CallbackQueryHandler(handle_tax_subscribe_callback, pattern="^taxsub_p_"))
+    application.add_handler(CallbackQueryHandler(handle_submit_report_profile_callback, pattern="^subrep_p_"))
+    application.add_handler(CallbackQueryHandler(handle_report_status_profile_callback, pattern="^substat_p_"))
+    application.add_handler(CallbackQueryHandler(handle_submit_report_callback, pattern="^txsub_cert_"))
+    application.add_handler(CallbackQueryHandler(handle_txsub_start_callback, pattern="^txsub_start_"))
+    application.add_handler(CallbackQueryHandler(handle_export_callback, pattern="^exp_"))
+    application.add_handler(CallbackQueryHandler(handle_export_profile_callback, pattern="^exp_prof_"))
 
-    
     # Handle menu buttons
     application.add_handler(MessageHandler(
         filters.Text([
@@ -2784,6 +3316,7 @@ def main() -> None:
             "➕ Додати підприємство",
             "📊 Податковий аналіз",
             "💵 Сплата податків",
+            "📥 Експорт даних",
             "🔏 Підписати документи",
             "❓ Допомога"
         ]), 
@@ -2792,6 +3325,9 @@ def main() -> None:
 
     # Handle files
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # Handle AI chat
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_question))
 
     # Run the bot
     print(f"Бот запускається з BACKEND_URL: {BACKEND_URL}...")

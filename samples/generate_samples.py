@@ -183,6 +183,117 @@ def generate_abank_pdf(filepath):
     doc.build(story)
     print(f"Згенеровано: {filepath}")
 
+def generate_pumb_csv(filepath):
+    content = """Дата;Операція;Сума;Валюта;Контрагент;Призначення
+05.03.2025;Надходження;25000.00;UAH;ТОВ ТехноСервіс;Оплата за послуги згідно договору №45
+12.03.2025;Списання;-850.00;UAH;Київстар;Оплата послуг мобільного зв'язку
+18.03.2025;Надходження;15000.00;UAH;ФОП Коваленко О.М.;Консалтингові послуги
+25.03.2025;Списання;-3200.00;UAH;ДПС України;Сплата єдиного податку за 1 квартал 2025
+"""
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"Згенеровано: {filepath}")
+
+def generate_raiffeisen_pdf(filepath):
+    doc = SimpleDocTemplate(filepath, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        textColor=colors.HexColor('#ff6f00'),
+        spaceAfter=12
+    )
+    normal_style = ParagraphStyle(
+        'NormalStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        spaceAfter=6
+    )
+    
+    story = []
+    story.append(Paragraph("Raiffeisen Bank Aval", title_style))
+    story.append(Paragraph("Виписка по рахунку 2600555444333221", normal_style))
+    story.append(Paragraph("Період: 01.03.2025 - 31.03.2025", normal_style))
+    story.append(Paragraph("Клієнт: ФОП Петренко І.В. (РНОКПП: 1234567890)", normal_style))
+    story.append(Spacer(1, 10))
+    
+    data = [
+        ["Дата", "Опис операції", "Сума (грн)", "Баланс (грн)"],
+        ["08.03.2025", "Зарахування від ТОВ ІнфоТех за розробку ПЗ", "38000.00", "38000.00"],
+        ["15.03.2025", "Оплата комунальних послуг", "-1200.00", "36800.00"],
+        ["22.03.2025", "Надходження від ФОП Сидоренко за консалтинг", "9500.00", "46300.00"],
+        ["28.03.2025", "Сплата ЄСВ за 1 квартал 2025", "-5280.00", "41020.00"]
+    ]
+    
+    table = Table(data, colWidths=[80, 260, 90, 90])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#fff3e0')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#ff6f00')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#ffe0b2')),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+    ]))
+    
+    story.append(table)
+    doc.build(story)
+    print(f"Згенеровано: {filepath}")
+
+def generate_sense_pdf(filepath):
+    doc = SimpleDocTemplate(filepath, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        textColor=colors.HexColor('#0097a7'),
+        spaceAfter=12
+    )
+    normal_style = ParagraphStyle(
+        'NormalStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        spaceAfter=6
+    )
+    
+    story = []
+    story.append(Paragraph("Sense Bank (Альфа-Банк)", title_style))
+    story.append(Paragraph("Виписка по картці 537541XXXXXX1234", normal_style))
+    story.append(Paragraph("Період: 01.03.2025 - 31.03.2025", normal_style))
+    story.append(Paragraph("Клієнт: ФОП Петренко Іван Васильович", normal_style))
+    story.append(Spacer(1, 10))
+    
+    data = [
+        ["Дата", "Операція", "Сума (грн)", "Баланс (грн)"],
+        ["10.03.2025", "Оплата за хостинг-послуги", "-650.00", "27350.00"],
+        ["16.03.2025", "Зарахування від ТОВ Діджитал Солюшнс", "42000.00", "69350.00"],
+        ["23.03.2025", "Оплата за ліцензії ПЗ", "-2800.00", "66550.00"],
+        ["30.03.2025", "Зарахування від ФОП Мельник за дизайн", "18000.00", "84550.00"]
+    ]
+    
+    table = Table(data, colWidths=[80, 260, 90, 90])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#e0f7fa')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#0097a7')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#b2ebf2')),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+    ]))
+    
+    story.append(table)
+    doc.build(story)
+    print(f"Згенеровано: {filepath}")
+
 def main():
     samples_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(samples_dir, exist_ok=True)
@@ -191,6 +302,9 @@ def main():
     generate_oschad_html(os.path.join(samples_dir, "oschad.html"))
     generate_privat_pdf(os.path.join(samples_dir, "pryvat24.pdf"))
     generate_abank_pdf(os.path.join(samples_dir, "abank.pdf"))
+    generate_pumb_csv(os.path.join(samples_dir, "pumb.csv"))
+    generate_raiffeisen_pdf(os.path.join(samples_dir, "raiffeisen.pdf"))
+    generate_sense_pdf(os.path.join(samples_dir, "sense.pdf"))
     print("\nВсі тестові файли успішно створені!")
 
 if __name__ == "__main__":

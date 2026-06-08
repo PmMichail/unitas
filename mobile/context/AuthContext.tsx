@@ -16,6 +16,7 @@ interface AuthContextType {
   verify2FACode: (identifier: string, code: string, isTelegram?: boolean) => Promise<boolean>;
   register: (payload: any) => Promise<any>;
   logout: () => Promise<void>;
+  loginAsGuest: () => Promise<void>;
   authenticateBiometrics: () => Promise<boolean>;
   setBiometricPreference: (enabled: boolean) => Promise<void>;
 }
@@ -138,6 +139,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginAsGuest = async () => {
+    try {
+      const response = await api.loginAsGuest();
+      const { telegram_id } = response;
+      await SecureStore.setItemAsync('TELEGRAM_ID', telegram_id);
+      setTelegramId(telegram_id);
+      setUserEmail(null);
+    } catch (e: any) {
+      const errMsg = e.response?.data?.detail || e.message || 'Не вдалося увійти як гість';
+      throw new Error(errMsg);
+    }
+  };
+
   const setBiometricPreference = async (enabled: boolean) => {
     try {
       await SecureStore.setItemAsync('BIOMETRICS_ENABLED', enabled ? 'true' : 'false');
@@ -191,6 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verify2FACode,
         register,
         logout,
+        loginAsGuest,
         authenticateBiometrics,
         setBiometricPreference,
       }}

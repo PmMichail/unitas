@@ -32,7 +32,7 @@ export default function ReportsStatusPage() {
     setLoading(true);
     try {
       const res = await taxCabinetApi.getTokenStatus(activeProfileId);
-      setIsTokenSet(res.has_token);
+      setIsTokenSet(res.configured || res.has_token);
     } catch (err) {
       console.error("Failed to fetch token status:", err);
     } finally {
@@ -207,10 +207,10 @@ export default function ReportsStatusPage() {
               Будь ласка, оберіть активний профіль підприємства.
             </div>
           ) : reportsData ? (
-            reportsData.error ? (
+            (reportsData.error || !Array.isArray(reportsData.reports)) ? (
               <div className="p-4 rounded-xl border border-red-500/20 bg-red-950/10 text-red-400 text-xs font-bold flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 shrink-0" />
-                {reportsData.error}
+                {reportsData.error || "Отримано некоректні дані про звіти від сервера."}
               </div>
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">

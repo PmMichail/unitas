@@ -17,7 +17,8 @@ import {
   Edit2,
   Calendar,
   X,
-  Trash2
+  Trash2,
+  Download
 } from "lucide-react";
 
 export default function Transactions() {
@@ -30,6 +31,7 @@ export default function Transactions() {
   const [periodFilter, setPeriodFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [exportFormat, setExportFormat] = useState("csv");
 
   // Statement Upload State
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
@@ -209,6 +211,17 @@ export default function Transactions() {
     }
   };
 
+  const handleExport = () => {
+    if (!activeProfileId) return;
+    const params = new URLSearchParams({
+      profile_id: String(activeProfileId),
+      format: exportFormat,
+      start_date: startDate || "",
+      end_date: endDate || ""
+    });
+    window.location.href = `/api/export/transactions?${params.toString()}`;
+  };
+
   // Filter local results by search and transaction type
   const filteredTransactions = transactions.filter((tx) => {
     const matchesSearch = 
@@ -375,6 +388,26 @@ export default function Transactions() {
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs focus:outline-none focus:border-indigo-500 transition-all font-semibold"
             />
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+          </div>
+
+          <div className="flex gap-2 mt-4">
+            <select 
+              value={exportFormat} 
+              onChange={(e) => setExportFormat(e.target.value)}
+              className="border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-semibold bg-white dark:bg-slate-900"
+            >
+              <option value="csv">CSV (Excel)</option>
+              <option value="xlsx">Excel (XLSX)</option>
+            </select>
+            
+            <button
+              onClick={handleExport}
+              disabled={!activeProfileId || transactions.length === 0}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" />
+              Експорт
+            </button>
           </div>
         </div>
       </div>

@@ -10,7 +10,7 @@ class TaxCalendarGenerator:
         self.esv_fop_monthly = 1562.0
         self.esv_fop_quarterly = self.esv_fop_monthly * 3 # 4686 UAH
 
-    def generate_calendar(self, tax_system, group=None, rate=None, has_employees=False, reg_date_str=None, start_date=None, is_vat_payer=False, esv_paid_by_employer=False):
+    def generate_calendar(self, tax_system, group=None, rate=None, has_employees=False, reg_date_str=None, start_date=None, is_vat_payer=False, esv_paid_by_employer=False, profile_type=None):
         """
         Генерує податковий календар на 12 місяців вперед від start_date.
         
@@ -23,6 +23,7 @@ class TaxCalendarGenerator:
         - reg_date_str: дата реєстрації (формат "YYYY-MM-DD")
         - start_date: дата, з якої починати генерацію (datetime або date, default=сьогодні)
         - esv_paid_by_employer: чи сплачує ЄСВ роботодавець за основним місцем роботи
+        - profile_type: "fop" або "company"
         """
         if start_date is None:
             start_date = date.today()
@@ -30,6 +31,18 @@ class TaxCalendarGenerator:
             start_date = start_date.date()
         elif isinstance(start_date, str):
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+
+        # Map generic tax systems to specific internal generator keys based on profile_type
+        if profile_type == 'company':
+            if tax_system in ('ednuy-3-5%', 'single_tax', 'ep', 'llc_ep'):
+                tax_system = 'llc_ep'
+            elif tax_system in ('zagalna', 'general_tax', 'general', 'llc_profit'):
+                tax_system = 'llc_profit'
+        elif profile_type == 'fop':
+            if tax_system in ('ednuy-3-5%', 'single_tax', 'ep', 'fop_ep'):
+                tax_system = 'fop_ep'
+            elif tax_system in ('zagalna', 'general_tax', 'general', 'fop_general'):
+                tax_system = 'fop_general'
 
         events = []
         
@@ -194,39 +207,34 @@ class TaxCalendarGenerator:
 
             # 3. Події для Підприємств (ТОВ на загальній системі)
             elif tax_system == "llc_profit":
-                # Квартальна сплата податку на прибуток та декларація (40 днів звіт, 50 днів сплата)
-                if month in (4, 7, 10, 1):
-                    q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
-                    q_year = year if month != 1 else year - 1
-                    
-                    if month == 1:
-                        dec_due = date(year, 3, 1) # 60 днів для річного звіту
-                        pay_due = date(year, 3, 10) # 10 днів після звіту
-                    else:
-                        dec_due = date(year, month + 1, 9) # 9 травня, 9 серпня, 9 листопада
-                        pay_due = date(year, month + 1, 19) # 19 травня, 19 серпня, 19 листопада
-                        
-                    events.append({
-                        "due_date": dec_due.strftime("%Y-%m-%d"),
-                        "title": f"Подання Декларації з податку на прибуток підприємства за {q_num} квартал {q_year} р.",
-                        "type": "report",
-                        "tax_name": "profit_tax",
-                        "description": "Подання квартальної декларації з податку на прибуток для юридичних осіб.",
-                        "amount_desc": "Форма J0100125",
-                        "form_code": "J0100125",
-                        "status": "pending"
-                    })
-                    
-                    events.append({
-                        "due_date": pay_due.strftime("%Y-%m-%d"),
-                        "title": f"Сплата Податку на прибуток за {q_num} квартал {q_year} р.",
-                        "type": "payment",
-                        "tax_name": "profit_tax",
-                        "description": "Сплата податку на прибуток підприємств за ставкою 18%.",
-                        "amount_desc": "18% від фінансового прибутку компанії",
-                        "form_code": None,
-                        "status": "pending"
-                    })
+                # Щомісячна сплата податку на прибуток та декларація (дедлайн звіт до 20 числа наступного місяця, сплата до 30)
+                prev_m = 12 if month == 1 else month - 1
+                prev_y = year - 1 if month == 1 else year
+                
+                dec_due = date(year, month, 20)
+                pay_due = date(year, month, 30) if month != 2 else (date(year, 2, 29) if calendar.isleap(year) else date(year, 2, 28))
+                
+                events.append({
+                    "due_date": dec_due.strftime("%Y-%m-%d"),
+                    "title": f"Подання Декларації з податку на прибуток підприємства за {self._ukr_month(prev_m)} {prev_y} р.",
+                    "type": "report",
+                    "tax_name": "profit_tax",
+                    "description": "Подання щомісячної декларації з податку на прибуток для юридичних осіб.",
+                    "amount_desc": "Форма J0100125",
+                    "form_code": "J0100125",
+                    "status": "pending"
+                })
+                
+                events.append({
+                    "due_date": pay_due.strftime("%Y-%m-%d"),
+                    "title": f"Сплата Податку на прибуток за {self._ukr_month(prev_m)} {prev_y} р.",
+                    "type": "payment",
+                    "tax_name": "profit_tax",
+                    "description": "Сплата податку на прибуток підприємств за ставкою 18%.",
+                    "amount_desc": "18% від фінансового прибутку компанії за місяць",
+                    "form_code": None,
+                    "status": "pending"
+                })
 
             # 3a. Події для Підприємств (ТОВ на єдиному податку)
             elif tax_system == "llc_ep":
@@ -273,35 +281,60 @@ class TaxCalendarGenerator:
             if has_employees:
                 # Зарплатні податки сплачуються при виплаті зарплати, але крайній термін без виплати - 30 число наступного місяця
                 due_pay = date(year, month, 30) if month != 2 else (date(year, 2, 29) if calendar.isleap(year) else date(year, 2, 28))
+                prev_m = 12 if month == 1 else month - 1
+                prev_y = year - 1 if month == 1 else year
                 
                 # Додаємо щомісячний дедлайн сплати ПДФО, ВЗ та ЄСВ за працівників
                 events.append({
                     "due_date": due_pay.strftime("%Y-%m-%d"),
-                    "title": f"Сплата податків із зарплати працівників за {self._ukr_month(month)} {year}",
+                    "title": f"Сплата податків із зарплати працівників за {self._ukr_month(prev_m)} {prev_y}",
                     "type": "payment",
                     "tax_name": "employee_taxes",
-                    "description": "Сплата ПДФО (18%), Військового збору (5%) та ЄСВ (22%) нарахованих на заробітну плату працівників.",
+                    "description": "Сплата ПДФО (18%), Військового збору (5%) та ЄСВ (22%) нарахованих на заробітну плату працівників за попередній місяць.",
                     "amount_desc": "ПДФО 18% + ВЗ 5% + ЄСВ 22% від фонду оплати праці",
                     "form_code": None,
                     "status": "pending"
                 })
                 
-                # Квартальний Об'єднаний звіт з ЄСВ та ПДФО (подається протягом 40 днів після закінчення кварталу)
-                if month in (4, 7, 10, 1):
-                    q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
-                    q_year = year if month != 1 else year - 1
-                    dec_due = date(year, month + 1, 9) if month != 1 else date(year, 2, 9)
-                    
+                # Об'єднаний звіт з ЄСВ та ПДФО (дедлайн залежить від форми власності)
+                if profile_type:
+                    is_llc = (profile_type == 'company')
+                else:
+                    is_llc = not tax_system.startswith("fop")
+                
+                if is_llc:
+                    # Юридичні особи (ТОВ): подають щомісяця (протягом 20 календарних днів)
+                    dec_due = date(year, month, 20)
                     events.append({
                         "due_date": dec_due.strftime("%Y-%m-%d"),
-                        "title": f"Подання Податкового розрахунку (Об'єднаний звіт ЄСВ/ПДФО) за {q_num} квартал {q_year} р.",
+                        "title": f"Подання Податкового розрахунку (Об'єднаний звіт ЄСВ/ПДФО) за {self._ukr_month(prev_m)} {prev_y} р.",
                         "type": "report",
                         "tax_name": "employee_report",
-                        "description": "Податковий розрахунок сум доходу, нарахованого (сплаченого) на користь платників податків - фізичних осіб, і сум утриманого з них податку, а також сум нарахованого єдиного внеску.",
-                        "amount_desc": "Форма J0500109 / F0500109 (Об'єднана звітність)",
-                        "form_code": "F0500109",
+                        "description": "Податковий розрахунок сум доходу, нарахованого (сплаченого) на користь платників податків - фізичних осіб, і сум утриманого з них податку, а также сум нарахованого єдиного внеску для юридичних осіб (щомісячно).",
+                        "amount_desc": "Форма J0500109 (Об'єднана звітність - щомісяця)",
+                        "form_code": "J0500109",
                         "status": "pending"
                     })
+                else:
+                    # ФОП: подають один раз на квартал (протягом 40 календарних днів після закінчення кварталу)
+                    if month in (4, 7, 10, 1):
+                        q_num = 1 if month == 4 else (2 if month == 7 else (3 if month == 10 else 4))
+                        q_year = year if month != 1 else year - 1
+                        
+                        dec_due = date(year, month + 1, 10) # 10 травня, 10 серпня, 10 листопада
+                        if month == 1:
+                            dec_due = date(year, 2, 9) # 9 лютого
+                            
+                        events.append({
+                            "due_date": dec_due.strftime("%Y-%m-%d"),
+                            "title": f"Подання Податкового розрахунку (Об'єднаний звіт ЄСВ/ПДФО) за {q_num} квартал {q_year} р.",
+                            "type": "report",
+                            "tax_name": "employee_report",
+                            "description": "Податковий розрахунок сум доходу, нарахованого (сплаченого) на користь платників податків - фізичних осіб, і сум утриманого з них податку, а також сум нарахованого єдиного внеску для ФОП (щоквартально).",
+                            "amount_desc": "Форма F0500109 (Об'єднана звітність - щоквартально)",
+                            "form_code": "F0500109",
+                            "status": "pending"
+                        })
 
             # 5. Події з ПДВ (якщо платник ПДВ)
             if is_vat_payer:

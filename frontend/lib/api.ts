@@ -45,6 +45,8 @@ export const api = {
     esv_paid_by_employer?: boolean;
     address?: string;
     default_bank?: string;
+    director_name?: string;
+    phone?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.post("/api/profiles", formData);
@@ -67,6 +69,8 @@ export const api = {
       esv_paid_by_employer?: boolean;
       address?: string;
       default_bank?: string;
+      director_name?: string;
+      phone?: string;
     }
   ) => {
     const formData = toFormData(data);
@@ -202,9 +206,28 @@ export const api = {
     return response.data;
   },
 
-  generateReport: async (profileId: number, period: string, formCode: string) => {
+  generateReport: async (profileId: number, period: string, formCode: string, year?: number) => {
     const response = await client.post(`/api/generate-report/${profileId}/${formCode}`, null, {
-      params: { period },
+      params: { period, year },
+    });
+    return response.data;
+  },
+
+  getReportDetail: async (reportId: number) => {
+    const response = await client.get(`/api/reports/detail/${reportId}`);
+    return response.data;
+  },
+
+  submitReport: async (reportId: number, certificateId: number) => {
+    const response = await client.post(`/api/reports/${reportId}/submit`, {
+      certificate_id: certificateId
+    });
+    return response.data;
+  },
+
+  getTaxApiStatus: async (profileId: number) => {
+    const response = await client.get(`/api/tax-api/status`, {
+      params: { profile_id: profileId }
     });
     return response.data;
   },
@@ -280,6 +303,69 @@ export const api = {
     const response = await client.post("/api/invoices/send-oneoff", formData);
     return response.data;
   },
+
+  telegramLogin: async (telegramId: string) => {
+    const formData = toFormData({ telegram_id: telegramId });
+    const response = await client.post("/api/auth/telegram-login", formData);
+    return response.data;
+  },
+
+  verify2FACode: async (identifier: string, code: string, isTelegram: boolean = false) => {
+    const params: any = { code };
+    if (isTelegram) {
+      params.telegram_id = identifier;
+    } else {
+      params.email = identifier;
+    }
+    const formData = toFormData(params);
+    const response = await client.post("/api/auth/verify-code", formData);
+    return response.data;
+  },
+
+  deleteReport: async (reportId: number) => {
+    const response = await client.delete(`/api/reports/${reportId}`);
+    return response.data;
+  },
+
+  createCheckoutSession: async (profileId: number, plan: string, successUrl: string, cancelUrl: string) => {
+    const response = await client.post("/api/subscriptions/create-checkout", null, {
+      params: { profile_id: profileId, plan, success_url: successUrl, cancel_url: cancelUrl }
+    });
+    return response.data;
+  },
+  getCurrentSubscription: async (profileId: number) => {
+    const response = await client.get(`/api/subscriptions/current/${profileId}`);
+    return response.data;
+  },
+  adminLogin: async (data: Record<string, any>) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/admin/login", formData);
+    return response.data;
+  },
+  adminGetUsers: async (token: string) => {
+    const response = await client.get("/api/admin/users", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminGetUserDetails: async (userId: number, token: string) => {
+    const response = await client.get(`/api/admin/users/${userId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminUpdateUserSubscription: async (userId: number, data: Record<string, any>, token: string) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/admin/users/${userId}/subscription`, formData, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  emailLogin: async (data: Record<string, any>) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/auth/login", formData);
+    return response.data;
+  }
 };
 
 export const emailApi = {
@@ -380,6 +466,12 @@ export const paymentsApi = {
     const response = await client.post(`/api/payments/${paymentId}/confirm`);
     return response.data;
   },
+  regenerateCalendar: async (profileId: number) => {
+    const response = await client.post(`/api/tax-calendar/regenerate`, null, {
+      params: { profile_id: profileId }
+    });
+    return response.data;
+  },
 };
 
 export const certificatesApi = {
@@ -456,6 +548,40 @@ export const legislationApi = {
   },
   unsubscribe: async (profileId: number) => {
     const response = await client.delete(`/api/legislation/subscribe/${profileId}`);
+    return response.data;
+  },
+  createCheckoutSession: async (profileId: number, plan: string, successUrl: string, cancelUrl: string) => {
+    const response = await client.post("/api/subscriptions/create-checkout", null, {
+      params: { profile_id: profileId, plan, success_url: successUrl, cancel_url: cancelUrl }
+    });
+    return response.data;
+  },
+  getCurrentSubscription: async (profileId: number) => {
+    const response = await client.get(`/api/subscriptions/current/${profileId}`);
+    return response.data;
+  },
+  adminLogin: async (data: Record<string, any>) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/admin/login", formData);
+    return response.data;
+  },
+  adminGetUsers: async (token: string) => {
+    const response = await client.get("/api/admin/users", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminGetUserDetails: async (userId: number, token: string) => {
+    const response = await client.get(`/api/admin/users/${userId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  adminUpdateUserSubscription: async (userId: number, data: Record<string, any>, token: string) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/admin/users/${userId}/subscription`, formData, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     return response.data;
   }
 };

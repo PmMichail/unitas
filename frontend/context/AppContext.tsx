@@ -19,6 +19,8 @@ interface Profile {
   esv_paid_by_employer?: boolean;
   address?: string;
   default_bank?: string;
+  director_name?: string;
+  phone?: string;
 }
 
 interface AppContextType {
@@ -54,7 +56,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setTelegramIdState(finalId);
         localStorage.setItem("telegram_id", finalId);
       } else {
-        if (window.location.pathname !== "/login") {
+        const exemptPaths = ["/login", "/admin", "/privacy", "/terms"];
+        if (!exemptPaths.includes(window.location.pathname)) {
           window.location.href = "/login";
         }
       }

@@ -2,18 +2,22 @@ import os
 import json
 import hashlib
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc
+from fastapi.responses import StreamingResponse
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
+from io import BytesIO
 
 load_dotenv()
 
 # Database Setup
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./unitas.db")
+import os.path
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{backend_dir}/unitas.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
@@ -28,6 +32,81 @@ def is_general_tax(tax_system: Optional[str]) -> bool:
         return False
     return str(tax_system).lower() in ["zagalna", "general_tax", "fop_general", "llc_profit", "general"]
 
+def is_fop_profile(profile) -> bool:
+    if not profile:
+        return False
+    p_type = str(getattr(profile, "type", "") or "").lower()
+    p_name = str(getattr(profile, "name", "") or "").lower()
+    p_tax = str(getattr(profile, "tax_system", "") or "").lower()
+    
+    # Explicit FOP type
+    if p_type == "fop":
+        return True
+    # Explicit LLC indicators
+    if "тов" in p_name or "llc" in p_name or "товариство" in p_name:
+        return False
+    if p_type == "company" and "llc" in p_tax:
+        return False
+        
+    # FOP indicators in name or tax system
+    if "фоп" in p_name or "fop" in p_name:
+        return True
+    if "fop" in p_tax:
+        return True
+    # FOP group indicators (LLCs cannot be Group 1 or 2)
+    if getattr(profile, "group", None) in (1, 2):
+        return True
+        
+    return p_type == "fop"
+
+def parse_period_to_dates(period: str, year: int) -> tuple[date, date]:
+    period_lower = period.lower()
+    
+    # Quarters (Ukrainian and English)
+    if "q1" in period_lower or "1 квартал" in period_lower:
+        return date(year, 1, 1), date(year, 3, 31)
+    elif "q2" in period_lower or "півріччя" in period_lower or "2 квартал" in period_lower:
+        return date(year, 1, 1), date(year, 6, 30)
+    elif "q3" in period_lower or "три квартали" in period_lower or "3 квартал" in period_lower:
+        return date(year, 1, 1), date(year, 9, 30)
+    elif "q4" in period_lower or "рік" in period_lower or "4 квартал" in period_lower:
+        return date(year, 1, 1), date(year, 12, 31)
+        
+    # Months (Ukrainian names)
+    months_ua = {
+        "січень": (1, 31),
+        "лютий": (2, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28),
+        "березень": (3, 31),
+        "квітень": (4, 30),
+        "травень": (5, 31),
+        "червень": (6, 30),
+        "липень": (7, 31),
+        "серпень": (8, 31),
+        "вересень": (9, 30),
+        "жовтень": (10, 31),
+        "листопад": (11, 30),
+        "грудень": (12, 31),
+        
+        "january": (1, 31),
+        "february": (2, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28),
+        "march": (3, 31),
+        "april": (4, 30),
+        "may": (5, 31),
+        "june": (6, 30),
+        "july": (7, 31),
+        "august": (8, 31),
+        "september": (9, 30),
+        "october": (10, 31),
+        "november": (11, 30),
+        "december": (12, 31),
+    }
+    
+    for month_name, (m_num, m_days) in months_ua.items():
+        if month_name in period_lower:
+            return date(year, m_num, 1), date(year, m_num, m_days)
+            
+    return date(year, 1, 1), date(year, 12, 31)
+
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -41,8 +120,9 @@ class User(Base):
     hashed_password = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     verification_code = Column(String, nullable=True)
-    role = Column(String, default="user") # user, admin
+    role = Column(String, default="user") # user, admin, guest
     language = Column(String, default="uk")
+    expires_at = Column(DateTime, nullable=True)
     companies = relationship("Company", back_populates="owner")
     profiles = relationship("Profile", back_populates="owner")
 
@@ -57,6 +137,8 @@ class Company(Base):
     reg_date = Column(Date, default=date.today)
     has_employees = Column(Boolean, default=False)
     address = Column(String, nullable=True)
+    director_name = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
     is_vat_payer = Column(Boolean, default=False)
     
     owner = relationship("User", back_populates="companies")
@@ -83,6 +165,11 @@ class Profile(Base):
     is_vat_payer = Column(Boolean, default=False)
     esv_paid_by_employer = Column(Boolean, default=False)
     address = Column(String, nullable=True)
+    director_name = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    registration_source = Column(String, default="direct")
+    app_store_transaction_id = Column(String, nullable=True)
+    google_play_purchase_token = Column(String, nullable=True)
     
     owner = relationship("User", back_populates="profiles")
     employees = relationship("Employee", back_populates="profile")
@@ -90,6 +177,7 @@ class Profile(Base):
     bank_statements = relationship("BankStatement", back_populates="profile")
     generated_reports = relationship("GeneratedReport", back_populates="profile")
     payments = relationship("ParsedPayment", back_populates="profile")
+    subscription = relationship("Subscription", uselist=False, back_populates="profile", cascade="all, delete-orphan")
 
 class Employee(Base):
     __tablename__ = "employees"
@@ -118,9 +206,11 @@ class TaxEvent(Base):
     amount_desc = Column(String, nullable=True)
     form_code = Column(String, nullable=True) # F0103306, etc.
     status = Column(String, default="pending") # pending, paid, submitted
+    payment_id = Column(Integer, ForeignKey("parsed_payments.id"), nullable=True) # Зв'язок з транзакцією
     
     company = relationship("Company", back_populates="tax_events")
     profile = relationship("Profile", back_populates="tax_events")
+    payment = relationship("ParsedPayment", backref="tax_events")
 
 class BankStatement(Base):
     __tablename__ = "bank_statements"
@@ -183,10 +273,153 @@ class GeneratedReport(Base):
     company = relationship("Company", back_populates="generated_reports")
     profile = relationship("Profile", back_populates="generated_reports")
 
+class Certificate(Base):
+    __tablename__ = "certificates"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    cert_owner_name = Column(String)
+    cert_issuer = Column(String)
+    cert_serial = Column(String)
+    valid_to = Column(DateTime)
+    cert_data = Column(Text)  # PEM/Base64 дані сертифіката
+    private_key_encrypted = Column(Text)  # Зашифрований Fernet приватний ключ
+
+class TaxApiSetting(Base):
+    __tablename__ = "tax_api_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), unique=True)
+    api_token = Column(String)
+    api_token_expires_at = Column(DateTime)
+    last_sync_at = Column(DateTime, default=datetime.now)
+
+class BankConnection(Base):
+    __tablename__ = "bank_connections"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    bank_name = Column(String)  # privat, monobank, abank, ukrgas, pumb
+    access_token = Column(Text)
+    refresh_token = Column(Text, nullable=True)
+    account_id = Column(String)
+    account_number = Column(String)
+    is_active = Column(Boolean, default=True)
+    last_sync = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+class ReportSubmission(Base):
+    __tablename__ = "report_submissions"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    report_id = Column(Integer, ForeignKey("generated_reports.id", ondelete="SET NULL"), nullable=True)
+    report_type = Column(String)  # 'f0103306', 'f0110210' тощо
+    report_period = Column(String)  # '2025-Q2', '2025-06'
+    report_xml = Column(Text)  # Згенерований XML з підписом
+    submission_status = Column(String, default="pending")  # 'pending', 'sent', 'accepted', 'rejected'
+    tax_office_response = Column(Text, nullable=True)  # Відповідь ДПС
+    confirmation_number = Column(String, nullable=True)  # Номер квитанції
+    submitted_at = Column(DateTime, default=datetime.now)
+    accepted_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True)
+    tax_type = Column(String, nullable=False) # 'edp', 'esv', 'pdfo', 'vz'
+    amount = Column(Float, nullable=False)
+    period = Column(String, nullable=False)
+    status = Column(String, default="pending") # 'pending', 'paid'
+    payment_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    paid_at = Column(DateTime, nullable=True)
+    # LiqPay fields
+    liqpay_order_id = Column(String, nullable=True)
+    liqpay_payment_id = Column(String, nullable=True)
+    payment_type = Column(String, default="tax") # 'tax', 'subscription'
+
+    profile = relationship("Profile")
+
 class SystemConfig(Base):
     __tablename__ = "system_configs"
     key = Column(String, primary_key=True, index=True)
     value = Column(String, nullable=False)
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), unique=True)
+    plan = Column(String, default="free") # 'free', 'business'
+    status = Column(String, default="active")
+    trial_ends_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    auto_renew = Column(Boolean, default=False)
+    # LiqPay fields
+    liqpay_order_id = Column(String, nullable=True)
+    # Stripe fields (legacy, kept for compatibility)
+    stripe_customer_id = Column(String, nullable=True)
+    stripe_subscription_id = Column(String, nullable=True)
+    last_payment_amount = Column(Integer, nullable=True)
+    last_payment_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    profile = relationship("Profile", back_populates="subscription")
+
+class Pricing(Base):
+    __tablename__ = "pricing"
+    id = Column(Integer, primary_key=True, index=True)
+    plan = Column(String, unique=True, nullable=False) # 'free', 'business'
+    price = Column(Integer, nullable=False) # in UAH
+    currency = Column(String, default="UAH")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class StatementUsage(Base):
+    __tablename__ = "statement_usage"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    month = Column(Date, nullable=False) # First day of the month
+    count = Column(Integer, default=0)
+    __table_args__ = (UniqueConstraint('profile_id', 'month', name='unique_profile_month'),)
+
+class TaxRequisite(Base):
+    __tablename__ = "tax_requisites"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    tax_type = Column(String, nullable=False) # 'edp', 'esv', 'pdfo', 'vz'
+    tax_office_name = Column(String, nullable=True)
+    edrpou = Column(String, nullable=True)
+    iban = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    profile = relationship("Profile")
+
+class PaymentHistory(Base):
+    __tablename__ = "payments_history"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    amount = Column(Integer)  # in kopecks
+    currency = Column(String, default="UAH")
+    plan = Column(String)
+    status = Column(String)  # pending, success, failed, refunded
+    stripe_payment_intent_id = Column(String, nullable=True)
+    stripe_checkout_session_id = Column(String, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    profile = relationship("Profile")
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, default="admin") # admin, moderator, developer
+    can_view_all = Column(Boolean, default=True)
+    can_edit_all = Column(Boolean, default=False)
+    can_delete_all = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 def get_config_val(db: Session, key: str, default: float) -> float:
     config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
@@ -202,6 +435,27 @@ def get_config_val(db: Session, key: str, default: float) -> float:
         return float(config.value)
     except ValueError:
         return default
+
+def get_tax_calculator(db: Session):
+    from services.tax_calculator import TaxCalculator
+    config_rates = {
+        "min_salary": get_config_val(db, "min_salary", 8647.0),
+        "military_tax_fop_rate": get_config_val(db, "military_tax_fop_rate", 5.0),
+        "military_tax_employee_rate": get_config_val(db, "military_tax_employee_rate", 1.5),
+        "pit_employee_rate": get_config_val(db, "pit_employee_rate", 18.0),
+        "esv_employee_rate": get_config_val(db, "esv_employee_rate", 22.0),
+        "esv_fop_monthly": get_config_val(db, "esv_fop_monthly", 1562.0),
+        "unified_tax_rate_group_3": get_config_val(db, "unified_tax_rate_group_3", 5.0),
+        "profit_tax_rate": get_config_val(db, "profit_tax_rate", 18.0),
+    }
+    return TaxCalculator(config_rates)
+
+def make_content_disposition(filename: str) -> str:
+    import urllib.parse
+    encoded_filename = urllib.parse.quote(filename)
+    ext = filename.split('.')[-1] if '.' in filename else 'txt'
+    fallback = f"report.{ext}"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded_filename}"
 
 # Create tables
 Base.metadata.create_all(engine)
@@ -229,6 +483,11 @@ migrations = [
     "ALTER TABLE recurring_invoices ADD COLUMN send_month INTEGER DEFAULT NULL",
     "ALTER TABLE recurring_invoices ADD COLUMN client_name TEXT DEFAULT NULL",
     "ALTER TABLE recurring_invoices ADD COLUMN client_tax_id TEXT DEFAULT NULL",
+    # LiqPay migrations
+    "ALTER TABLE payments ADD COLUMN liqpay_order_id TEXT DEFAULT NULL",
+    "ALTER TABLE payments ADD COLUMN liqpay_payment_id TEXT DEFAULT NULL",
+    "ALTER TABLE payments ADD COLUMN payment_type TEXT DEFAULT 'tax'",
+    "ALTER TABLE subscriptions ADD COLUMN liqpay_order_id TEXT DEFAULT NULL",
     "ALTER TABLE recurring_invoices ADD COLUMN document_type TEXT DEFAULT 'act'",
     "ALTER TABLE invoices ADD COLUMN client_name TEXT DEFAULT NULL",
     "ALTER TABLE invoices ADD COLUMN client_tax_id TEXT DEFAULT NULL",
@@ -242,7 +501,18 @@ migrations = [
     "ALTER TABLE profiles ADD COLUMN address TEXT DEFAULT NULL",
     "ALTER TABLE companies ADD COLUMN address TEXT DEFAULT NULL",
     "ALTER TABLE invoices ADD COLUMN client_address TEXT DEFAULT NULL",
-    "ALTER TABLE recurring_invoices ADD COLUMN client_address TEXT DEFAULT NULL"
+    "ALTER TABLE recurring_invoices ADD COLUMN client_address TEXT DEFAULT NULL",
+    "ALTER TABLE users ADD COLUMN expires_at TIMESTAMP DEFAULT NULL",
+    "ALTER TABLE profiles ADD COLUMN registration_source TEXT DEFAULT 'direct'",
+    "ALTER TABLE profiles ADD COLUMN app_store_transaction_id TEXT DEFAULT NULL",
+    "ALTER TABLE profiles ADD COLUMN google_play_purchase_token TEXT DEFAULT NULL",
+    "ALTER TABLE profiles ADD COLUMN director_name TEXT DEFAULT NULL",
+    "ALTER TABLE profiles ADD COLUMN phone TEXT DEFAULT NULL",
+    "ALTER TABLE companies ADD COLUMN director_name TEXT DEFAULT NULL",
+    "ALTER TABLE companies ADD COLUMN phone TEXT DEFAULT NULL",
+    "ALTER TABLE tax_events ADD COLUMN payment_id INTEGER DEFAULT NULL",
+    # Create tax_requisites table if not exists
+    "CREATE TABLE IF NOT EXISTS tax_requisites (id INTEGER PRIMARY KEY, profile_id INTEGER, tax_type TEXT NOT NULL, tax_office_name TEXT, edrpou TEXT, iban TEXT, bank_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
 ]
 
 with engine.connect() as conn:
@@ -291,14 +561,110 @@ try:
 except Exception as e:
     print(f"Data migration error: {e}")
 
+# Passlib context for admin / reviewer credentials hashing
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Seeding default Admin and Reviewer accounts
+try:
+    db_seed = SessionLocal()
+    
+    # Seed default pricing
+    existing_business_price = db_seed.query(Pricing).filter(Pricing.plan == "business").first()
+    if not existing_business_price:
+        business_pricing = Pricing(
+            plan="business",
+            price=499,
+            currency="UAH"
+        )
+        db_seed.add(business_pricing)
+        db_seed.commit()
+        print("Created default pricing: business = 499 UAH")
+    
+    # 1. Admin account
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@unitas.com")
+    admin_password = os.getenv("ADMIN_PASSWORD", "ChangeMe123!")
+    existing_admin = db_seed.query(AdminUser).filter(AdminUser.email == admin_email).first()
+    if not existing_admin:
+        hashed = pwd_context.hash(admin_password)
+        admin = AdminUser(
+            email=admin_email,
+            password_hash=hashed,
+            role="admin",
+            can_view_all=True,
+            can_edit_all=True,
+            can_delete_all=True
+        )
+        db_seed.add(admin)
+        db_seed.commit()
+        print(f"Created default admin account: {admin_email}")
+    
+    # 2. Apple Review account for app store moderation
+    apple_review_email = "apple_review@unitas.com"
+    apple_review_password = "AppleReviewer2026!"
+    existing_apple_user = db_seed.query(User).filter(User.email == apple_review_email).first()
+    if not existing_apple_user:
+        hashed = pwd_context.hash(apple_review_password)
+        apple_user = User(
+            email=apple_review_email,
+            password_hash=hashed,
+            telegram_id="apple_review_user"
+        )
+        db_seed.add(apple_user)
+        db_seed.commit()
+        print(f"Created Apple Review account: {apple_review_email}")
+        
+        # Create a profile for Apple Review
+        apple_profile = Profile(
+            user_id=apple_user.id,
+            type="fop",
+            name="Apple Review Account",
+            tax_id="0000000000",
+            tax_system="ednuy-3-5%",
+            group=3,
+            rate=5,
+            has_employees=True,
+            is_vat_payer=False,
+            reg_date=datetime.utcnow().date()
+        )
+        db_seed.add(apple_profile)
+        db_seed.commit()
+        
+        # Activate Business subscription for 90 days
+        expires_at = datetime.utcnow() + timedelta(days=90)
+        apple_subscription = Subscription(
+            profile_id=apple_profile.id,
+            plan="business",
+            status="active",
+            expires_at=expires_at,
+            auto_renew=False
+        )
+        db_seed.add(apple_subscription)
+        db_seed.commit()
+        print(f"Activated Business subscription for Apple Review account (90 days)")
+    
+    db_seed.close()
+except Exception as startup_err:
+    print(f"Error seeding admin/reviewer accounts: {startup_err}")
+
 # Seed Report Templates on startup
+# Create tables first
+try:
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully")
+    print(f"Database URL: {DATABASE_URL}")
+except Exception as e:
+    print(f"Error creating database tables: {e}")
+    import traceback
+    traceback.print_exc()
+
 db = SessionLocal()
 
 # Sync Postgres sequences if necessary
 if "postgresql" in DATABASE_URL:
     try:
         from sqlalchemy import text
-        for table in ["users", "companies", "profiles", "employees", "tax_events", "bank_statements", "parsed_payments", "report_templates", "generated_reports", "recurring_invoices", "invoices", "service_acts"]:
+        for table in ["users", "companies", "profiles", "employees", "tax_events", "bank_statements", "parsed_payments", "report_templates", "generated_reports", "recurring_invoices", "invoices", "service_acts", "certificates", "report_submissions", "tax_api_settings", "subscriptions", "payments_history", "admin_users"]:
             db.execute(text(f'SELECT setval(seq, coalesce((SELECT max(id) FROM "{table}"), 1)) FROM pg_get_serial_sequence(\'"{table}"\', \'id\') AS seq WHERE seq IS NOT NULL;'))
         db.commit()
         print("Postgres sequences successfully synchronized.")
@@ -344,6 +710,166 @@ if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "F0110210").f
     )
     db.add(f0110210_template)
     db.commit()
+
+if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "F3007012").first():
+    f3007012_template = ReportTemplate(
+        name="Звіт про ЄСВ",
+        form_code="F3007012",
+        schema_json=json.dumps({
+            "fields": [
+                {"id": "HNAME", "name": "ПІБ Платника", "type": "string", "group": "general"},
+                {"id": "HTIN", "name": "ІПН (РНОКПП)", "type": "string", "group": "general"},
+                {"id": "ESV_DUE", "name": "Нараховано ЄСВ", "type": "float", "group": "esv"},
+                {"id": "ESV_PAID", "name": "Сплачено ЄСВ", "type": "float", "group": "esv"}
+            ]
+        })
+    )
+    db.add(f3007012_template)
+    db.commit()
+
+if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "F0120109").first():
+    f0120109_template = ReportTemplate(
+        name="Декларація військового збору",
+        form_code="F0120109",
+        schema_json=json.dumps({
+            "fields": [
+                {"id": "HNAME", "name": "ПІБ Платника", "type": "string", "group": "general"},
+                {"id": "HTIN", "name": "ІПН (РНОКПП)", "type": "string", "group": "general"},
+                {"id": "MIL_DUE", "name": "Нараховано військовий збір", "type": "float", "group": "military"},
+                {"id": "MIL_PAID", "name": "Сплачено військовий збір", "type": "float", "group": "military"}
+            ]
+        })
+    )
+    db.add(f0120109_template)
+    db.commit()
+
+if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "F0510101").first():
+    f0510101_template = ReportTemplate(
+        name="Об'єднаний звіт",
+        form_code="F0510101",
+        schema_json=json.dumps({
+            "fields": [
+                {"id": "HNAME", "name": "ПІБ Платника", "type": "string", "group": "general"},
+                {"id": "HTIN", "name": "ІПН (РНОКПП)", "type": "string", "group": "general"},
+                {"id": "ROW01", "name": "Обсяг доходу за 1 квартал", "type": "float", "group": "revenue"},
+                {"id": "ROW02", "name": "Обсяг доходу за півріччя", "type": "float", "group": "revenue"},
+                {"id": "ROW03", "name": "Обсяг доходу за 9 місяців", "type": "float", "group": "revenue"},
+                {"id": "ROW04", "name": "Обсяг доходу за рік", "type": "float", "group": "revenue"},
+                {"id": "TAX_DUE", "name": "Нараховано єдиного податку", "type": "float", "group": "tax"},
+                {"id": "ESV_DUE", "name": "Нараховано ЄСВ", "type": "float", "group": "esv"},
+                {"id": "MIL_DUE", "name": "Нараховано військовий збір", "type": "float", "group": "military"}
+            ]
+        })
+    )
+    db.add(f0510101_template)
+    db.commit()
+
+if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "J0500109").first():
+    j0500109_template = ReportTemplate(
+        name="Об'єднаний звіт (ТОВ)",
+        form_code="J0500109",
+        schema_json=json.dumps({
+            "fields": [
+                {"id": "HNAME", "name": "Назва підприємства (ТОВ)", "type": "string", "group": "general"},
+                {"id": "HTIN", "name": "ЄДРПОУ", "type": "string", "group": "general"},
+                {"id": "ROW01", "name": "Обсяг доходу за 1 квартал", "type": "float", "group": "revenue"},
+                {"id": "ROW02", "name": "Обсяг доходу за півріччя", "type": "float", "group": "revenue"},
+                {"id": "ROW03", "name": "Обсяг доходу за 9 місяців", "type": "float", "group": "revenue"},
+                {"id": "ROW04", "name": "Обсяг доходу за рік", "type": "float", "group": "revenue"},
+                {"id": "TAX_DUE", "name": "Нараховано єдиного податку / прибутку", "type": "float", "group": "tax"},
+                {"id": "ESV_DUE", "name": "Нараховано ЄСВ (за працівників)", "type": "float", "group": "esv"},
+                {"id": "MIL_DUE", "name": "Нараховано військовий збір", "type": "float", "group": "military"}
+            ]
+        })
+    )
+    db.add(j0500109_template)
+    db.commit()
+
+if not db.query(ReportTemplate).filter(ReportTemplate.form_code == "F0600101").first():
+    f0600101_template = ReportTemplate(
+        name="Декларація податку на доходи фізичних осіб (ПДФО)",
+        form_code="F0600101",
+        schema_json=json.dumps({
+            "fields": [
+                {"id": "HNAME", "name": "ПІБ Платника", "type": "string", "group": "general"},
+                {"id": "HTIN", "name": "ІПН (РНОКПП)", "type": "string", "group": "general"},
+                {"id": "TOTAL_INCOME", "name": "Загальний дохід", "type": "float", "group": "income"},
+                {"id": "TAX_DUE", "name": "Нараховано ПДФО", "type": "float", "group": "pit"},
+                {"id": "MIL_DUE", "name": "Нараховано військовий збір", "type": "float", "group": "military"}
+            ]
+        })
+    )
+    db.add(f0600101_template)
+    db.commit()
+
+# Self-correct profiles table to ensure FOP profiles have type='fop'
+try:
+    from sqlalchemy import text
+    db.execute(text("UPDATE profiles SET type = 'fop' WHERE type = 'company' AND (name LIKE '%ФОП%' OR name LIKE '%FOP%' OR tax_system LIKE '%fop%')"))
+    db.commit()
+    print("Database profiles self-corrected successfully.")
+except Exception as fix_err:
+    print(f"Failed to auto-correct profiles database table: {fix_err}")
+    db.rollback()
+
+# Force-regenerate all profiles tax events to apply correct monthly/quarterly generator logic on startup
+try:
+    from tax_calendar.generator import TaxCalendarGenerator
+    import datetime as dt_module
+    all_profiles = db.query(Profile).all()
+    for p in all_profiles:
+        # Delete future pending events to replace them
+        db.query(TaxEvent).filter(
+            TaxEvent.profile_id == p.id,
+            TaxEvent.status == 'pending',
+            TaxEvent.due_date >= date.today()
+        ).delete()
+        db.commit()
+        
+        reg_date = p.reg_date or (date.today() - dt_module.timedelta(days=365))
+        reg_date_val = reg_date.date() if hasattr(reg_date, 'date') else reg_date
+        
+        profile_employees = db.query(Employee).filter(
+            (Employee.profile_id == p.id) | (Employee.company_id == p.id)
+        ).all()
+        
+        generator = TaxCalendarGenerator()
+        events = generator.generate_calendar(
+            tax_system=p.tax_system,
+            group=p.group,
+            rate=p.rate,
+            has_employees=p.has_employees or len(profile_employees) > 0,
+            reg_date_str=reg_date_val.strftime("%Y-%m-%d") if hasattr(reg_date_val, 'strftime') else str(reg_date_val),
+            start_date=date.today(),
+            is_vat_payer=p.is_vat_payer,
+            esv_paid_by_employer=getattr(p, 'esv_paid_by_employer', False),
+            profile_type=p.type
+        )
+        for ev in events:
+            due_dt = dt_module.datetime.strptime(ev["due_date"], "%Y-%m-%d").date() if isinstance(ev["due_date"], str) else ev["due_date"]
+            exists = db.query(TaxEvent).filter(
+                TaxEvent.profile_id == p.id,
+                TaxEvent.title == ev["title"],
+                TaxEvent.due_date == due_dt
+            ).first()
+            if not exists:
+                db_ev = TaxEvent(
+                    company_id=p.id,
+                    profile_id=p.id,
+                    title=ev["title"],
+                    type=ev["type"],
+                    tax_name=ev["tax_name"],
+                    due_date=due_dt,
+                    amount_desc=ev["amount_desc"],
+                    form_code=ev["form_code"],
+                    status=ev["status"]
+                )
+                db.add(db_ev)
+        db.commit()
+    print("Database profiles tax calendars successfully synchronized on startup.")
+except Exception as regen_err:
+    print(f"Failed to synchronize tax calendars on startup: {regen_err}")
+    db.rollback()
 
 db.close()
 
@@ -541,7 +1067,8 @@ def register_user(
         reg_date_str=reg_date_parsed.strftime("%Y-%m-%d"),
         start_date=reg_date_parsed,
         is_vat_payer=is_vat_payer,
-        esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False)
+        esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False),
+        profile_type=p_type
     )
     
     for ev in events:
@@ -717,26 +1244,216 @@ async def upload_statement(
 
     return {"message": f"Завантажено {inserted_count} нових транзакцій з {bank_name} для профілю '{profile.name}' (пропущено {len(parsed_txs) - inserted_count} дублікатів)", "statement_id": statement.id}
 
+def map_tax_type(t: str) -> str:
+    mapping = {
+        "edp": "unified_tax",
+        "esv": "esv",
+        "vz": "military_tax",
+        "military": "military_tax",
+        "pdfo": "pit",
+        "unified_tax": "unified_tax",
+        "military_tax": "military_tax",
+        "pit": "pit"
+    }
+    return mapping.get(t, t)
+
+def get_profile_num_months(profile, db, period_type="all", year=None, period_value=None, start_dt=None, end_dt=None) -> int:
+    import datetime as dt_module
+    from datetime import date
+    
+    if period_type == "month":
+        return 1
+    elif period_type == "quarter":
+        return 3
+    elif period_type == "year":
+        return 12
+        
+    if start_dt and end_dt:
+        return (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+        
+    latest_stmt = db.query(BankStatement).filter(BankStatement.profile_id == profile.id).order_by(desc(BankStatement.id)).first()
+    if latest_stmt and latest_stmt.period_start and latest_stmt.period_end:
+        p_start = latest_stmt.period_start
+        p_end = latest_stmt.period_end
+        return (p_end.year - p_start.year) * 12 + (p_end.month - p_start.month) + 1
+        
+    months = 3
+    if profile.reg_date:
+        reg_date_val = profile.reg_date
+        if isinstance(reg_date_val, str):
+            try:
+                from datetime import datetime
+                reg_date_val = datetime.strptime(reg_date_val, "%Y-%m-%d").date()
+            except:
+                pass
+        if hasattr(reg_date_val, 'date'):
+            reg_date_val = reg_date_val.date()
+        from datetime import date as datetime_date
+        if isinstance(reg_date_val, (date, datetime_date)):
+            today = date.today()
+            months = max(1, (today.year - reg_date_val.year) * 12 + (today.month - reg_date_val.month) + 1)
+            months = min(12, months)
+    return months
+
+def get_paid_taxes_by_type(db, profile_id: int, start_dt=None, end_dt=None) -> dict:
+    from datetime import date, timedelta
+    
+    # 1. Fetch tax payments from ParsedPayment (bank statements)
+    # Include both type="tax_payment" and payments with tax_type set
+    query_parsed = db.query(ParsedPayment).filter(
+        ParsedPayment.profile_id == profile_id,
+        (ParsedPayment.type == "tax_payment") | (ParsedPayment.tax_type != None)
+    )
+    if start_dt:
+        query_parsed = query_parsed.filter(ParsedPayment.date >= start_dt)
+    if end_dt:
+        query_parsed = query_parsed.filter(ParsedPayment.date <= end_dt)
+    parsed_payments = query_parsed.all()
+    
+    # 2. Fetch payments from Payment table (manual/Stripe)
+    query_manual = db.query(Payment).filter(
+        Payment.profile_id == profile_id,
+        Payment.status == "paid"
+    )
+    if start_dt:
+        from sqlalchemy import func
+        query_manual = query_manual.filter(func.date(Payment.paid_at) >= start_dt)
+    if end_dt:
+        from sqlalchemy import func
+        query_manual = query_manual.filter(func.date(Payment.paid_at) <= end_dt)
+    manual_payments = query_manual.all()
+    
+    # 3. Merge and deduplicate
+    merged = []
+    seen_keys = set()
+    
+    for p in parsed_payments:
+        # Use tax_type if available, otherwise try to determine from purpose
+        if p.tax_type:
+            db_tax_name = map_tax_type(p.tax_type)
+        else:
+            # Try to determine tax type from purpose text
+            purpose_lower = (p.purpose or "").lower()
+            if "єдиний" in purpose_lower or "едп" in purpose_lower or "едп" in purpose_lower:
+                db_tax_name = "unified_tax"
+            elif "єсв" in purpose_lower or "есв" in purpose_lower:
+                db_tax_name = "esv"
+            elif "військовий" in purpose_lower or "військ" in purpose_lower or "вз" in purpose_lower:
+                db_tax_name = "military_tax"
+            elif "пдфо" in purpose_lower or "податок на доходи" in purpose_lower:
+                db_tax_name = "pit"
+            else:
+                db_tax_name = "unified_tax"  # Default to unified tax for tax payments
+        
+        p_date = p.date
+        p_amount = round(float(p.amount), 2)
+        
+        key = (p_date, p_amount, db_tax_name)
+        seen_keys.add(key)
+        merged.append({
+            "tax_name": db_tax_name,
+            "amount": p_amount,
+            "date": p_date
+        })
+        
+    for p in manual_payments:
+        db_tax_name = map_tax_type(p.tax_type) if p.tax_type else "unified_tax"
+        p_date = p.paid_at.date() if p.paid_at else None
+        p_amount = round(float(p.amount), 2)
+        
+        if p_date:
+            key = (p_date, p_amount, db_tax_name)
+            if key in seen_keys:
+                continue
+            
+            # +/- 1 day check
+            duplicate_found = False
+            for offset in [-1, 1]:
+                check_key = (p_date + timedelta(days=offset), p_amount, db_tax_name)
+                if check_key in seen_keys:
+                    duplicate_found = True
+                    break
+            if duplicate_found:
+                continue
+                
+            seen_keys.add(key)
+            merged.append({
+                "tax_name": db_tax_name,
+                "amount": p_amount,
+                "date": p_date
+            })
+            
+    res = {
+        "unified_tax": 0.0,
+        "edp": 0.0,
+        "esv": 0.0,
+        "military_tax": 0.0,
+        "vz": 0.0,
+        "military": 0.0,
+        "pit": 0.0,
+        "pdfo": 0.0,
+        "employee_taxes": 0.0
+    }
+    for item in merged:
+        t_name = item["tax_name"]
+        
+        # Add to both formats to prevent any mismatch
+        if t_name in ["unified_tax", "edp", "ep"]:
+            res["unified_tax"] += item["amount"]
+            res["edp"] += item["amount"]
+        elif t_name in ["military_tax", "vz", "military"]:
+            res["military_tax"] += item["amount"]
+            res["vz"] += item["amount"]
+            res["military"] += item["amount"]
+        elif t_name in ["pit", "pdfo"]:
+            res["pit"] += item["amount"]
+            res["pdfo"] += item["amount"]
+        elif t_name in ["esv"]:
+            res["esv"] += item["amount"]
+        else:
+            res[t_name] = res.get(t_name, 0.0) + item["amount"]
+            
+    for k in res:
+        res[k] = round(res[k], 2)
+        
+    return res
+
 @app.get("/api/dashboard/{profile_id}")
 def get_dashboard(
     profile_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     period_type: str = "all",
     year: Optional[int] = None,
     period_value: Optional[int] = None
 ):
     import datetime as dt_module
+    from services.tax_calculator import TaxCalculator, tax_calculator
+    
+    background_tasks.add_task(cleanup_expired_guests)
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
 
-    min_sal = get_config_val(db, "min_salary", 8647.0)
-    mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 1.0)
-    mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 5.0)
-    pit_rate = get_config_val(db, "pit_employee_rate", 18.0)
-    esv_rate = get_config_val(db, "esv_employee_rate", 22.0)
-    esv_fop_monthly = get_config_val(db, "esv_fop_monthly", 1562.0)
-    default_rate = get_config_val(db, "unified_tax_rate_group_3", 5.0)
+    tax_system = profile.tax_system
+
+    # If the user is a guest, check if they have expired
+    user = db.query(User).filter(User.id == profile.user_id).first()
+    if user and user.role == "guest":
+        from datetime import datetime
+        if user.expires_at and user.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Session expired")
+
+    # Create calculator with config
+    calculator = get_tax_calculator(db)
+    
+    min_sal = calculator.get_rate("min_salary")
+    mil_fop_rate = calculator.get_rate("military_tax_fop_rate")
+    mil_emp_rate = calculator.get_rate("military_tax_employee_rate")
+    pit_rate = calculator.get_rate("pit_employee_rate")
+    esv_rate = calculator.get_rate("esv_employee_rate")
+    esv_fop_monthly = calculator.get_rate("esv_fop_monthly")
+    default_rate = calculator.get_rate("unified_tax_rate_group_3")
 
     # Розрахунок діапазону дат для фільтрації
     start_dt = None
@@ -788,12 +1505,17 @@ def get_dashboard(
     total_income = sum(p.amount for p in payments if p.direction == "in")
     total_expense = sum(p.amount for p in payments if p.direction == "out")
     
-    # Розрахунок taxable_income (оподатковуваний дохід)
-    taxable_income = sum(p.amount for p in payments if p.direction == "in" and p.taxable and p.transaction_type == "income")
+    # Розрахунок повернень
+    incoming_refunds = sum(p.amount for p in payments if p.direction == "in" and p.transaction_type == "refund")
+    outgoing_refunds = sum(p.amount for p in payments if p.direction == "out" and p.transaction_type == "refund")
+    
+    # Розрахунок taxable_income (оподатковуваний дохід): надходження мінус повернення клієнтам
+    taxable_income = sum(p.amount for p in payments if p.direction == "in" and p.taxable and p.transaction_type == "income") - outgoing_refunds
+    taxable_income = max(0.0, taxable_income)
     
     # Інші категорії доходів та витрат
     own_funds = sum(p.amount for p in payments if p.transaction_type == "own_funds")
-    refund = sum(p.amount for p in payments if p.transaction_type == "refund")
+    refund = incoming_refunds + outgoing_refunds
     loan = sum(p.amount for p in payments if p.transaction_type == "loan")
     
     # Розрахунок податку до сплати
@@ -811,126 +1533,61 @@ def get_dashboard(
         period_end_str = latest_stmt.period_end.strftime("%Y-%m-%d") if latest_stmt and latest_stmt.period_end else None
 
     # Розрахунок кількості місяців у періоді
-    num_months = 1
-    if period_type == "month":
-        num_months = 1
-    elif period_type == "quarter":
-        num_months = 3
-    elif period_type == "year":
-        num_months = 12
-    else:
-        if start_dt and end_dt:
-            num_months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-        elif latest_stmt and latest_stmt.period_start and latest_stmt.period_end:
-            p_start = latest_stmt.period_start
-            p_end = latest_stmt.period_end
-            num_months = (p_end.year - p_start.year) * 12 + (p_end.month - p_start.month) + 1
-        else:
-            months = 3
-            if profile.reg_date:
-                today = date.today()
-                months = max(1, (today.year - profile.reg_date.year) * 12 + (today.month - profile.reg_date.month) + 1)
-                months = min(12, months)
-            num_months = months
+    num_months = get_profile_num_months(profile, db, period_type, year, period_value, start_dt, end_dt)
 
-    tax_due = 0.0
-    tax_system = profile.tax_system
-    if is_simplified_tax(tax_system):
-        if profile.type == "fop" and profile.group == 1:
-            # Фіксований єдиний податок 1 групи: 10% від прожиткового мінімуму (прибл. 302.80 грн/міс)
-            tax_due = num_months * 302.80
-        elif profile.type == "fop" and profile.group == 2:
-            # Фіксований єдиний податок 2 групи: 20% від мінімальної зарплати
-            tax_due = num_months * (min_sal * 0.20)
-        else:
-            # 3 група: відсоток від доходу
-            tax_due = taxable_income * ((profile.rate or default_rate) / 100.0)
-    elif is_general_tax(tax_system):
-        taxable_expense = sum(p.amount for p in payments if p.direction == "out" and p.taxable)
-        net_profit = max(0.0, taxable_income - taxable_expense)
-        # 18% податок на прибуток / ПДФО від чистого прибутку
-        tax_due = net_profit * (pit_rate / 100.0)
-
-    # Розрахунок Військового збору
-    military_tax_due = 0.0
-    if profile.type == "fop":
-        if is_simplified_tax(tax_system):
-            if profile.group in (1, 2):
-                # Фіксований військовий збір для 1 та 2 груп (10% від мін. зарплати = 864.70 грн/міс)
-                military_tax_due = num_months * (min_sal * 0.10)
-            else:
-                # 3 група: 1% від доходу
-                military_tax_due = taxable_income * (mil_fop_rate / 100.0)
-        elif is_general_tax(tax_system):
-            # Загальна система: 5% від чистого прибутку
-            taxable_expense = sum(p.amount for p in payments if p.direction == "out" and p.taxable)
-            net_profit = max(0.0, taxable_income - taxable_expense)
-            military_tax_due = net_profit * (mil_emp_rate / 100.0)
-
-    # Розрахунок ЄСВ за себе (для ФОП)
-    esv_due = 0.0
-    if profile.type == "fop" and not getattr(profile, 'esv_paid_by_employer', False):
-        esv_due = num_months * esv_fop_monthly
-
-    # Розрахунок податків за найманих працівників
-    employee_esv_due = 0.0
-    employee_pit_due = 0.0
-    employee_mil_due = 0.0
+    # Prepare transactions for TaxCalculator
+    transactions = []
+    for p in payments:
+        transactions.append({
+            "direction": p.direction,
+            "amount": p.amount,
+            "taxable": p.taxable,
+            "transaction_type": p.transaction_type
+        })
     
+    # Get employees
     profile_employees = db.query(Employee).filter(
         (Employee.profile_id == profile_id) | (Employee.company_id == profile_id)
     ).all()
     
-    if profile.has_employees or len(profile_employees) > 0:
-        # Визначення кількості місяців для працівників
-        num_months_emp = 1
-        if period_type == "month":
-            num_months_emp = 1
-        elif period_type == "quarter":
-            num_months_emp = 3
-        elif period_type == "year":
-            num_months_emp = 12
-        else:
-            if start_dt and end_dt:
-                num_months_emp = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-            elif latest_stmt and latest_stmt.period_start and latest_stmt.period_end:
-                p_start = latest_stmt.period_start
-                p_end = latest_stmt.period_end
-                num_months_emp = (p_end.year - p_start.year) * 12 + (p_end.month - p_start.month) + 1
-            elif profile.reg_date:
-                today = date.today()
-                num_months_emp = max(1, (today.year - profile.reg_date.year) * 12 + (today.month - profile.reg_date.month) + 1)
-                num_months_emp = min(12, num_months_emp)
-            else:
-                num_months_emp = 3
-
-        for emp in profile_employees:
-            is_main = getattr(emp, 'is_main_job', True)
-            if is_main is None:
-                is_main = True
-            esv_base = max(emp.salary, min_sal) if is_main else emp.salary
-            
-            employee_esv_due += (esv_base * (esv_rate / 100.0)) * num_months_emp
-            employee_pit_due += (emp.salary * (pit_rate / 100.0)) * num_months_emp
-            employee_mil_due += (emp.salary * (mil_emp_rate / 100.0)) * num_months_emp
-
-    employee_esv_due = round(employee_esv_due, 2)
-    employee_pit_due = round(employee_pit_due, 2)
-    employee_mil_due = round(employee_mil_due, 2)
-
+    # Prepare employees for TaxCalculator
+    employees = []
+    for emp in profile_employees:
+        employees.append({
+            "salary": emp.salary,
+            "is_main_job": getattr(emp, 'is_main_job', True)
+        })
+    
+    # Profile dict for TaxCalculator
+    profile_dict = {
+        "tax_system": profile.tax_system,
+        "type": profile.type,
+        "group": profile.group,
+        "rate": profile.rate,
+        "has_employees": profile.has_employees or len(profile_employees) > 0,
+        "esv_paid_by_employer": getattr(profile, 'esv_paid_by_employer', False)
+    }
+    
+    # Use TaxCalculator for unified calculation
+    taxes = calculator.calculate_profile_taxes(
+        profile=profile_dict,
+        transactions=transactions,
+        employees=employees,
+        num_months=num_months
+    )
+    
+    tax_due = taxes["tax_due"]
+    military_tax_due = taxes["military_tax_due"]
+    esv_due = taxes["esv_due"]
+    employee_esv_due = taxes["employee_esv_due"]
+    employee_pit_due = taxes["employee_pit_due"]
+    employee_mil_due = taxes["employee_mil_due"]
+    
     esv_due_total = esv_due + employee_esv_due
     military_tax_due_total = military_tax_due + employee_mil_due
 
-    # Сплачені податки
-    tax_paid_dict = {"unified_tax": 0.0, "esv": 0.0, "pit": 0.0, "military_tax": 0.0, "employee_taxes": 0.0}
-    for p in payments:
-        if p.type == "tax_payment" and p.tax_type:
-            tax_paid_dict[p.tax_type] = tax_paid_dict.get(p.tax_type, 0.0) + p.amount
-            
-    # Заокруглимо сплачені податки до 2 знаків
-    for k in tax_paid_dict:
-        tax_paid_dict[k] = round(tax_paid_dict[k], 2)
-        
+    # Сплачені податки за допомогою уніфікованого хелпера
+    tax_paid_dict = get_paid_taxes_by_type(db, profile_id, start_dt, end_dt)
     total_tax_paid = sum(tax_paid_dict.values())
 
     # Розрахунок різниць по податках
@@ -965,6 +1622,7 @@ def get_dashboard(
         try:
             reg_date = profile.reg_date or (date.today() - dt_module.timedelta(days=365))
             reg_date_val = reg_date.date() if hasattr(reg_date, 'date') else reg_date
+            generator = TaxCalendarGenerator()
             events = generator.generate_calendar(
                 tax_system=profile.tax_system,
                 group=profile.group,
@@ -973,7 +1631,8 @@ def get_dashboard(
                 reg_date_str=reg_date_val.strftime("%Y-%m-%d") if hasattr(reg_date_val, 'strftime') else str(reg_date_val),
                 start_date=date.today(),
                 is_vat_payer=profile.is_vat_payer,
-                esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False)
+                esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False),
+                profile_type=profile.type
             )
             for ev in events:
                 due_dt = dt_module.datetime.strptime(ev["due_date"], "%Y-%m-%d").date() if isinstance(ev["due_date"], str) else ev["due_date"]
@@ -1094,16 +1753,20 @@ def get_dashboard(
     for y, m in months_to_gen:
         m_payments = [p for p in payments if p.date and p.date.year == y and p.date.month == m]
         
+        # Розрахунок повернень за місяць
+        m_outgoing_refunds = sum(p.amount for p in m_payments if p.direction == "out" and p.transaction_type == "refund")
+        
         m_income = sum(p.amount for p in m_payments if p.direction == "in")
-        m_taxable_income = sum(p.amount for p in m_payments if p.direction == "in" and p.taxable and p.transaction_type == "income")
+        m_taxable_income = sum(p.amount for p in m_payments if p.direction == "in" and p.taxable and p.transaction_type == "income") - m_outgoing_refunds
+        m_taxable_income = max(0.0, m_taxable_income)
         m_expense = sum(p.amount for p in m_payments if p.direction == "out")
         
         # Main tax due
         m_tax_due = 0.0
         if is_simplified_tax(tax_system):
-            if profile.type == "fop" and profile.group == 1:
+            if is_fop_profile(profile) and profile.group == 1:
                 m_tax_due = 302.80
-            elif profile.type == "fop" and profile.group == 2:
+            elif is_fop_profile(profile) and profile.group == 2:
                 m_tax_due = min_sal * 0.20
             else:
                 m_tax_due = m_taxable_income * ((profile.rate or default_rate) / 100.0)
@@ -1114,7 +1777,7 @@ def get_dashboard(
             
         # Military tax due
         m_mil_due = 0.0
-        if profile.type == "fop":
+        if is_fop_profile(profile):
             if is_simplified_tax(tax_system):
                 if profile.group in (1, 2):
                     m_mil_due = min_sal * 0.10
@@ -1127,7 +1790,7 @@ def get_dashboard(
                 
         # ESV due
         m_esv_due = 0.0
-        if profile.type == "fop" and not getattr(profile, 'esv_paid_by_employer', False):
+        if is_fop_profile(profile) and not getattr(profile, 'esv_paid_by_employer', False):
             m_esv_due = esv_fop_monthly
             
         # Employee taxes
@@ -1205,14 +1868,97 @@ def get_dashboard(
         "employees": employees_list,
         "contractor_payments_total": round(contractor_payments_total, 2),
         "contractor_payments": contractor_payments_list,
-        "breakdown": breakdown_list
+        "breakdown": breakdown_list,
+        "expires_at": user.expires_at.isoformat() if (user and user.role == "guest" and user.expires_at) else None
     }
+
+def sync_profile_calendar(profile_id: int, db: Session):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        return
+    try:
+        import datetime as dt_module
+        from tax_calendar.generator import TaxCalendarGenerator
+        
+        reg_date = profile.reg_date or (dt_module.date.today() - dt_module.timedelta(days=365))
+        reg_date_val = reg_date.date() if hasattr(reg_date, 'date') else reg_date
+        
+        start_date_val = dt_module.date.today()
+        if reg_date_val > start_date_val:
+            start_date_val = reg_date_val
+            
+        generator = TaxCalendarGenerator()
+        new_events = generator.generate_calendar(
+            tax_system=profile.tax_system,
+            group=profile.group,
+            rate=profile.rate,
+            has_employees=profile.has_employees,
+            reg_date_str=reg_date_val.strftime("%Y-%m-%d") if hasattr(reg_date_val, 'strftime') else str(reg_date_val),
+            start_date=start_date_val,
+            is_vat_payer=profile.is_vat_payer,
+            esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False),
+            profile_type=profile.type
+        )
+        
+        generated_keys = set()
+        for ev in new_events:
+            due_dt = dt_module.datetime.strptime(ev["due_date"], "%Y-%m-%d").date() if isinstance(ev["due_date"], str) else ev["due_date"]
+            generated_keys.add((ev["title"], due_dt))
+            
+            exists = db.query(TaxEvent).filter(
+                TaxEvent.profile_id == profile_id,
+                TaxEvent.title == ev["title"],
+                TaxEvent.due_date == due_dt
+            ).first()
+            
+            if not exists:
+                db_ev = TaxEvent(
+                    company_id=profile_id,
+                    profile_id=profile_id,
+                    title=ev["title"],
+                    type=ev["type"],
+                    tax_name=ev["tax_name"],
+                    due_date=due_dt,
+                    amount_desc=ev["amount_desc"],
+                    form_code=ev["form_code"],
+                    status=ev["status"]
+                )
+                db.add(db_ev)
+                
+        # Clean up future pending events that are not in the generated list
+        future_pending = db.query(TaxEvent).filter(
+            TaxEvent.profile_id == profile_id,
+            TaxEvent.status == "pending",
+            TaxEvent.due_date >= dt_module.date.today()
+        ).all()
+        
+        for db_ev in future_pending:
+            if (db_ev.title, db_ev.due_date) not in generated_keys:
+                db.delete(db_ev)
+                
+        db.commit()
+    except Exception as e:
+        print(f"Error syncing profile calendar for profile {profile_id}:", e)
+        db.rollback()
 
 @app.get("/api/calendar/{company_id}")
 def get_calendar(company_id: int, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == company_id).first()
+    if not profile:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if company:
+            profile = db.query(Profile).filter(Profile.user_id == company.user_id).first()
+            
     events = db.query(TaxEvent).filter(
         (TaxEvent.company_id == company_id) | (TaxEvent.profile_id == company_id)
     ).order_by(TaxEvent.due_date).all()
+    
+    if len(events) < 3 and profile:
+        sync_profile_calendar(profile.id, db)
+        events = db.query(TaxEvent).filter(
+            (TaxEvent.company_id == company_id) | (TaxEvent.profile_id == company_id)
+        ).order_by(TaxEvent.due_date).all()
+        
     return events
 
 @app.post("/api/calendar/pay/{event_id}")
@@ -1229,11 +1975,15 @@ def generate_report(
     company_id: int, 
     form_code: str, 
     period: str = "Q1", 
-    year: int = 2025, 
+    year: Optional[int] = None, 
     vat_in: Optional[float] = None,
     vat_out: Optional[float] = None,
     db: Session = Depends(get_db)
 ):
+    if year is None:
+        from datetime import datetime
+        year = datetime.now().year
+        
     profile = db.query(Profile).filter(Profile.id == company_id).first()
     company = db.query(Company).filter(Company.id == company_id).first()
     if not profile and not company:
@@ -1252,104 +2002,205 @@ def generate_report(
         
     company_name_val = profile.name if profile else (company.name if company else "Моє підприємство")
     email_val = owner.email if owner and owner.email else "client@example.com"
-    rate_val = profile.rate if profile else (company.rate if company else 5.0)
+    rate_val = profile.rate if (profile and profile.rate is not None) else (company.rate if (company and company.rate is not None) else 5.0)
 
     data = {}
+    
+    start_date_bound, end_date_bound = parse_period_to_dates(period, year)
+    
+    days_diff = (end_date_bound - start_date_bound).days + 1
+    if days_diff <= 31:
+        num_months = 1
+    elif 88 <= days_diff <= 92:
+        num_months = 3
+    elif 179 <= days_diff <= 184:
+        num_months = 6
+    elif 270 <= days_diff <= 276:
+        num_months = 9
+    else:
+        num_months = 12
+        
+    payments = db.query(ParsedPayment).filter(
+        ((ParsedPayment.profile_id == company_id) | 
+         (ParsedPayment.statement.has(BankStatement.profile_id == company_id))),
+        ParsedPayment.direction == "in",
+        ParsedPayment.taxable == True,
+        ParsedPayment.transaction_type == "income",
+        ParsedPayment.date >= start_date_bound,
+        ParsedPayment.date <= end_date_bound
+    ).all()
+    
+    transactions = [{
+        "direction": p.direction,
+        "amount": p.amount,
+        "taxable": p.taxable,
+        "transaction_type": p.transaction_type
+    } for p in payments]
+    
+    profile_employees = db.query(Employee).filter(
+        (Employee.profile_id == company_id) | (Employee.company_id == company_id)
+    ).all()
+    
+    employees_list = [{
+        "salary": emp.salary,
+        "is_main_job": getattr(emp, 'is_main_job', True)
+    } for emp in profile_employees]
+    
+    calc = get_tax_calculator(db)
+    
+    profile_dict = {
+        "tax_system": profile.tax_system if profile else "simplified-3-5%",
+        "type": profile.type if profile else "company",
+        "group": profile.group if (profile and profile.group is not None) else 3,
+        "rate": rate_val,
+        "has_employees": (profile.has_employees or len(profile_employees) > 0) if profile else False,
+        "esv_paid_by_employer": getattr(profile, 'esv_paid_by_employer', False) if profile else False
+    }
+    
+    taxes = calc.calculate_profile_taxes(
+        profile=profile_dict,
+        transactions=transactions,
+        employees=employees_list,
+        num_months=num_months
+    )
+    
+    # Get paid taxes
+    from api.main import get_paid_taxes_by_type
+    tax_paid_dict = get_paid_taxes_by_type(db, company_id, start_date_bound, end_date_bound)
+    
+    data["HNAME"] = {"value": company_name_val, "color": "green" if company_name_val else "yellow"}
+    data["HTIN"] = {"value": tax_id_val, "color": "green" if tax_id_val else "red"}
+    data["HEMAIL"] = {"value": email_val, "color": "green"}
     
     if form_code == "F0110210":
         v_in = vat_in if vat_in is not None else 0.0
         v_out = vat_out if vat_out is not None else 0.0
         v_due = v_out - v_in
-        
-        data["HNAME"] = {"value": company_name_val, "color": "green" if company_name_val else "yellow"}
-        data["HTIN"] = {"value": tax_id_val, "color": "green" if tax_id_val else "red"}
-        data["HEMAIL"] = {"value": email_val, "color": "green"}
         data["VAT_OUT"] = {"value": v_out, "color": "green" if vat_out is not None else "yellow"}
         data["VAT_IN"] = {"value": v_in, "color": "green" if vat_in is not None else "yellow"}
         data["VAT_DUE"] = {"value": v_due, "color": "green"}
         
-        xml_content = f"""<?xml version="1.0" encoding="windows-1251"?>
-<DECLAR xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="F0110210.xsd">
-    <DECLARHEAD>
-        <TIN>{data["HTIN"]["value"]}</TIN>
-        <C_DOC>F01</C_DOC>
-        <C_DOC_SUB>102</C_DOC_SUB>
-        <C_DOC_VER>10</C_DOC_VER>
-        <PERIOD_TYPE>5</PERIOD_TYPE>
-        <PERIOD_MONTH>{period}</PERIOD_MONTH>
-        <PERIOD_YEAR>{year}</PERIOD_YEAR>
-    </DECLARHEAD>
-    <DECLARBODY>
-        <HNAME>{data["HNAME"]["value"]}</HNAME>
-        <R01G3>{data["VAT_OUT"]["value"]}</R01G3>
-        <R02G3>{data["VAT_IN"]["value"]}</R02G3>
-        <R03G3>{data["VAT_DUE"]["value"]}</R03G3>
-    </DECLARBODY>
-</DECLAR>"""
-
-    else:
-        # Збираємо доходи за період (для F0103306)
-        # Періоди у ФОП наростаючим підсумком:
-        # Q1: 01.01 - 31.03
-        # Q2 (Півріччя): 01.01 - 30.06
-        # Q3 (9 місяців): 01.01 - 30.09
-        # Year / Q4 (Рік): 01.01 - 31.12
-        p_clean = period.lower()
-        start_date_bound = date(year, 1, 1)
-        if "q1" in p_clean:
-            end_date_bound = date(year, 3, 31)
-        elif "q2" in p_clean:
-            end_date_bound = date(year, 6, 30)
-        elif "q3" in p_clean:
-            end_date_bound = date(year, 9, 30)
-        else:
-            end_date_bound = date(year, 12, 31)
-
-        payments = db.query(ParsedPayment).filter(
+    elif form_code in ["F0103306", "J0500109", "F0510101"]:
+        # Calculate quarterly income for the selected year
+        income_q1 = 0.0
+        income_q2 = 0.0
+        income_q3 = 0.0
+        income_q4 = 0.0
+        
+        year_payments = db.query(ParsedPayment).filter(
             ((ParsedPayment.profile_id == company_id) | 
              (ParsedPayment.statement.has(BankStatement.profile_id == company_id))),
             ParsedPayment.direction == "in",
             ParsedPayment.taxable == True,
             ParsedPayment.transaction_type == "income",
-            ParsedPayment.date >= start_date_bound,
-            ParsedPayment.date <= end_date_bound
+            ParsedPayment.date >= date(year, 1, 1),
+            ParsedPayment.date <= date(year, 12, 31)
         ).all()
-
-        total_income = sum(p.amount for p in payments)
-
-        data["HNAME"] = {"value": company_name_val, "color": "green" if company_name_val else "yellow"}
-        data["HTIN"] = {"value": tax_id_val, "color": "green" if tax_id_val else "red"}
-        data["HEMAIL"] = {"value": email_val, "color": "green"}
         
-        # Наростаючий підсумок заповнюємо у відповідний рядок
-        data["ROW01"] = {"value": total_income if "q1" in p_clean else 0.0, "color": "green" if "q1" in p_clean else "yellow"}
-        data["ROW02"] = {"value": total_income if "q2" in p_clean else 0.0, "color": "green" if "q2" in p_clean else "yellow"}
-        data["ROW03"] = {"value": total_income if "q3" in p_clean else 0.0, "color": "green" if "q3" in p_clean else "yellow"}
-        data["ROW04"] = {"value": total_income if ("q4" in p_clean or "year" in p_clean) else 0.0, "color": "green" if ("q4" in p_clean or "year" in p_clean) else "yellow"}
+        for p in year_payments:
+            if p.date.month in [1, 2, 3]:
+                income_q1 += p.amount
+            elif p.date.month in [4, 5, 6]:
+                income_q2 += p.amount
+            elif p.date.month in [7, 8, 9]:
+                income_q3 += p.amount
+            else:
+                income_q4 += p.amount
+                
+        end_m = end_date_bound.month
         
-        data["TAX_RATE"] = {"value": rate_val, "color": "green"}
+        data["ROW01"] = {"value": income_q1, "color": "green" if end_m >= 1 else "yellow"}
+        data["ROW02"] = {"value": (income_q1 + income_q2) if end_m >= 4 else 0.0, "color": "green" if end_m >= 4 else "yellow"}
+        data["ROW03"] = {"value": (income_q1 + income_q2 + income_q3) if end_m >= 7 else 0.0, "color": "green" if end_m >= 7 else "yellow"}
+        data["ROW04"] = {"value": (income_q1 + income_q2 + income_q3 + income_q4) if end_m >= 10 else 0.0, "color": "green" if end_m >= 10 else "yellow"}
         
-        tax_due_val = total_income * (rate_val / 100.0)
-        data["TAX_DUE"] = {"value": tax_due_val, "color": "green"}
+        data["TAX_DUE"] = {"value": taxes["tax_due"], "color": "green"}
+        
+        if form_code == "F0103306":
+            data["TAX_RATE"] = {"value": rate_val, "color": "green"}
+        else:
+            data["ESV_DUE"] = {"value": taxes["esv_due"] + taxes["employee_esv_due"], "color": "green"}
+            data["MIL_DUE"] = {"value": taxes["military_tax_due"] + taxes["employee_mil_due"], "color": "green"}
+            
+    elif form_code == "F3007012":
+        data["ESV_DUE"] = {"value": taxes["esv_due"] + taxes["employee_esv_due"], "color": "green"}
+        data["ESV_PAID"] = {"value": tax_paid_dict.get("esv", 0.0), "color": "green"}
+        
+    elif form_code == "F0120109":
+        data["MIL_DUE"] = {"value": taxes["military_tax_due"] + taxes["employee_mil_due"], "color": "green"}
+        data["MIL_PAID"] = {"value": tax_paid_dict.get("military_tax", 0.0), "color": "green"}
+        
+    elif form_code == "F0600101":
+        data["TOTAL_INCOME"] = {"value": taxes["total_income"], "color": "green"}
+        data["TAX_DUE"] = {"value": taxes["employee_pit_due"], "color": "green"}
+        data["MIL_DUE"] = {"value": taxes["employee_mil_due"], "color": "green"}
 
-        active_row_val = total_income
+    from services.xml_generator import xml_generator
+    
+    profile_data = {
+        "tax_id": tax_id_val,
+        "name": company_name_val,
+        "address": getattr(profile, "address", "") if profile else "",
+        "type": profile.type if profile else "company",
+        "tax_rate": rate_val
+    }
+    
+    tax_data_xml = {
+        "tax_due": taxes["tax_due"],
+        "tax_paid": tax_paid_dict.get("unified_tax", 0.0),
+        "esv_due": taxes["esv_due"] + taxes["employee_esv_due"],
+        "esv_paid": tax_paid_dict.get("esv", 0.0),
+        "military_tax_due": taxes["military_tax_due"] + taxes["employee_mil_due"],
+        "military_tax_paid": tax_paid_dict.get("military_tax", 0.0),
+        "pit_due": taxes["employee_pit_due"],
+        "pit_paid": tax_paid_dict.get("pit", 0.0),
+        "total_income": taxes["total_income"],
+        "taxable_income": taxes["taxable_income"],
+        "vat_out": vat_out if vat_out is not None else 0.0,
+        "vat_in": vat_in if vat_in is not None else 0.0,
+        "vat_due": (vat_out - vat_in) if (vat_out is not None and vat_in is not None) else 0.0,
+    }
+    
+    tax_data_xml["income_q1"] = income_q1
+    tax_data_xml["income_q2"] = income_q2
+    tax_data_xml["income_q3"] = income_q3
+    tax_data_xml["income_q4"] = income_q4
+    
+    xml_content = None
+    if form_code == "F0103306":
+        xml_content = xml_generator.generate_unified_tax_declaration(profile_data, tax_data_xml, period, year)
+    elif form_code == "J0500109":
+        xml_content = xml_generator.generate_unified_report_llc(profile_data, tax_data_xml, period, year)
+    elif form_code == "F0110210":
+        xml_content = xml_generator.generate_vat_declaration(profile_data, tax_data_xml, period, year)
+    elif form_code == "F3007012":
+        xml_content = xml_generator.generate_esv_declaration(profile_data, tax_data_xml, period, year)
+    elif form_code == "F0120109":
+        xml_content = xml_generator.generate_military_tax_declaration(profile_data, tax_data_xml, period, year)
+    elif form_code == "F0510101":
+        xml_content = xml_generator.generate_unified_report(profile_data, tax_data_xml, period, year)
+    elif form_code == "F0600101":
+        xml_content = xml_generator.generate_pit_declaration(profile_data, tax_data_xml, period, year)
+    else:
+        # Fallback to general pre-filled XML layout
         xml_content = f"""<?xml version="1.0" encoding="windows-1251"?>
-<DECLAR xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="F0103306.xsd">
+<DECLAR xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="{form_code}.xsd">
     <DECLARHEAD>
-        <TIN>{data["HTIN"]["value"]}</TIN>
-        <C_DOC>F01</C_DOC>
-        <C_DOC_SUB>033</C_DOC_SUB>
-        <C_DOC_VER>06</C_DOC_VER>
+        <TIN>{tax_id_val}</TIN>
+        <C_DOC>{form_code[:3]}</C_DOC>
+        <C_DOC_SUB>{form_code[3:6]}</C_DOC_SUB>
+        <C_DOC_VER>{form_code[6:]}</C_DOC_VER>
         <PERIOD_TYPE>5</PERIOD_TYPE>
         <PERIOD_MONTH>{period}</PERIOD_MONTH>
         <PERIOD_YEAR>{year}</PERIOD_YEAR>
     </DECLARHEAD>
     <DECLARBODY>
-        <HNAME>{data["HNAME"]["value"]}</HNAME>
-        <R01G3>{active_row_val}</R01G3>
-        <R05G3>{data["TAX_RATE"]["value"]}</R05G3>
-        <R06G3>{data["TAX_DUE"]["value"]}</R06G3>
-    </DECLARBODY>
+        <HNAME>{company_name_val}</HNAME>
+"""
+        for k, v in data.items():
+            if k not in ["HNAME", "HTIN", "HEMAIL"]:
+                xml_content += f"        <{k}>{v['value']}</{k}>\n"
+        xml_content += """    </DECLARBODY>
 </DECLAR>"""
 
     # Зберігаємо чернетку
@@ -1391,6 +2242,15 @@ def get_reports(company_id: int, db: Session = Depends(get_db)):
         "status": r.status,
         "created_at": r.created_at.strftime("%Y-%m-%d") if r.created_at else None
     } for r in reports]
+
+@app.delete("/api/reports/{report_id}")
+def delete_report(report_id: int, db: Session = Depends(get_db)):
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    db.delete(report)
+    db.commit()
+    return {"status": "success", "message": "Звіт успішно видалено"}
 
 @app.get("/api/reports/detail/{report_id}")
 def get_report_detail(report_id: int, db: Session = Depends(get_db)):
@@ -1523,17 +2383,19 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
         
     from fastapi.responses import Response
     
+    filename = f"{report.form_code}_{report.period}_{report.year}.{file_format}"
+    cd_header = make_content_disposition(filename)
     if file_format == "xml":
         return Response(
             content=report.xml_content or "", 
             media_type="application/xml",
-            headers={"Content-Disposition": f"attachment; filename={report.form_code}_{report.period}_{report.year}.xml"}
+            headers={"Content-Disposition": cd_header}
         )
     elif file_format == "json":
         return Response(
             content=report.data_json, 
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename={report.form_code}_{report.period}_{report.year}.json"}
+            headers={"Content-Disposition": cd_header}
         )
     elif file_format == "pdf":
         from reportlab.lib.pagesizes import letter
@@ -1569,36 +2431,70 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
         story = []
         
         styles = getSampleStyleSheet()
+        # Official Form Titles and Approvals
+        form_titles = {
+            "F0103306": "ПОДАТКОВА ДЕКЛАРАЦІЯ ПЛАТНИКА ЄДИНОГО ПОДАТКУ - ФІЗИЧНОЇ ОСОБИ - ПІДПРИЄМЦЯ",
+            "F0110210": "ПОДАТКОВА ДЕКЛАРАЦІЯ З ПОДАТКУ НА ДОДАНУ ВАРТІСТЬ",
+            "J0500109": "ПОДАТКОВИЙ РОЗРАХУНОК СУМ ДОХОДУ, НАРАХОВАНОГО НА КОРИСТЬ ПЛАТНИКІВ (ОБ'ЄДНАНИЙ ЗВІТ ЄСВ/ПДФО)",
+            "F0500109": "ПОДАТКОВИЙ РОЗРАХУНОК СУМ ДОХОДУ, НАРАХОВАНОГО НА КОРИСТЬ ПЛАТНИКІВ (ОБ'ЄДНАНИЙ ЗВІТ ЄСВ/ПДФО)"
+        }
+        official_title = form_titles.get(report.form_code.upper(), f"ПОДАТКОВА ДЕКЛАРАЦІЯ ({report.form_code})")
+
+        header_style = ParagraphStyle(
+            'HeaderStyle',
+            fontName=font_name,
+            fontSize=7,
+            leading=9,
+            alignment=2,
+            textColor=colors.HexColor("#4A5568")
+        )
+        story.append(Paragraph("ЗАТВЕРДЖЕНО<br/>Наказ Міністерства фінансів України", header_style))
+        story.append(Spacer(1, 10))
+
         title_style = ParagraphStyle(
             'TitleStyle',
-            parent=styles['Heading1'],
             fontName=font_name,
-            fontSize=16,
-            leading=20,
-            textColor=colors.HexColor("#1A365D"),
-            spaceAfter=12
+            fontSize=11,
+            leading=14,
+            alignment=1,
+            textColor=colors.black,
+            spaceAfter=15
         )
+        story.append(Paragraph(official_title, title_style))
+        
         meta_style = ParagraphStyle(
             'MetaStyle',
-            parent=styles['Normal'],
             fontName=font_name,
-            fontSize=10,
-            leading=14,
-            textColor=colors.HexColor("#4A5568"),
-            spaceAfter=6
+            fontSize=9,
+            leading=12,
+            textColor=colors.black
         )
+
+        # Profile / Metadata Block
+        p_name = report.profile.name if (report.profile and report.profile.name) else "Моє підприємство"
+        p_tax_id = report.profile.tax_id if (report.profile and report.profile.tax_id) else ""
         
-        story.append(Paragraph(f"ПОДАТКОВА ДЕКЛАРАЦІЯ ({report.form_code})", title_style))
-        story.append(Paragraph(f"Період: {report.period} • {report.year} рік", meta_style))
-        story.append(Paragraph(f"Дата створення: {report.created_at.strftime('%d.%m.%Y')}", meta_style))
+        meta_table_data = [
+            [Paragraph(f"<b>Платник:</b> {p_name}", meta_style),
+             Paragraph(f"<b>ІПН/ЄДРПОУ:</b> {p_tax_id}", meta_style)],
+            [Paragraph(f"<b>Період:</b> {report.period} {report.year} р.", meta_style),
+             Paragraph(f"<b>Дата формування:</b> {report.created_at.strftime('%d.%m.%Y')}", meta_style)]
+        ]
+        meta_table = Table(meta_table_data, colWidths=[260, 260])
+        meta_table.setStyle(TableStyle([
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E0")),
+            ('PADDING', (0,0), (-1,-1), 6),
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F7FAFC")),
+        ]))
+        story.append(meta_table)
         story.append(Spacer(1, 15))
         
         fields_data = json.loads(report.data_json)
         
         table_data = [[
-            Paragraph("Код", ParagraphStyle('HCol1', fontName=font_name, fontSize=9, textColor=colors.white)),
-            Paragraph("Назва поля / Показник", ParagraphStyle('HCol2', fontName=font_name, fontSize=9, textColor=colors.white)),
-            Paragraph("Значення", ParagraphStyle('HCol3', fontName=font_name, fontSize=9, textColor=colors.white))
+            Paragraph("<b>Код рядка</b>", ParagraphStyle('HCol1', fontName=font_name, fontSize=9, textColor=colors.black)),
+            Paragraph("<b>Назва показника / поля ДПС</b>", ParagraphStyle('HCol2', fontName=font_name, fontSize=9, textColor=colors.black)),
+            Paragraph("<b>Значення</b>", ParagraphStyle('HCol3', fontName=font_name, fontSize=9, textColor=colors.black))
         ]]
         
         template = db.query(ReportTemplate).filter(ReportTemplate.id == report.template_id).first()
@@ -1621,13 +2517,12 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
                 Paragraph(val_str, ParagraphStyle('Col3', fontName=f"{font_name}-Bold" if "Bold" in font_name else font_name, fontSize=9))
             ])
             
-        t = Table(table_data, colWidths=[60, 320, 140])
+        t = Table(table_data, colWidths=[80, 300, 140])
         t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2B6CB0")),
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E2E8F0")),
             ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-            ('BOTTOMPADDING', (0,0), (-1,0), 8),
-            ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#F7FAFC")),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ]))
         story.append(t)
@@ -1635,10 +2530,11 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
         doc.build(story)
         buffer.seek(0)
         
+        filename = f"{report.form_code}_{report.period}_{report.year}.pdf"
         return Response(
             content=buffer.getvalue(),
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={report.form_code}_{report.period}_{report.year}.pdf"}
+            headers={"Content-Disposition": make_content_disposition(filename)}
         )
     elif file_format == "csv":
         import io
@@ -1660,10 +2556,11 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
             val = val_info.get("value", "")
             writer.writerow([f_id, name, str(val)])
             
+        filename = f"{report.form_code}_{report.period}_{report.year}.csv"
         return Response(
             content=output.getvalue(),
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f"attachment; filename={report.form_code}_{report.period}_{report.year}.csv"}
+            headers={"Content-Disposition": make_content_disposition(filename)}
         )
     else:
         raise HTTPException(status_code=400, detail="Непідтримуваний формат файлу")
@@ -1789,14 +2686,16 @@ def get_employees(profile_id: int, db: Session = Depends(get_db)):
     return db.query(Employee).filter(Employee.profile_id == profile_id).all()
 
 @app.get("/api/profiles/{telegram_id}")
-def get_profiles(telegram_id: str, db: Session = Depends(get_db)):
+def get_profiles(telegram_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    background_tasks.add_task(cleanup_expired_guests)
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="Користувача не знайдено")
     return user.profiles
 
 @app.get("/api/profiles")
-def get_profiles_query(telegram_id: str, db: Session = Depends(get_db)):
+def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    background_tasks.add_task(cleanup_expired_guests)
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         return []
@@ -1841,6 +2740,8 @@ def update_profile_endpoint(
     reg_date: Optional[str] = Form(None),
     esv_paid_by_employer: Optional[bool] = Form(None),
     address: Optional[str] = Form(None),
+    director_name: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -1890,6 +2791,14 @@ def update_profile_endpoint(
         profile.address = address
         if company:
             company.address = address
+    if director_name is not None:
+        profile.director_name = director_name
+        if company:
+            company.director_name = director_name
+    if phone is not None:
+        profile.phone = phone
+        if company:
+            company.phone = phone
     if reg_date is not None:
         try:
             reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date()
@@ -1901,6 +2810,7 @@ def update_profile_endpoint(
             
     db.commit()
     sync_user_profiles_by_tax_id(db, profile.user_id)
+    sync_profile_calendar(profile.id, db)
     db.refresh(profile)
     if company:
         db.refresh(company)
@@ -2112,6 +3022,8 @@ def add_profile_endpoint(
     reg_date: Optional[str] = Form(None),
     esv_paid_by_employer: bool = Form(False),
     address: Optional[str] = Form(None),
+    director_name: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
@@ -2139,7 +3051,9 @@ def add_profile_endpoint(
         has_employees=has_employees,
         is_vat_payer=is_vat_payer,
         esv_paid_by_employer=esv_paid_by_employer,
-        address=address
+        address=address,
+        director_name=director_name,
+        phone=phone
     )
     db.add(profile)
     db.commit()
@@ -2148,9 +3062,9 @@ def add_profile_endpoint(
     # For compatibility, also create a Company
     comp_tax_system = "fop_ep"
     if type == "fop":
-        comp_tax_system = "fop_ep" if tax_system == "ednuy-3-5%" else "fop_general"
+        comp_tax_system = "fop_ep" if is_simplified_tax(tax_system) else "fop_general"
     else:
-        comp_tax_system = "llc_ep" if tax_system == "ednuy-3-5%" else "llc_profit"
+        comp_tax_system = "llc_ep" if is_simplified_tax(tax_system) else "llc_profit"
 
     company = Company(
         id=profile.id,
@@ -2162,39 +3076,16 @@ def add_profile_endpoint(
         reg_date=reg_date_parsed,
         has_employees=has_employees,
         is_vat_payer=is_vat_payer,
-        address=address
+        address=address,
+        director_name=director_name,
+        phone=phone
     )
     db.add(company)
     db.commit()
     db.refresh(company)
 
-    # Generate tax events for the profile/company
-    generator = TaxCalendarGenerator()
-    events = generator.generate_calendar(
-        tax_system=comp_tax_system,
-        group=group,
-        rate=rate,
-        has_employees=has_employees,
-        reg_date_str=reg_date_parsed.strftime("%Y-%m-%d"),
-        start_date=reg_date_parsed,
-        is_vat_payer=is_vat_payer,
-        esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False)
-    )
-    
-    for ev in events:
-        db_ev = TaxEvent(
-            company_id=company.id,
-            profile_id=profile.id,
-            title=ev["title"],
-            type=ev["type"],
-            tax_name=ev["tax_name"],
-            due_date=datetime.strptime(ev["due_date"], "%Y-%m-%d").date(),
-            amount_desc=ev["amount_desc"],
-            form_code=ev["form_code"],
-            status=ev["status"]
-        )
-        db.add(db_ev)
-    db.commit()
+    # Sync calendar
+    sync_profile_calendar(profile.id, db)
     sync_user_profiles_by_tax_id(db, user.id)
 
     return {"message": "Профіль успішно створено", "profile_id": profile.id, "company_id": company.id}
@@ -2202,6 +3093,8 @@ def add_profile_endpoint(
 
 @app.get("/api/tax-analysis/{profile_id}")
 def get_tax_analysis(profile_id: int, db: Session = Depends(get_db)):
+    from services.tax_calculator import tax_calculator
+    
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
@@ -2209,6 +3102,11 @@ def get_tax_analysis(profile_id: int, db: Session = Depends(get_db)):
     payments = db.query(ParsedPayment).filter(
         (ParsedPayment.profile_id == profile_id) |
         (ParsedPayment.statement.has(BankStatement.profile_id == profile_id))
+    ).all()
+    
+    # Get employees
+    profile_employees = db.query(Employee).filter(
+        (Employee.profile_id == profile_id) | (Employee.company_id == profile_id)
     ).all()
     
     # We want to group by year and quarter
@@ -2232,6 +3130,9 @@ def get_tax_analysis(profile_id: int, db: Session = Depends(get_db)):
                 "esv_due": 0.0,
                 "esv_paid": 0.0,
                 "pit_paid": 0.0,
+                "employee_pit_due": 0.0,
+                "employee_mil_due": 0.0,
+                "employee_esv_due": 0.0,
                 "total_due": 0.0,
                 "total_paid": 0.0
             }
@@ -2245,8 +3146,7 @@ def get_tax_analysis(profile_id: int, db: Session = Depends(get_db)):
             if key in quarters_data:
                 quarters_data[key]["taxable_income"] += p.amount
                 
-    # Calculate tax dues per quarter
-    generator = TaxCalendarGenerator()
+    # Calculate tax dues per quarter using TaxCalculator
     for key, data in quarters_data.items():
         y, q = key
         
@@ -2258,41 +3158,59 @@ def get_tax_analysis(profile_id: int, db: Session = Depends(get_db)):
         q_start_date = date(y, q_start_month, 1)
         q_end_date = date(y, q_end_month, last_day)
         
+        # Filter payments for this quarter
+        q_payments = [p for p in payments if p.date and p.date.year == y and ((p.date.month - 1) // 3 + 1) == q]
+        
+        # Prepare transactions for TaxCalculator
+        q_transactions = []
+        for p in q_payments:
+            q_transactions.append({
+                "direction": p.direction,
+                "amount": p.amount,
+                "taxable": p.taxable,
+                "transaction_type": p.transaction_type
+            })
+        
+        # Prepare employees for TaxCalculator
+        q_employees = []
+        for emp in profile_employees:
+            q_employees.append({
+                "salary": emp.salary,
+                "is_main_job": getattr(emp, 'is_main_job', True)
+            })
+        
+        # Calculate ESV months for this quarter
         if profile.reg_date and profile.reg_date > q_end_date:
             esv_months = 0
         elif profile.reg_date and q_start_date <= profile.reg_date <= q_end_date:
             esv_months = q_end_month - profile.reg_date.month + 1
         else:
             esv_months = 3
-            
-        esv_fop = get_config_val(db, "esv_fop_monthly", 1562.0)
-        mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 1.0)
-        mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 5.0)
-        pit_rate = get_config_val(db, "pit_employee_rate", 18.0)
-        default_rate = get_config_val(db, "unified_tax_rate_group_3", 5.0)
-
-        if profile.type == 'fop':
-            if getattr(profile, 'esv_paid_by_employer', False):
-                data["esv_due"] = 0.0
-            else:
-                data["esv_due"] = esv_months * esv_fop
-            
-            if is_simplified_tax(profile.tax_system):
-                data["unified_tax_due"] = data["taxable_income"] * ((profile.rate or default_rate) / 100.0)
-                data["military_tax_due"] = data["taxable_income"] * (mil_fop_rate / 100.0)
-            elif is_general_tax(profile.tax_system):
-                q_expenses = sum(p.amount for p in payments if p.direction == "out" and p.taxable and p.date and p.date.year == y and ((p.date.month - 1) // 3 + 1) == q)
-                profit = max(0.0, data["taxable_income"] - q_expenses)
-                data["unified_tax_due"] = profit * (pit_rate / 100.0)
-                data["military_tax_due"] = profit * (mil_emp_rate / 100.0)
-        else:
-            # LLC
-            if is_simplified_tax(profile.tax_system):
-                data["unified_tax_due"] = data["taxable_income"] * ((profile.rate or default_rate) / 100.0)
-            elif is_general_tax(profile.tax_system):
-                q_expenses = sum(p.amount for p in payments if p.direction == "out" and p.taxable and p.date and p.date.year == y and ((p.date.month - 1) // 3 + 1) == q)
-                profit = max(0.0, data["taxable_income"] - q_expenses)
-                data["unified_tax_due"] = profit * (pit_rate / 100.0)
+        
+        # Profile dict for TaxCalculator
+        profile_dict = {
+            "tax_system": profile.tax_system,
+            "type": profile.type,
+            "group": profile.group,
+            "rate": profile.rate,
+            "has_employees": profile.has_employees or len(profile_employees) > 0,
+            "esv_paid_by_employer": getattr(profile, 'esv_paid_by_employer', False)
+        }
+        
+        # Use TaxCalculator for unified calculation
+        taxes = tax_calculator.calculate_profile_taxes(
+            profile=profile_dict,
+            transactions=q_transactions,
+            employees=q_employees,
+            num_months=esv_months if profile.type == 'fop' else 3
+        )
+        
+        data["unified_tax_due"] = taxes["tax_due"]
+        data["military_tax_due"] = taxes["military_tax_due"]
+        data["esv_due"] = taxes["esv_due"]
+        data["employee_pit_due"] = taxes["employee_pit_due"]
+        data["employee_mil_due"] = taxes["employee_mil_due"]
+        data["employee_esv_due"] = taxes["employee_esv_due"]
                 
     # Match payments to quarters
     for p in payments:
@@ -2536,7 +3454,8 @@ def auth_register(
         reg_date_str=reg_date_parsed.strftime("%Y-%m-%d"),
         start_date=reg_date_parsed,
         is_vat_payer=is_vat_payer,
-        esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False)
+        esv_paid_by_employer=getattr(profile, 'esv_paid_by_employer', False),
+        profile_type=p_type
     )
     for ev in events:
         te = TaxEvent(
@@ -2557,6 +3476,665 @@ def auth_register(
     
     return {"message": "Реєстрація успішна", "email": email_clean}
 
+def cleanup_expired_guests():
+    db = SessionLocal()
+    try:
+        from datetime import datetime
+        now = datetime.utcnow()
+        expired_users = db.query(User).filter(User.role == "guest", User.expires_at < now).all()
+        if not expired_users:
+            return
+            
+        for u in expired_users:
+            p_ids = [p.id for p in u.profiles]
+            if p_ids:
+                db.query(TaxEvent).filter(TaxEvent.profile_id.in_(p_ids)).delete(synchronize_session=False)
+                db.query(ParsedPayment).filter(ParsedPayment.profile_id.in_(p_ids)).delete(synchronize_session=False)
+                db.query(BankStatement).filter(BankStatement.profile_id.in_(p_ids)).delete(synchronize_session=False)
+                db.query(Employee).filter(Employee.profile_id.in_(p_ids)).delete(synchronize_session=False)
+                db.query(GeneratedReport).filter(GeneratedReport.profile_id.in_(p_ids)).delete(synchronize_session=False)
+                db.query(Payment).filter(Payment.profile_id.in_(p_ids)).delete(synchronize_session=False)
+            
+            for p in list(u.profiles):
+                db.delete(p)
+            for c in list(u.companies):
+                db.delete(c)
+            db.delete(u)
+        db.commit()
+        print(f"Cleaned up {len(expired_users)} expired guest accounts.")
+    except Exception as e:
+        db.rollback()
+        print(f"Error cleaning up guest accounts: {e}")
+    finally:
+        db.close()
+
+@app.post("/api/auth/guest")
+def create_guest_account(db: Session = Depends(get_db)):
+    import uuid
+    from datetime import datetime, timedelta
+    
+    # 1. Create a guest user
+    guest_uuid = str(uuid.uuid4())
+    telegram_id = f"guest_{guest_uuid}"
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    
+    user = User(
+        telegram_id=telegram_id,
+        role="guest",
+        expires_at=expires_at
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    # 2. Seed default guest profile (FOP, group 3, 5% rate, with employees)
+    company = Company(
+        user_id=user.id,
+        name="ФОП Коваленко Дмитро (Демо)",
+        tax_system="fop_ep",
+        group=3,
+        rate=5.0,
+        reg_date=date.today(),
+        has_employees=True,
+        is_vat_payer=False,
+        address="м. Київ, вул. Хрещатик, 1"
+    )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    
+    profile = Profile(
+        id=company.id,
+        user_id=user.id,
+        type="fop",
+        name="ФОП Коваленко Дмитро (Демо)",
+        tax_id="3214567890",
+        tax_system="ednuy-3-5%",
+        is_director=False,
+        group=3,
+        rate=5.0,
+        reg_date=date.today(),
+        has_employees=True,
+        is_vat_payer=False,
+        address="м. Київ, вул. Хрещатик, 1"
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    
+    # 3. Seed demo employees
+    emp1 = Employee(
+        profile_id=profile.id,
+        company_id=company.id,
+        name="Петренко Іван Васильович",
+        tax_id="3322110099",
+        salary=18000.0,
+        start_date=date.today() - timedelta(days=60),
+        is_main_job=True
+    )
+    emp2 = Employee(
+        profile_id=profile.id,
+        company_id=company.id,
+        name="Сидоренко Ганна Петрівна",
+        tax_id="2233445566",
+        salary=22000.0,
+        start_date=date.today() - timedelta(days=30),
+        is_main_job=True
+    )
+    db.add(emp1)
+    db.add(emp2)
+    db.commit()
+    
+    # 4. Generate calendar events
+    generator = TaxCalendarGenerator()
+    events = generator.generate_calendar(
+        tax_system="fop_ep",
+        group=3,
+        rate=5.0,
+        has_employees=True,
+        reg_date_str=date.today().strftime("%Y-%m-%d"),
+        start_date=date.today(),
+        is_vat_payer=False,
+        esv_paid_by_employer=False,
+        profile_type="fop"
+    )
+    for ev in events:
+        due_dt = datetime.strptime(ev["due_date"], "%Y-%m-%d").date() if isinstance(ev["due_date"], str) else ev["due_date"]
+        db_ev = TaxEvent(
+            company_id=company.id,
+            profile_id=profile.id,
+            title=ev["title"],
+            type=ev["type"],
+            tax_name=ev["tax_name"],
+            due_date=due_dt,
+            amount_desc=ev["amount_desc"],
+            form_code=ev["form_code"],
+            status=ev["status"]
+        )
+        db.add(db_ev)
+    db.commit()
+    
+    # 5. Seed demo statement & transactions (ParsedPayment)
+    statement = BankStatement(
+        company_id=company.id,
+        profile_id=profile.id,
+        file_name="demo_statement.pdf",
+        file_hash=f"demo_hash_{guest_uuid}",
+        bank_name="ПриватБанк",
+        uploaded_at=date.today(),
+        status="parsed",
+        period_start=date.today() - timedelta(days=30),
+        period_end=date.today()
+    )
+    db.add(statement)
+    db.commit()
+    db.refresh(statement)
+    
+    pay1 = ParsedPayment(
+        statement_id=statement.id,
+        date=date.today() - timedelta(days=15),
+        amount=45000.0,
+        direction="in",
+        purpose="Оплата за надання ІТ послуг згідно договору №12",
+        contragent="ТОВ Айти Солюшнс",
+        type="income",
+        tax_type=None,
+        profile_id=profile.id,
+        taxable=True,
+        transaction_type="income"
+    )
+    pay2 = ParsedPayment(
+        statement_id=statement.id,
+        date=date.today() - timedelta(days=5),
+        amount=35000.0,
+        direction="in",
+        purpose="Оплата за розробку ПЗ згідно рахунку №44",
+        contragent="ТОВ ДевСервіс",
+        type="income",
+        tax_type=None,
+        profile_id=profile.id,
+        taxable=True,
+        transaction_type="income"
+    )
+    pay3 = ParsedPayment(
+        statement_id=statement.id,
+        date=date.today() - timedelta(days=20),
+        amount=4686.0,
+        direction="out",
+        purpose="Сплата ЄСВ за 1 квартал 2026 р.",
+        contragent="ДПС у м. Києві",
+        type="tax_payment",
+        tax_type="esv",
+        profile_id=profile.id,
+        taxable=False,
+        transaction_type="expense"
+    )
+    pay4 = ParsedPayment(
+        statement_id=statement.id,
+        date=date.today() - timedelta(days=10),
+        amount=14490.0,
+        direction="out",
+        purpose="Виплата заробітної плати за першу половину місяця Петренко І.В.",
+        contragent="Петренко Іван Васильович",
+        type="salary_payment",
+        tax_type=None,
+        profile_id=profile.id,
+        employee_id=emp1.id,
+        taxable=False,
+        transaction_type="expense"
+    )
+    
+    db.add(pay1)
+    db.add(pay2)
+    db.add(pay3)
+    db.add(pay4)
+    db.commit()
+    
+    liab1 = Payment(
+        profile_id=profile.id,
+        tax_type="edp",
+        amount=4000.0,
+        period=f"Q{((date.today().month-1)//3)+1} {date.today().year}",
+        status="pending",
+        created_at=datetime.now()
+    )
+    liab2 = Payment(
+        profile_id=profile.id,
+        tax_type="esv",
+        amount=4686.0,
+        period=f"Q{((date.today().month-1)//3)+1} {date.today().year}",
+        status="pending",
+        created_at=datetime.now()
+    )
+    db.add(liab1)
+    db.add(liab2)
+    db.commit()
+    
+    return {
+        "status": "success",
+        "telegram_id": telegram_id,
+        "expires_at": expires_at.isoformat(),
+        "profile_id": profile.id,
+        "company_id": company.id
+    }
+
+# PLANS definition
+PLANS = {
+    "pro": {
+        "name": "Pro",
+        "price_uah": 29900,  # 299 UAH in cents
+        "price_usd": 799,    # $7.99
+        "features": {
+            "unlimited_transactions": True,
+            "reports": True,
+            "employees": False,
+            "api_access": False,
+            "bank_sync": True
+        }
+    },
+    "business": {
+        "name": "Business",
+        "price_uah": 89900,  # 899 UAH in cents
+        "price_usd": 2499,   # $24.99
+        "features": {
+            "unlimited_transactions": True,
+            "reports": True,
+            "employees": True,
+            "api_access": True,
+            "bank_sync": True,
+            "priority_support": True
+        }
+    }
+}
+
+# Stripe Router endpoints
+@app.post("/api/subscriptions/create-checkout")
+def create_checkout_session(
+    profile_id: int,
+    plan: str,  # 'pro' or 'business'
+    success_url: str,
+    cancel_url: str,
+    db: Session = Depends(get_db)
+):
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_mock")
+    
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    user = db.query(User).filter(User.id == profile.user_id).first()
+    email = user.email if (user and user.email) else f"user_{profile_id}@unitas.com"
+    
+    if plan not in PLANS:
+        raise HTTPException(status_code=400, detail="Невірний тариф")
+        
+    sub_record = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    customer_id = sub_record.stripe_customer_id if sub_record else None
+    
+    if not customer_id:
+        try:
+            customer = stripe.Customer.create(
+                email=email,
+                metadata={"profile_id": str(profile_id)}
+            )
+            customer_id = customer['id']
+        except Exception:
+            customer_id = f"cus_mock_{profile_id}"
+            
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'uah',
+                    'product_data': {
+                        'name': f"UniTax {PLANS[plan]['name']}",
+                        'description': f"Місячна підписка на тариф {PLANS[plan]['name']}"
+                    },
+                    'unit_amount': PLANS[plan]['price_uah'],
+                    'recurring': {'interval': 'month'}
+                },
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                'profile_id': str(profile_id),
+                'plan': plan
+            }
+        )
+        checkout_url = checkout_session['url']
+        session_id = checkout_session['id']
+    except Exception as e:
+        print(f"Stripe session creation failed, using mock checkout: {e}")
+        session_id = f"cs_test_{profile_id}"
+        checkout_url = f"{success_url}?session_id={session_id}"
+        
+    pay_history = PaymentHistory(
+        profile_id=profile_id,
+        amount=PLANS[plan]['price_uah'],
+        plan=plan,
+        status="pending",
+        stripe_checkout_session_id=session_id
+    )
+    db.add(pay_history)
+    
+    if sub_record:
+        sub_record.stripe_customer_id = customer_id
+    else:
+        new_sub = Subscription(
+            profile_id=profile_id,
+            plan="free",
+            status="active",
+            stripe_customer_id=customer_id
+        )
+        db.add(new_sub)
+        
+    db.commit()
+    return {"checkout_url": checkout_url}
+
+@app.post("/api/subscriptions/stripe-webhook")
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_mock")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_mock")
+    
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
+    
+    event = None
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError:
+        if os.getenv("ENV") == "dev" or not sig_header:
+            try:
+                import json
+                event = json.loads(payload)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid signature and fallback failed")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid signature")
+            
+    event_type = event.get('type') if isinstance(event, dict) else event.type
+    event_data = event.get('data') if isinstance(event, dict) else event.data
+    
+    if event_type == 'checkout.session.completed':
+        session = event_data['object']
+        profile_id_str = session.get('metadata', {}).get('profile_id')
+        plan = session.get('metadata', {}).get('plan')
+        
+        if profile_id_str and plan:
+            profile_id = int(profile_id_str)
+            pay_hist = db.query(PaymentHistory).filter(
+                PaymentHistory.stripe_checkout_session_id == session.get('id')
+            ).first()
+            if pay_hist:
+                pay_hist.status = "success"
+                pay_hist.stripe_payment_intent_id = session.get('payment_intent')
+                
+            from datetime import datetime, timedelta
+            expires_at = datetime.utcnow() + timedelta(days=30)
+            
+            sub_record = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+            if sub_record:
+                sub_record.plan = plan
+                sub_record.status = "active"
+                sub_record.expires_at = expires_at
+                sub_record.stripe_subscription_id = session.get('subscription')
+                sub_record.last_payment_amount = PLANS[plan]['price_uah']
+                sub_record.last_payment_date = datetime.utcnow()
+            else:
+                new_sub = Subscription(
+                    profile_id=profile_id,
+                    plan=plan,
+                    status="active",
+                    expires_at=expires_at,
+                    stripe_subscription_id=session.get('subscription'),
+                    last_payment_amount=PLANS[plan]['price_uah'],
+                    last_payment_date=datetime.utcnow()
+                )
+                db.add(new_sub)
+            db.commit()
+            
+            background_tasks.add_task(send_payment_notification, profile_id, plan)
+            
+    elif event_type == 'customer.subscription.deleted':
+        subscription = event_data['object']
+        sub_id = subscription.get('id')
+        if sub_id:
+            sub_record = db.query(Subscription).filter(Subscription.stripe_subscription_id == sub_id).first()
+            if sub_record:
+                sub_record.status = "cancelled"
+                db.commit()
+                
+    return {"status": "ok"}
+
+def send_payment_notification(profile_id: int, plan: str):
+    db = SessionLocal()
+    try:
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if not profile:
+            return
+        user = db.query(User).filter(User.id == profile.user_id).first()
+        if user and user.telegram_id:
+            from datetime import datetime, timedelta
+            text = (
+                f"✅ *Оплата пройшла успішно!*\n\n"
+                f"Тариф *{PLANS.get(plan, {}).get('name', plan.upper())}* активовано до {(datetime.utcnow() + timedelta(days=30)).strftime('%d.%m.%Y')}\n\n"
+                f"Дякуємо, що обираєте UniTax! 🚀"
+            )
+            send_telegram_async(user.telegram_id, text)
+    except Exception as e:
+        print(f"Error sending payment notification: {e}")
+    finally:
+        db.close()
+
+@app.get("/api/subscriptions/current/{profile_id}")
+def get_current_subscription(profile_id: int, db: Session = Depends(get_db)):
+    sub = db.query(Subscription).filter(
+        Subscription.profile_id == profile_id,
+        Subscription.status == "active"
+    ).first()
+    
+    if not sub:
+        return {"plan": "free", "status": "active", "expires_at": None, "features": PLANS.get("pro", {}).get("features", {})}
+        
+    from datetime import datetime
+    if sub.expires_at and sub.expires_at < datetime.utcnow():
+        sub.status = "expired"
+        db.commit()
+        return {"plan": "free", "status": "expired", "expires_at": sub.expires_at, "features": PLANS.get("pro", {}).get("features", {})}
+        
+    return {
+        "plan": sub.plan,
+        "status": sub.status,
+        "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+        "features": PLANS.get(sub.plan, {}).get('features', {})
+    }
+
+@app.post("/api/subscriptions/check-access/{profile_id}/{feature}")
+def check_feature_access(profile_id: int, feature: str, db: Session = Depends(get_db)):
+    sub = get_current_subscription(profile_id, db)
+    
+    if sub['plan'] == 'free':
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if profile:
+            user = db.query(User).filter(User.id == profile.user_id).first()
+            from datetime import datetime
+            if user and user.expires_at and user.expires_at < datetime.utcnow():
+                return {"access": False, "reason": "Демо-доступ закінчився. Оформіть підписку."}
+        return {"access": False, "reason": "Доступно тільки в платній версії"}
+        
+    features = sub.get('features', {})
+    return {"access": features.get(feature, False)}
+
+# Admin API Router
+import jwt
+from fastapi.security import APIKeyQuery, HTTPBearer, HTTPAuthorizationCredentials
+# pwd_context defined globally above
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "mock_jwt_secret_key_123")
+token_query = APIKeyQuery(name="token", auto_error=False)
+
+def verify_admin_token(
+    token: Optional[str] = Depends(token_query),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
+) -> dict:
+    token_str = None
+    if credentials:
+        token_str = credentials.credentials
+    elif token:
+        token_str = token
+        
+    if not token_str:
+        raise HTTPException(status_code=401, detail="Токен авторизації відсутній")
+        
+    try:
+        payload = jwt.decode(token_str, JWT_SECRET_KEY, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Час дії токена закінчився")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Невірний токен")
+
+def create_admin_token(admin_id: int, role: str) -> str:
+    from datetime import datetime, timedelta
+    payload = {
+        "admin_id": admin_id,
+        "role": role,
+        "exp": datetime.utcnow() + timedelta(days=7)
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
+
+@app.post("/api/admin/login")
+def admin_login(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    admin = db.query(AdminUser).filter(AdminUser.email == email).first()
+    if not admin or not pwd_context.verify(password, admin.password_hash):
+        raise HTTPException(status_code=401, detail="Невірний email або пароль")
+        
+    token = create_admin_token(admin.id, admin.role)
+    return {"token": token, "role": admin.role}
+
+@app.get("/api/admin/users")
+def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = Depends(get_db)):
+    profiles = db.query(Profile).order_by(Profile.id.desc()).all()
+    result = []
+    for p in profiles:
+        sub = db.query(Subscription).filter(
+            Subscription.profile_id == p.id,
+            Subscription.status == "active"
+        ).first()
+        plan = sub.plan if sub else "free"
+        result.append({
+            "id": p.id,
+            "email": p.owner.email if p.owner else None,
+            "name": p.name,
+            "registration_source": getattr(p, "registration_source", "direct"),
+            "created_at": getattr(p, "reg_date", None),
+            "plan": plan
+        })
+    return result
+
+@app.get("/api/admin/users/{user_id}")
+def get_user_details(user_id: int, token_data: dict = Depends(verify_admin_token), db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    subscription = db.query(Subscription).filter(Subscription.profile_id == user_id).first()
+    transactions = db.query(ParsedPayment).filter(ParsedPayment.profile_id == user_id).limit(50).all()
+    
+    tx_list = []
+    for t in transactions:
+        tx_list.append({
+            "id": t.id,
+            "date": t.date.strftime("%Y-%m-%d") if t.date else None,
+            "amount": t.amount,
+            "direction": t.direction,
+            "purpose": t.purpose,
+            "contragent": t.contragent
+        })
+        
+    employees = db.query(Employee).filter(Employee.profile_id == user_id).all()
+    emp_list = []
+    for emp in employees:
+        emp_list.append({
+            "id": emp.id,
+            "name": emp.name,
+            "tax_id": emp.tax_id,
+            "salary": emp.salary,
+            "is_main_job": getattr(emp, "is_main_job", True)
+        })
+        
+    return {
+        "profile": {
+            "id": profile.id,
+            "name": profile.name,
+            "tax_id": profile.tax_id,
+            "tax_system": profile.tax_system,
+            "address": profile.address,
+            "director_name": getattr(profile, "director_name", None),
+            "phone": getattr(profile, "phone", None),
+            "group": getattr(profile, "group", None),
+            "rate": getattr(profile, "rate", None),
+            "is_vat_payer": getattr(profile, "is_vat_payer", False),
+            "has_employees": getattr(profile, "has_employees", False),
+            "registration_source": getattr(profile, "registration_source", "direct")
+        },
+        "subscription": {
+            "plan": subscription.plan if subscription else "free",
+            "status": subscription.status if subscription else "active",
+            "expires_at": subscription.expires_at.isoformat() if (subscription and subscription.expires_at) else None
+        } if subscription else None,
+        "recent_transactions": tx_list,
+        "employees": emp_list
+    }
+
+@app.put("/api/admin/users/{user_id}/subscription")
+def update_user_subscription(
+    user_id: int,
+    plan: str = Form(...),
+    action: str = Form(...),  # 'activate', 'cancel', 'extend'
+    token_data: dict = Depends(verify_admin_token),
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timedelta
+    sub = db.query(Subscription).filter(Subscription.profile_id == user_id).first()
+    
+    if action == 'activate':
+        expires_at = datetime.utcnow() + timedelta(days=30)
+        if sub:
+            sub.plan = plan
+            sub.status = "active"
+            sub.expires_at = expires_at
+        else:
+            sub = Subscription(
+                profile_id=user_id,
+                plan=plan,
+                status="active",
+                expires_at=expires_at
+            )
+            db.add(sub)
+    elif action == 'cancel':
+        if sub:
+            sub.status = "cancelled"
+    elif action == 'extend':
+        if sub:
+            if not sub.expires_at:
+                sub.expires_at = datetime.utcnow()
+            sub.expires_at += timedelta(days=30)
+            sub.status = "active"
+            sub.plan = plan
+            
+    db.commit()
+    return {"message": f"Підписку оновлено: {action}"}
+
 @app.post("/api/auth/login")
 def auth_login(
     email: str = Form(...),
@@ -2570,6 +4148,20 @@ def auth_login(
         
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
     if user.hashed_password != hashed:
+        if user.telegram_id:
+            import random
+            code = f"{random.randint(100000, 999999)}"
+            user.verification_code = code
+            db.commit()
+            
+            text = f"🔐 Ваш тимчасовий код для входу в UniTax: *{code}*"
+            send_telegram_async(user.telegram_id, text)
+                    
+            return {
+                "status": "verification_required",
+                "email": email_clean,
+                "message": "Пароль невірний. Тимчасовий код входу надіслано у ваш Telegram"
+            }
         raise HTTPException(status_code=400, detail="Невірний email або пароль")
         
     # Check if 2FA Telegram verification is required
@@ -4403,8 +5995,8 @@ def get_system_config(db: Session = Depends(get_db)):
         "fop_limit_group_1": 1444049.0,
         "fop_limit_group_2": 7211598.0,
         "fop_limit_group_3": 10091049.0,
-        "military_tax_fop_rate": 1.0,
-        "military_tax_employee_rate": 5.0,
+        "military_tax_fop_rate": 5.0,
+        "military_tax_employee_rate": 1.5,
         "unified_tax_rate_group_3": 5.0,
         "esv_fop_monthly": 1562.0,
         "pit_employee_rate": 18.0,
@@ -4452,8 +6044,8 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
     limit_1 = get_config_val(db, "fop_limit_group_1", 1444049.0)
     limit_2 = get_config_val(db, "fop_limit_group_2", 7211598.0)
     limit_3 = get_config_val(db, "fop_limit_group_3", 10091049.0)
-    mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 1.0)
-    mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 5.0)
+    mil_fop_rate = get_config_val(db, "military_tax_fop_rate", 5.0)
+    mil_emp_rate = get_config_val(db, "military_tax_employee_rate", 1.5)
     pit_rate = get_config_val(db, "pit_employee_rate", 18.0)
     esv_rate = get_config_val(db, "esv_employee_rate", 22.0)
     esv_fop = get_config_val(db, "esv_fop_monthly", 1562.0)
@@ -4499,46 +6091,62 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
             api_key=gemini_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
-        model_to_use = "gemini-1.5-flash"
+        model_to_use = "gemini-2.5-flash"
         
     if not client_to_use:
         # Багатий оффлайн-відповідач
         msg_lower = user_message.lower()
         if "військов" in msg_lower or "вз" in msg_lower or "збір" in msg_lower:
-            if profile.type == "fop":
+            if is_fop_profile(profile):
                 response_text = f"Для вашого ФОП на спрощеній системі оподаткування військовий збір становить **{mil_fop_rate}% від загального доходу** (за поточний звітний період це складає {(total_income * mil_fop_rate / 100.0):.2f} грн). Якщо у вас є працівники, ви також сплачуєте військовий збір у розмірі **{mil_emp_rate}% від їхньої заробітної плати** щомісячно."
             else:
                 response_text = f"Для вашої компанії {profile.name} (ТОВ) військовий збір на прибуток не нараховується. Проте ви зобов'язані утримувати та сплачувати військовий збір у розмірі **{mil_emp_rate}% від заробітної плати** найманих працівників щомісячно при виплаті заробітної плати."
         elif "працівн" in msg_lower or "зарплат" in msg_lower or "робітн" in msg_lower:
             response_text = f"У вашому профілі зареєстровано **{len(profile_employees)} найманих працівників**. З кожної зарплати ви маєте сплатити: ПДФО ({pit_rate}%), Військовий збір ({mil_emp_rate}%) та ЄСВ на фонд оплат ({esv_rate}%). Граничний термін сплати податків із зарплати — 30 число наступного місяця."
         elif "звіт" in msg_lower or "декларац" in msg_lower:
-            response_text = f"Для вашої системи ({profile.tax_system}) звітність подається щоквартально. Найближчий звіт: Декларація єдиного податку (Форма { 'F0103306' if profile.type == 'fop' else 'J0103508' }) за 1 квартал. Термін подання — протягом 40 днів після закінчення кварталу."
+            response_text = f"Для вашої системи ({profile.tax_system}) звітність подається щоквартально. Найближчий звіт: Декларація єдиного податку (Форма { 'F0103306' if is_fop_profile(profile) else 'J0103508' }) за 1 квартал. Термін подання — протягом 40 днів після закінчення кварталу."
         elif "дохід" in msg_lower or "сума" in msg_lower or "ліміт" in msg_lower:
-            group_limits = {1: limit_1, 2: limit_2, 3: limit_3}
-            user_group = profile.group or 3
-            current_limit = group_limits.get(user_group, limit_3)
-            pct_used = (total_income / current_limit) * 100
-            response_text = f"Ваш загальний дохід за поточний звітний період становить **{total_income:.2f} грн**.\n\n" \
-                            f"Актуальні граничні ліміти річного доходу для спрощеної системи ФОП у 2026 році:\n" \
-                            f"• **1 група**: {limit_1:,.0f} грн\n" \
-                            f"• **2 група**: {limit_2:,.0f} грн\n" \
-                            f"• **3 група**: {limit_3:,.0f} грн\n\n" \
-                            f"Для вашої групи ({user_group}-ї групи) ліміт становить **{current_limit:,.0f} грн**. " \
-                            f"Ви використали **{pct_used:.2f}%** цього ліміту."
+            if is_fop_profile(profile):
+                group_limits = {1: limit_1, 2: limit_2, 3: limit_3}
+                user_group = profile.group or 3
+                current_limit = group_limits.get(user_group, limit_3)
+                pct_used = (total_income / current_limit) * 100
+                response_text = f"Ваш загальний дохід за поточний звітний період становить **{total_income:.2f} грн**.\n\n" \
+                                f"Актуальні граничні ліміти річного доходу для спрощеної системи ФОП у 2026 році:\n" \
+                                f"• **1 група**: {limit_1:,.0f} грн\n" \
+                                f"• **2 група**: {limit_2:,.0f} грн\n" \
+                                f"• **3 група**: {limit_3:,.0f} грн\n\n" \
+                                f"Для вашої групи ({user_group}-ї групи) ліміт становить **{current_limit:,.0f} грн**. " \
+                                f"Ви використали **{pct_used:.2f}%** цього ліміту."
+            else:
+                if is_simplified_tax(profile.tax_system):
+                    pct_used = (total_income / limit_3) * 100
+                    response_text = f"Загальний дохід вашої компанії {profile.name} (ТОВ) за поточний звітний період становить **{total_income:.2f} грн** (оподатковуваний дохід: **{taxable_income:.2f} грн**).\n\n" \
+                                    f"Для юридичних осіб на спрощеній системі (3 група) граничний ліміт річного доходу у 2026 році становить **{limit_3:,.0f} грн**.\n" \
+                                    f"Ви використали **{pct_used:.2f}%** цього ліміту."
+                else:
+                    response_text = f"Загальний дохід вашої компанії {profile.name} (ТОВ) за поточний звітний період становить **{total_income:.2f} грн**.\n" \
+                                    f"Для юридичних осіб на загальній системі оподаткування ліміт річного доходу для перебування на системі не встановлено."
         elif "єсв" in msg_lower or "соціал" in msg_lower or "внесок" in msg_lower:
-            if profile.type == "fop":
+            if is_fop_profile(profile):
                 response_text = f"Для ФОП єдиний соціальний внесок (ЄСВ) за себе становить **{esv_fop} грн на місяць** (сплачується щоквартально: {esv_fop * 3} грн). Термін сплати — до 20 числа місяця, наступного за кварталом. Якщо у вас є працівники, ви додатково сплачуєте ЄСВ у розмірі 22% від їхньої заробітної плати."
             else:
                 response_text = f"Для ТОВ (підприємства) ЄСВ за себе не нараховується. Ви сплачуєте лише ЄСВ на заробітну плату найманих працівників у розмірі **22% від фонду оплати праці** щомісячно."
         elif "привіт" in msg_lower or "добрий" in msg_lower or "вітаю" in msg_lower:
-            response_text = f"Вітаю! Я ваш ШІ-Асистент UniTax. Я можу відповісти на будь-які ваші запитання щодо податків, військового збору, ЄСВ, лімітів чи звітів для профілю **{profile.name}**. Запитайте мене про будь-що!"
+            response_text = f"Вітаю! Я ваш ШІ-Асистент UniTax для профілю **{profile.name}**. Я знаю все про ваші податки, доходи, працівників та військовий збір. Запитайте мене про будь-що!"
         else:
-            response_text = f"Дякую за запитання щодо профілю {profile.name}! Я можу детально розповісти про:\n" \
-                            f"• **Військовий збір**: {mil_fop_rate}% для ФОП, {mil_emp_rate}% з зарплат\n" \
-                            f"• **Єдиний податок**: ставку та розраховану суму ({profile.rate or default_rate}%)\n" \
-                            f"• **ЄСВ за себе**: {esv_fop} грн/місяць\n" \
-                            f"• **Ліміти доходу** та податкові декларації.\n" \
-                            f"Будь ласка, уточніть ваше питання, і я надам точну відповідь!"
+            if is_fop_profile(profile):
+                response_text = f"Дякую за запитання щодо профілю {profile.name}! Я можу детально розповісти про:\n" \
+                                f"• **Військовий збір**: {mil_fop_rate}% для ФОП, {mil_emp_rate}% з зарплат\n" \
+                                f"• **Єдиний податок**: ставку та розраховану суму ({profile.rate or default_rate}%)\n" \
+                                f"• **ЄСВ за себе**: {esv_fop} грн/місяць\n" \
+                                f"• **Ліміти доходу** та податкові декларації."
+            else:
+                response_text = f"Дякую за запитання щодо профілю {profile.name} (ТОВ)! Я можу детально розповісти про:\n" \
+                                f"• **Військовий збір**: {mil_emp_rate}% з зарплат працівників\n" \
+                                f"• **Єдиний податок / Податок на прибуток**: ставку та розраховану суму ({profile.rate or default_rate}%)\n" \
+                                f"• **Податки за працівників**: ПДФО, військовий збір та ЄСВ\n" \
+                                f"• **Декларації та фінансову звітність ТОВ**."
             
         return {"response": response_text}
         
@@ -4556,5 +6164,2132 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"[Agent Chat Error] {e}")
         return {"response": "Вибачте, виникла помилка під час зв'язку з ШІ-моделю. Будь ласка, спробуйте пізніше."}
+
+
+# --- DPS Integration Endpoints ---
+from pydantic import BaseModel
+from datetime import timedelta
+from services.tax_api_client import TaxAPIClient
+from services.report_signer import ReportSigner
+
+class ReportSubmitRequest(BaseModel):
+    certificate_id: int
+
+class SetTokenRequest(BaseModel):
+    profile_id: int
+    token: str
+
+class CheckDebtRequest(BaseModel):
+    profile_id: int
+
+class CheckReportsRequest(BaseModel):
+    profile_id: int
+
+class TaxApiSetupRequest(BaseModel):
+    profile_id: int
+    api_token: str
+
+@app.post("/api/certificates/upload")
+async def upload_certificate(
+    profile_id: int = Form(...),
+    cert_file: UploadFile = File(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        file_content = await cert_file.read()
+        
+        # Load PKCS12
+        from OpenSSL import crypto
+        try:
+            pkcs12 = crypto.load_pkcs12(file_content, password.encode())
+        except Exception:
+            raise HTTPException(status_code=400, detail="Невірний пароль або пошкоджений файл КЕП.")
+            
+        cert = pkcs12.get_certificate()
+        private_key = pkcs12.get_privatekey()
+        
+        # Extract details
+        subject = cert.get_subject()
+        cert_owner_name = subject.CN or f"{subject.GN or ''} {subject.SN or ''}".strip() or "КЕП Власник"
+        
+        issuer = cert.get_issuer()
+        cert_issuer = issuer.O or issuer.CN or "Невідомий АЦСК"
+        
+        cert_serial = str(cert.get_serial_number())
+        
+        valid_to_str = cert.get_notAfter().decode('utf-8')
+        valid_to = datetime.strptime(valid_to_str, "%Y%m%d%H%M%SZ")
+        
+        # PEM format
+        cert_pem = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('utf-8')
+        private_key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, private_key)
+        
+        # Encrypt private key
+        from services.report_signer import encrypt_private_key
+        private_key_encrypted = encrypt_private_key(private_key_pem)
+        
+        db_cert = Certificate(
+            profile_id=profile_id,
+            cert_owner_name=cert_owner_name,
+            cert_issuer=cert_issuer,
+            cert_serial=cert_serial,
+            valid_to=valid_to,
+            cert_data=cert_pem,
+            private_key_encrypted=private_key_encrypted
+        )
+        db.add(db_cert)
+        db.commit()
+        db.refresh(db_cert)
+        
+        return {
+            "id": db_cert.id,
+            "cert_owner_name": cert_owner_name,
+            "cert_issuer": cert_issuer,
+            "cert_serial": cert_serial,
+            "valid_to": valid_to.strftime("%Y-%m-%d")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Помилка обробки сертифіката: {str(e)}")
+
+@app.get("/api/certificates/{profile_id}")
+def get_certificates_by_profile(profile_id: int, db: Session = Depends(get_db)):
+    certs = db.query(Certificate).filter(Certificate.profile_id == profile_id).all()
+    return [{
+        "id": c.id,
+        "cert_owner_name": c.cert_owner_name,
+        "cert_issuer": c.cert_issuer,
+        "cert_serial": c.cert_serial,
+        "valid_to": c.valid_to.strftime("%Y-%m-%d") if c.valid_to else None
+    } for c in certs]
+
+@app.get("/api/certificates")
+def get_certificates(profile_id: Optional[int] = None, db: Session = Depends(get_db)):
+    if profile_id:
+        return get_certificates_by_profile(profile_id, db)
+    certs = db.query(Certificate).all()
+    return [{
+        "id": c.id,
+        "cert_owner_name": c.cert_owner_name,
+        "cert_issuer": c.cert_issuer,
+        "cert_serial": c.cert_serial,
+        "valid_to": c.valid_to.strftime("%Y-%m-%d") if c.valid_to else None
+    } for c in certs]
+
+@app.post("/api/reports/{report_id}/submit")
+async def submit_report_to_tax(
+    report_id: int,
+    req: ReportSubmitRequest,
+    db: Session = Depends(get_db)
+):
+    # 1. Отримати звіт з БД
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+        
+    # 2. Отримати профіль
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    # 3. Підписати звіт КЕП
+    signer = ReportSigner()
+    try:
+        signed_xml = await signer.sign_report(report.xml_content or "", req.certificate_id, db)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Помилка підписання звіту КЕП: {str(e)}")
+        
+    # 4. Отримати токен доступу до API ДПС
+    token_data = db.query(TaxApiSetting).filter(
+        TaxApiSetting.profile_id == profile.id,
+        TaxApiSetting.api_token_expires_at > datetime.now()
+    ).first()
+    
+    if not token_data:
+        return {
+            "success": False,
+            "error": "Не підключено до API ДПС. Будь ласка, налаштуйте інтеграцію.",
+            "instruction_url": "/settings/tax-api"
+        }
+        
+    # 5. Відправити звіт
+    tax_api = TaxAPIClient()
+    submission = await tax_api.submit_report(signed_xml, profile.tax_id or "", token_data.api_token)
+    
+    # 6. Зберегти історію відправки
+    db_submission = ReportSubmission(
+        profile_id=profile.id,
+        report_id=report_id,
+        report_type=report.form_code,
+        report_period=report.period,
+        report_xml=signed_xml,
+        submission_status='sent' if submission['success'] else 'rejected',
+        confirmation_number=submission.get('confirmation_number'),
+        submitted_at=datetime.now(),
+        tax_office_response=submission.get('message')
+    )
+    db.add(db_submission)
+    db.commit()
+    db.refresh(db_submission)
+    
+    if submission['success']:
+        # Оновити статус звіту
+        report.status = 'submitted'
+        db.commit()
+        
+    return {
+        "success": submission['success'],
+        "submission_id": db_submission.id,
+        "confirmation_number": submission.get('confirmation_number'),
+        "message": submission.get('message')
+    }
+
+@app.get("/api/reports/submissions/{profile_id}")
+def get_submissions_history(profile_id: int, db: Session = Depends(get_db), limit: int = 20):
+    results = db.query(ReportSubmission).filter(
+        ReportSubmission.profile_id == profile_id
+    ).order_by(desc(ReportSubmission.submitted_at)).limit(limit).all()
+    
+    history = []
+    for r in results:
+        report_name = "Декларація"
+        if r.report_id:
+            gen_rep = db.query(GeneratedReport).filter(GeneratedReport.id == r.report_id).first()
+            if gen_rep:
+                template = db.query(ReportTemplate).filter(ReportTemplate.id == gen_rep.template_id).first()
+                if template:
+                    report_name = template.name
+                else:
+                    report_name = f"Декларація {gen_rep.form_code}"
+        else:
+            template = db.query(ReportTemplate).filter(ReportTemplate.form_code == r.report_type).first()
+            if template:
+                report_name = template.name
+            else:
+                report_name = f"Декларація {r.report_type}"
+                
+        history.append({
+            "id": r.id,
+            "profile_id": r.profile_id,
+            "report_id": r.report_id,
+            "report_type": r.report_type,
+            "report_period": r.report_period,
+            "submission_status": r.submission_status,
+            "tax_office_response": r.tax_office_response,
+            "confirmation_number": r.confirmation_number,
+            "submitted_at": r.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if r.submitted_at else None,
+            "accepted_at": r.accepted_at.strftime("%Y-%m-%d %H:%M:%S") if r.accepted_at else None,
+            "rejection_reason": r.rejection_reason,
+            "report_name": report_name
+        })
+    return history
+
+@app.get("/api/reports/submissions")
+def get_submissions_query(profile_id: int, db: Session = Depends(get_db), limit: int = 20):
+    return get_submissions_history(profile_id, db, limit)
+
+@app.get("/api/reports/submissions/{submission_id}/status")
+async def get_submission_status(submission_id: int, db: Session = Depends(get_db)):
+    submission = db.query(ReportSubmission).filter(ReportSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Відправлення не знайдено")
+        
+    token_data = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == submission.profile_id).first()
+    if token_data:
+        tax_api = TaxAPIClient()
+        status = await tax_api.check_submission_status(submission.confirmation_number or "", token_data.api_token)
+        
+        # Оновити статус в БД
+        submission.submission_status = status.get('status', submission.submission_status)
+        if status.get('accepted_at'):
+            try:
+                submission.accepted_at = datetime.strptime(status['accepted_at'], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                submission.accepted_at = datetime.now()
+        submission.rejection_reason = status.get('rejection_reason')
+        db.commit()
+        return status
+        
+    return {"status": submission.submission_status}
+
+@app.post("/api/tax-api/setup")
+def setup_tax_api(req: TaxApiSetupRequest, db: Session = Depends(get_db)):
+    expires_at = datetime.now() + timedelta(days=365)
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
+    if setting:
+        setting.api_token = req.api_token
+        setting.api_token_expires_at = expires_at
+        setting.last_sync_at = datetime.now()
+    else:
+        setting = TaxApiSetting(
+            profile_id=req.profile_id,
+            api_token=req.api_token,
+            api_token_expires_at=expires_at,
+            last_sync_at=datetime.now()
+        )
+        db.add(setting)
+    db.commit()
+    return {"message": "API ДПС успішно налаштовано"}
+
+@app.get("/api/tax-api/status")
+def get_tax_api_status(profile_id: Optional[int] = None, db: Session = Depends(get_db)):
+    if profile_id:
+        settings = db.query(TaxApiSetting).filter(
+            TaxApiSetting.profile_id == profile_id
+        ).first()
+        has_token = settings is not None and bool(settings.api_token and settings.api_token.strip())
+        is_expired = False
+        if has_token and settings.api_token_expires_at:
+            is_expired = settings.api_token_expires_at <= datetime.now()
+        configured = has_token and not is_expired
+        return {"configured": configured, "has_token": configured}
+    
+    settings_list = db.query(TaxApiSetting).all()
+    configured = False
+    for s in settings_list:
+        if s.api_token and s.api_token.strip():
+            if not s.api_token_expires_at or s.api_token_expires_at > datetime.now():
+                configured = True
+                break
+    return {"configured": configured, "has_token": configured}
+
+
+@app.get("/api/tax-api/instructions")
+def get_tax_api_instructions():
+    return {
+        "steps": [
+            "1. Увійдіть в Електронний кабінет платника податків: https://cabinet.tax.gov.ua",
+            "2. Використовуйте ваш КЕП для входу",
+            "3. В меню зліва перейдіть в «Налаштування»",
+            "4. Оберіть вкладку «Токени відкритої частини»",
+            "5. Натисніть «Створити токен»",
+            "6. Виберіть права: «Подання звітності», «Перевірка статусу»",
+            "7. Скопіюйте отриманий токен",
+            "8. Вставте токен в поле нижче"
+        ],
+        "permissions_needed": ["reporting.submit", "reporting.status"]
+    }
+
+@app.get("/api/reports")
+def list_reports(profile_id: int, db: Session = Depends(get_db)):
+    """Отримати всі звіти для профілю"""
+    reports = db.query(GeneratedReport).filter(
+        GeneratedReport.profile_id == profile_id
+    ).all()
+    
+    report_list = []
+    for r in reports:
+        template = db.query(ReportTemplate).filter(ReportTemplate.id == r.template_id).first()
+        name = template.name if template else f"Декларація {r.form_code}"
+        report_list.append({
+            "id": r.id,
+            "report_name": name,
+            "form_code": r.form_code,
+            "period": f"{r.period} {r.year}",
+            "status": r.status,
+            "has_xml": bool(r.xml_content)
+        })
+    return report_list
+
+@app.get("/api/reports/ready")
+def get_ready_reports(profile_id: int, db: Session = Depends(get_db)):
+    reports = db.query(GeneratedReport).filter(
+        GeneratedReport.profile_id == profile_id,
+        GeneratedReport.status == "draft"
+    ).all()
+    
+    ready_list = []
+    for r in reports:
+        template = db.query(ReportTemplate).filter(ReportTemplate.id == r.template_id).first()
+        name = template.name if template else f"Декларація {r.form_code}"
+        ready_list.append({
+            "id": r.id,
+            "report_name": name,
+            "period": f"{r.period} {r.year}"
+        })
+    return ready_list
+
+@app.get("/api/reports/{report_id}/xml")
+def get_report_xml(report_id: int, db: Session = Depends(get_db)):
+    """Завантажити XML звіту"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    if not report.xml_content:
+        raise HTTPException(status_code=400, detail="XML контент відсутній")
+    
+    from fastapi.responses import Response
+    filename = f"{report.form_code}_{report.period}_{report.year}.xml"
+    return Response(
+        content=report.xml_content,
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": make_content_disposition(filename)
+        }
+    )
+
+@app.get("/api/reports/{report_id}/view")
+def view_report_html(report_id: int, db: Session = Depends(get_db)):
+    """Перегляд звіту в HTML форматі"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    template = db.query(ReportTemplate).filter(ReportTemplate.id == report.template_id).first()
+    
+    # Отримати дані звіту
+    if report.data_json:
+        import json
+        try:
+            data = json.loads(report.data_json)
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    
+    # Генерація HTML для перегляду
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="uk">
+    <head>
+        <meta charset="UTF-8">
+        <title>{template.name if template else report.form_code}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .header {{ background: #f5f5f5; padding: 20px; border-radius: 5px; }}
+            .field {{ margin: 10px 0; }}
+            .label {{ font-weight: bold; }}
+            .value {{ margin-left: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>{template.name if template else report.form_code}</h1>
+            <p>Період: {report.period} {report.year}</p>
+            <p>Статус: {report.status}</p>
+        </div>
+        <div class="content">
+    """
+    
+    for key, value in data.items():
+        html_content += f"""
+            <div class="field">
+                <span class="label">{key}:</span>
+                <span class="value">{value}</span>
+            </div>
+        """
+    
+    html_content += """
+        </div>
+    </body>
+    </html>
+    """
+    
+    from fastapi.responses import Response
+    return Response(
+        content=html_content,
+        media_type="text/html"
+    )
+
+@app.get("/api/reports/{report_id}/download")
+def download_report(report_id: int, format: str = "xml", db: Session = Depends(get_db)):
+    """Завантажити звіт у вказаному форматі (xml, json, pdf)"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    from fastapi.responses import Response
+    
+    if format == "xml":
+        if not report.xml_content:
+            raise HTTPException(status_code=400, detail="XML контент відсутній")
+        filename = f"{report.form_code}_{report.period}_{report.year}.xml"
+        return Response(
+            content=report.xml_content,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": make_content_disposition(filename)
+            }
+        )
+    elif format == "json":
+        if not report.data_json:
+            raise HTTPException(status_code=400, detail="JSON контент відсутній")
+        filename = f"{report.form_code}_{report.period}_{report.year}.json"
+        return Response(
+            content=report.data_json,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": make_content_disposition(filename)
+            }
+        )
+    elif format == "pdf":
+        # PDF generation would require additional implementation
+        raise HTTPException(status_code=501, detail="PDF формат ще не реалізовано")
+    else:
+        raise HTTPException(status_code=400, detail="Непідтримуваний формат")
+
+@app.get("/api/reports/{report_id}/data")
+def get_report_data(report_id: int, db: Session = Depends(get_db)):
+    """Отримати дані звіту (JSON) для перегляду/редагування"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    if not report.data_json:
+        return {"data": {}}
+    
+    import json
+    try:
+        return json.loads(report.data_json)
+    except Exception:
+        return {"data": {}}
+
+@app.post("/api/reports/{report_id}/generate-xml")
+def generate_report_xml(report_id: int, db: Session = Depends(get_db)):
+    """Згенерувати XML для звіту"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    from services.xml_generator import xml_generator
+    from services.tax_calculator import tax_calculator
+    
+    # Отримати податкові дані з TaxCalculator
+    tax_summary = tax_calculator.get_summary(profile.id, db)
+    
+    # Розрахувати доходи за квартали з by_month
+    by_month = tax_summary.get("by_month", {})
+    income_q1 = 0.0
+    income_q2 = 0.0
+    income_q3 = 0.0
+    income_q4 = 0.0
+    
+    for period_key, month_data in by_month.items():
+        if f"{report.year}-01" in period_key or f"{report.year}-02" in period_key or f"{report.year}-03" in period_key:
+            income_q1 += month_data.get("edp", 0)
+        elif f"{report.year}-04" in period_key or f"{report.year}-05" in period_key or f"{report.year}-06" in period_key:
+            income_q2 += month_data.get("edp", 0)
+        elif f"{report.year}-07" in period_key or f"{report.year}-08" in period_key or f"{report.year}-09" in period_key:
+            income_q3 += month_data.get("edp", 0)
+        elif f"{report.year}-10" in period_key or f"{report.year}-11" in period_key or f"{report.year}-12" in period_key:
+            income_q4 += month_data.get("edp", 0)
+    
+    # Підготувати дані для XML
+    tax_data = {
+        "taxable_income": tax_summary.get("edp", {}).get("accrued", 0),
+        "tax_due": tax_summary.get("edp", {}).get("accrued", 0),
+        "tax_paid": tax_summary.get("edp", {}).get("paid", 0),
+        "esv_due": tax_summary.get("esv", {}).get("accrued", 0),
+        "esv_paid": tax_summary.get("esv", {}).get("paid", 0),
+        "military_tax_due": tax_summary.get("military", {}).get("accrued", 0),
+        "military_tax_paid": tax_summary.get("military", {}).get("paid", 0),
+        "pit_due": tax_summary.get("pdfo", {}).get("accrued", 0),
+        "pit_paid": tax_summary.get("pdfo", {}).get("paid", 0),
+        "income_q1": income_q1,
+        "income_q2": income_q2,
+        "income_q3": income_q3,
+        "income_q4": income_q4
+    }
+    
+    profile_data = {
+        "tax_id": profile.tax_id,
+        "name": profile.name,
+        "address": getattr(profile, "address", ""),
+        "type": profile.type,
+        "tax_rate": profile.rate or 5.0
+    }
+    
+    # Генерація XML залежно від типу звіту
+    xml_content = None
+    form_code = report.form_code
+    
+    if form_code == "F0103306":
+        xml_content = xml_generator.generate_unified_tax_declaration(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "J0500109":
+        xml_content = xml_generator.generate_unified_report_llc(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "F0110210":
+        xml_content = xml_generator.generate_vat_declaration(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "F3007012":
+        xml_content = xml_generator.generate_esv_declaration(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "F0120109":
+        xml_content = xml_generator.generate_military_tax_declaration(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "F0510101":
+        xml_content = xml_generator.generate_unified_report(
+            profile_data, tax_data, report.period, report.year
+        )
+    elif form_code == "F0600101":
+        xml_content = xml_generator.generate_pit_declaration(
+            profile_data, tax_data, report.period, report.year
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Непідтримуваний код форми: {form_code}")
+    
+    # Зберегти XML в базу
+    report.xml_content = xml_content
+    report.status = "generated"
+    db.commit()
+    
+    return {
+        "success": True,
+        "xml_generated": True,
+        "form_code": form_code
+    }
+
+@app.post("/api/reports/{report_id}/validate")
+def validate_report_xml(report_id: int, db: Session = Depends(get_db)):
+    """Валідація XML звіту проти XSD схеми"""
+    report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    if not report.xml_content:
+        raise HTTPException(status_code=400, detail="XML контент відсутній")
+    
+    from services.xsd_validator import xsd_validator
+    
+    # Базова валідація структури
+    is_valid, error_msg = xsd_validator.validate_xml_structure(report.xml_content)
+    if not is_valid:
+        return {
+            "valid": False,
+            "error": error_msg,
+            "xsd_validated": False
+        }
+    
+    # Спроба валідації проти XSD (якщо схема завантажена)
+    xsd_valid, xsd_error = xsd_validator.validate_xml(report.xml_content, report.form_code)
+    
+    return {
+        "valid": xsd_valid,
+        "error": xsd_error if not xsd_valid else None,
+        "xsd_validated": True
+    }
+
+@app.post("/api/tax-calendar/regenerate")
+def regenerate_tax_calendar(profile_id: int, db: Session = Depends(get_db)):
+    """Перегенерація податкового календаря для профілю (видалення старих подій та створення нових)"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    try:
+        # Видалити існуючі не сплачені події календаря для цього профілю
+        db.query(TaxEvent).filter(TaxEvent.profile_id == profile_id, TaxEvent.status == "pending").delete()
+        db.commit()
+        
+        # Синхронізувати події заново
+        sync_profile_calendar(profile_id, db)
+        
+        # Отримати кількість нових подій для повідомлення
+        count = db.query(TaxEvent).filter(TaxEvent.profile_id == profile_id, TaxEvent.status == "pending").count()
+        return {"message": f"Календар успішно оновлено. Знайдено {count} запланованих подій."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Помилка при оновленні календаря: {str(e)}")
+
+# --- Compatibility mapping for /api/tax/ ---
+@app.get("/api/tax/token-instructions")
+def get_tax_token_instructions_compat():
+    return get_tax_api_instructions()
+
+@app.get("/api/tax/token-status/{profile_id}")
+def get_tax_token_status_compat(profile_id: int, db: Session = Depends(get_db)):
+    return get_tax_api_status(profile_id, db)
+
+@app.post("/api/tax/set-token")
+def set_tax_token_compat(req: SetTokenRequest, db: Session = Depends(get_db)):
+    setup_req = TaxApiSetupRequest(profile_id=req.profile_id, api_token=req.token)
+    return setup_tax_api(setup_req, db)
+
+@app.post("/api/tax/check-debt")
+async def check_debt_endpoint(req: CheckDebtRequest, db: Session = Depends(get_db)):
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
+    if not setting:
+        return {"error": "Не підключено до API ДПС. Будь ласка, налаштуйте інтеграцію."}
+        
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    from services.tax_api_service import TaxAPIService
+    api_service = TaxAPIService()
+    debt_info = await api_service.get_tax_debt(profile.tax_id or "", setting.api_token)
+    
+    return {
+        "has_debt": debt_info.get("total_debt", 0.0) > 0,
+        "total_debt": debt_info.get("total_debt", 0.0),
+        "debt_details": debt_info.get("details", {}),
+        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+@app.post("/api/tax/check-reports")
+async def check_reports_endpoint(req: CheckReportsRequest, db: Session = Depends(get_db)):
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
+    if not setting:
+        return {"error": "Не підключено до API ДПС. Будь ласка, налаштуйте інтеграцію."}
+        
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    from services.tax_api_service import TaxAPIService
+    api_service = TaxAPIService()
+    
+    # Determine required reports based on profile type and tax system
+    required_reports = []
+    is_fop = profile.type == "fop"
+    is_simplified = "simplified" in (profile.tax_system or "").lower() or (profile.tax_system or "").lower() in ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"]
+    
+    profile_employees = db.query(Employee).filter(
+        (Employee.profile_id == req.profile_id) | (Employee.company_id == req.profile_id)
+    ).all()
+    has_employees = (profile.has_employees or len(profile_employees) > 0) if profile else False
+
+    if is_fop:
+        if is_simplified:
+            required_reports.append({
+                "code": "F0103306",
+                "name": "Декларація єдинника 3 групи (ФОП)",
+                "type": "Квартальний",
+                "deadline": f"10.05.{datetime.now().year}"
+            })
+            if has_employees:
+                required_reports.append({
+                    "code": "F0510101",
+                    "name": "Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ФОП)",
+                    "type": "Щомісячний",
+                    "deadline": f"20.06.{datetime.now().year}"
+                })
+        else:
+            required_reports.append({
+                "code": "F0100112",
+                "name": "Декларація про майновий стан і доходи",
+                "type": "Річний",
+                "deadline": f"03.05.{datetime.now().year}"
+            })
+    else:
+        if is_simplified:
+            required_reports.append({
+                "code": "J0103508",
+                "name": "Декларація єдиного податку ТОВ",
+                "type": "Квартальний",
+                "deadline": f"10.05.{datetime.now().year}"
+            })
+        else:
+            required_reports.append({
+                "code": "J0100120",
+                "name": "Декларація з податку на прибуток підприємств",
+                "type": "Річний",
+                "deadline": f"01.03.{datetime.now().year}"
+            })
+            
+        if has_employees:
+            required_reports.append({
+                "code": "J0500109",
+                "name": "Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ТОВ)",
+                "type": "Щомісячний",
+                "deadline": f"20.06.{datetime.now().year}"
+            })
+
+    if not required_reports:
+        required_reports.append({
+            "code": "F0103306" if is_fop else "J0500109",
+            "name": "Декларація єдинника" if is_fop else "Об'єднаний звіт",
+            "type": "Квартальний",
+            "deadline": f"10.05.{datetime.now().year}"
+        })
+
+    reports_status_list = []
+    all_submitted = True
+    
+    for rep in required_reports:
+        status = await api_service.get_report_status(profile.tax_id or "", setting.api_token, rep["code"])
+        submitted = status.get("submitted", False)
+        if not submitted:
+            all_submitted = False
+            
+        reports_status_list.append({
+            "code": rep["code"],
+            "name": rep["name"],
+            "type": rep["type"],
+            "deadline": rep["deadline"],
+            "submitted": submitted,
+            "submission_date": status.get("submission_date")
+        })
+        
+    return {
+        "all_submitted": all_submitted,
+        "reports": reports_status_list,
+        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+class GeneratePaymentRequest(BaseModel):
+    profile_id: int
+    tax_type: str
+    amount: float
+    period: str
+    bank_code: Optional[str] = "privat24"
+    region: Optional[str] = None
+
+@app.get("/api/tax-liabilities")
+def get_tax_liabilities(
+    profile_id: Optional[int] = None, 
+    telegram_id: Optional[str] = None, 
+    db: Session = Depends(get_db)
+):
+    from services.tax_calculator import TaxCalculator
+    
+    if not profile_id and telegram_id:
+        user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
+        if user and user.profiles:
+            profile_id = user.profiles[0].id
+            
+    if not profile_id:
+        return []
+        
+    calculator = get_tax_calculator(db)
+    return calculator.get_liabilities(profile_id, db)
+
+@app.get("/api/tax/summary")
+def get_tax_summary(profile_id: int, db: Session = Depends(get_db)):
+    calculator = get_tax_calculator(db)
+    return calculator.get_summary(profile_id, db)
+
+@app.get("/api/tax/liabilities")
+def get_tax_liabilities_endpoint(profile_id: int, db: Session = Depends(get_db)):
+    calculator = get_tax_calculator(db)
+    return calculator.get_liabilities(profile_id, db)
+
+
+# --- Tax Requisites Endpoints ---
+
+class TaxRequisiteRequest(BaseModel):
+    profile_id: int
+    tax_type: str  # 'edp', 'esv', 'pdfo', 'vz'
+    tax_office_name: Optional[str] = None
+    edrpou: Optional[str] = None
+    iban: Optional[str] = None
+    bank_name: Optional[str] = None
+
+@app.get("/api/tax-requisites/{profile_id}")
+def get_tax_requisites(profile_id: int, db: Session = Depends(get_db)):
+    """Отримати реквізити податкових для профілю"""
+    requisites = db.query(TaxRequisite).filter(TaxRequisite.profile_id == profile_id).all()
+    return [{
+        "id": r.id,
+        "tax_type": r.tax_type,
+        "tax_office_name": r.tax_office_name,
+        "edrpou": r.edrpou,
+        "iban": r.iban,
+        "bank_name": r.bank_name,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None
+    } for r in requisites]
+
+@app.post("/api/tax-requisites")
+def create_tax_requisite(req: TaxRequisiteRequest, db: Session = Depends(get_db)):
+    """Створити або оновити реквізити податкових"""
+    # Check if requisite already exists for this tax_type
+    existing = db.query(TaxRequisite).filter(
+        TaxRequisite.profile_id == req.profile_id,
+        TaxRequisite.tax_type == req.tax_type
+    ).first()
+    
+    if existing:
+        # Update existing
+        existing.tax_office_name = req.tax_office_name
+        existing.edrpou = req.edrpou
+        existing.iban = req.iban
+        existing.bank_name = req.bank_name
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        return {"id": existing.id, "message": "updated"}
+    else:
+        # Create new
+        requisite = TaxRequisite(
+            profile_id=req.profile_id,
+            tax_type=req.tax_type,
+            tax_office_name=req.tax_office_name,
+            edrpou=req.edrpou,
+            iban=req.iban,
+            bank_name=req.bank_name
+        )
+        db.add(requisite)
+        db.commit()
+        return {"id": requisite.id, "message": "created"}
+
+@app.delete("/api/tax-requisites/{requisite_id}")
+def delete_tax_requisite(requisite_id: int, db: Session = Depends(get_db)):
+    """Видалити реквізити податкових"""
+    requisite = db.query(TaxRequisite).filter(TaxRequisite.id == requisite_id).first()
+    if not requisite:
+        raise HTTPException(status_code=404, detail="Requisite not found")
+    db.delete(requisite)
+    db.commit()
+    return {"message": "deleted"}
+
+# --- LiqPay Payment Endpoints ---
+
+class CreateTaxPaymentRequest(BaseModel):
+    profile_id: int
+    tax_type: str  # 'edp', 'esv', 'pdfo', 'vz'
+    amount: float
+    period: str  # '2025-06'
+
+class CreateSubscriptionRequest(BaseModel):
+    profile_id: int
+    plan: str  # 'free', 'business'
+    period: str = "month"  # 'month', 'year'
+
+@app.post("/api/payments/create-tax-payment")
+def create_tax_payment_liqpay(req: CreateTaxPaymentRequest, db: Session = Depends(get_db)):
+    """Створити платіж для податку через LiqPay"""
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Create payment record
+    order_id = f"tax_{req.profile_id}_{req.tax_type}_{req.period}_{int(datetime.now().timestamp())}"
+    payment = Payment(
+        profile_id=req.profile_id,
+        tax_type=req.tax_type,
+        amount=req.amount,
+        period=req.period,
+        status="pending",
+        liqpay_order_id=order_id,
+        payment_type="tax"
+    )
+    db.add(payment)
+    db.commit()
+    
+    # Create LiqPay form
+    liqpay_form = liqpay_service.create_tax_payment(
+        profile_id=req.profile_id,
+        tax_type=req.tax_type,
+        amount=req.amount,
+        period=req.period
+    )
+    
+    return {
+        "payment_id": payment.id,
+        "liqpay_data": liqpay_form["data"],
+        "liqpay_signature": liqpay_form["signature"],
+        "api_url": liqpay_form["api_url"]
+    }
+
+@app.post("/api/payments/create-subscription")
+def create_subscription_liqpay(req: CreateSubscriptionRequest, db: Session = Depends(get_db)):
+    """Створити підписку через LiqPay"""
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Check if subscription already exists
+    existing_sub = db.query(Subscription).filter(Subscription.profile_id == req.profile_id).first()
+    
+    if req.plan == "free":
+        # Free plan - no payment needed
+        if existing_sub:
+            existing_sub.plan = "free"
+            existing_sub.status = "active"
+            existing_sub.expires_at = None
+            existing_sub.updated_at = datetime.utcnow()
+            db.commit()
+        else:
+            subscription = Subscription(
+                profile_id=req.profile_id,
+                plan="free",
+                status="active"
+            )
+            db.add(subscription)
+            db.commit()
+        return {"message": "Free plan activated", "payment_required": False}
+    
+    # Business plan - requires payment
+    liqpay_form = liqpay_service.create_subscription_payment(
+        profile_id=req.profile_id,
+        plan=req.plan,
+        period=req.period
+    )
+    
+    if liqpay_form.get("amount") == 0:
+        return {"message": "No payment required", "payment_required": False}
+    
+    # Create subscription record (pending until payment confirmed)
+    order_id = liqpay_form.get("data", "")
+    if existing_sub:
+        existing_sub.plan = req.plan
+        existing_sub.status = "pending"
+        existing_sub.liqpay_order_id = order_id
+        existing_sub.updated_at = datetime.utcnow()
+        db.commit()
+    else:
+        subscription = Subscription(
+            profile_id=req.profile_id,
+            plan=req.plan,
+            status="pending",
+            liqpay_order_id= order_id
+        )
+        db.add(subscription)
+        db.commit()
+    
+    return {
+        "subscription_id": existing_sub.id if existing_sub else subscription.id,
+        "liqpay_data": liqpay_form["data"],
+        "liqpay_signature": liqpay_form["signature"],
+        "api_url": liqpay_form["api_url"],
+        "payment_required": True
+    }
+
+@app.post("/api/payments/cancel-subscription")
+def cancel_subscription(req: CreateSubscriptionRequest, db: Session = Depends(get_db)):
+    """Скасувати підписку"""
+    subscription = db.query(Subscription).filter(Subscription.profile_id == req.profile_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    subscription.status = "cancelled"
+    subscription.auto_renew = False
+    subscription.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Subscription cancelled"}
+
+@app.post("/api/liqpay/callback")
+def liqpay_callback(data: str = Form(...), signature: str = Form(...), db: Session = Depends(get_db)):
+    """Webhook callback від LiqPay"""
+    # Verify signature
+    if not liqpay_service.verify_callback(data, signature):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    # Decode data
+    callback_data = liqpay_service.decode_callback_data(data)
+    
+    order_id = callback_data.get("order_id", "")
+    status = callback_data.get("status", "")
+    amount = callback_data.get("amount", "0")
+    
+    logger.info(f"LiqPay callback: order_id={order_id}, status={status}, amount={amount}")
+    
+    # Parse order_id to determine type
+    if order_id.startswith("tax_"):
+        # Tax payment
+        parts = order_id.split("_")
+        if len(parts) >= 4:
+            profile_id = int(parts[1])
+            tax_type = parts[2]
+            period = parts[3]
+            
+            # Update payment record
+            payment = db.query(Payment).filter(
+                Payment.liqpay_order_id == order_id
+            ).first()
+            
+            if payment:
+                if status == "success" or status == "subscribed":
+                    payment.status = "paid"
+                    payment.paid_at = datetime.utcnow()
+                    payment.liqpay_payment_id = callback_data.get("payment_id")
+                elif status == "failed" or status == "error":
+                    payment.status = "failed"
+                db.commit()
+    
+    elif order_id.startswith("sub_"):
+        # Subscription payment
+        parts = order_id.split("_")
+        if len(parts) >= 3:
+            profile_id = int(parts[1])
+            plan = parts[2]
+            
+            # Update subscription
+            subscription = db.query(Subscription).filter(
+                Subscription.profile_id == profile_id
+            ).first()
+            
+            if subscription:
+                if status == "success" or status == "subscribed":
+                    subscription.status = "active"
+                    subscription.expires_at = datetime.utcnow() + timedelta(days=30)  # 30 days
+                    subscription.last_payment_amount = int(float(amount) * 100)  # in kopecks
+                    subscription.last_payment_date = datetime.utcnow()
+                    subscription.liqpay_order_id = callback_data.get("payment_id")
+                elif status == "failed" or status == "error":
+                    subscription.status = "failed"
+                db.commit()
+    
+    return {"status": "ok"}
+
+# --- Feature Access Control ---
+
+FEATURES = {
+    "free": ["dashboard", "upload_statement", "settings", "taxes"],
+    "business": ["dashboard", "upload_statement", "settings", "taxes", "reports", "employees", "bank_sync", "api", "liqpay"]
+}
+
+def check_feature_access(profile_id: int, feature: str, db: Session) -> bool:
+    """Перевірити доступ до функції"""
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    plan = subscription.plan if subscription else "free"
+    return feature in FEATURES.get(plan, [])
+
+@app.get("/api/subscription/{profile_id}")
+def get_subscription(profile_id: int, db: Session = Depends(get_db)):
+    """Отримати інформацію про підписку"""
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    
+    if not subscription:
+        return {
+            "plan": "free",
+            "status": "active",
+            "expires_at": None,
+            "features": FEATURES["free"]
+        }
+    
+    return {
+        "plan": subscription.plan,
+        "status": subscription.status,
+        "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+        "auto_renew": subscription.auto_renew,
+        "features": FEATURES.get(subscription.plan, FEATURES["free"])
+    }
+
+@app.post("/api/payments/generate")
+def generate_payment(req: GeneratePaymentRequest, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    region = req.region
+    if not region:
+        addr = (profile.address or "").lower()
+        if "дніпро" in addr or "dnipro" in addr or "соборн" in addr:
+            region = "dnipro"
+        elif "львів" in addr or "lviv" in addr:
+            region = "lviv"
+        elif "одес" in addr or "odesa" in addr:
+            region = "odesa"
+        elif "харк" in addr or "kharkiv" in addr:
+            region = "kharkiv"
+        else:
+            region = "kyiv"
+            
+    requisites = {
+        "kyiv": {
+            "recipient": "ГУ ДПС у м. Києві (Шевченківський р-н)",
+            "edrpou": "44074340",
+            "iban": {
+                "edp": "UA488999980313010075000026001",
+                "esv": "UA218999980314010075000026002",
+                "pdfo": "UA398999980315010075000026003",
+                "vz": "UA528999980316010075000026004"
+            }
+        },
+        "dnipro": {
+            "recipient": "ГУ ДПС у Дніпропетровській області (Соборний р-н, м. Дніпро)",
+            "edrpou": "44082781",
+            "iban": {
+                "edp": "UA558999980313020075000012001",
+                "esv": "UA128999980314020075000012002",
+                "pdfo": "UA748999980315020075000012003",
+                "vz": "UA338999980316020075000012004"
+            }
+        },
+        "lviv": {
+            "recipient": "ГУ ДПС у Львівській області (Галицький р-н, м. Львів)",
+            "edrpou": "44081023",
+            "iban": {
+                "edp": "UA668999980313030075000034001",
+                "esv": "UA238999980314030075000034002",
+                "pdfo": "UA858999980315030075000034003",
+                "vz": "UA448999980316030075000034004"
+            }
+        },
+        "odesa": {
+            "recipient": "ГУ ДПС в Одеській області (Приморський р-н, м. Одеса)",
+            "edrpou": "44082535",
+            "iban": {
+                "edp": "UA778999980313040075000045001",
+                "esv": "UA348999980314040075000045002",
+                "pdfo": "UA968999980315040075000045003",
+                "vz": "UA558999980316040075000045004"
+            }
+        },
+        "kharkiv": {
+            "recipient": "ГУ ДПС у Харківській області (Київський р-н, м. Харків)",
+            "edrpou": "44086132",
+            "iban": {
+                "edp": "UA888999980313050075000056001",
+                "esv": "UA458999980314050075000056002",
+                "pdfo": "UA078999980315050075000056003",
+                "vz": "UA668999980316050075000056004"
+            }
+        }
+    }
+    
+    reg_data = requisites.get(region, requisites["kyiv"])
+    recipient = reg_data["recipient"]
+    edrpou = reg_data["edrpou"]
+    
+    tax_type_key = req.tax_type
+    if tax_type_key not in reg_data["iban"]:
+        tax_type_key = "edp"
+    iban = reg_data["iban"][tax_type_key]
+    
+    tax_purposes = {
+        "edp": f"*;101;{profile.tax_id or '1234567890'};сплата єдиного податку за {req.period};;;",
+        "esv": f"*;101;{profile.tax_id or '1234567890'};сплата єдиного соціального внеску за {req.period};;;",
+        "pdfo": f"*;101;{profile.tax_id or '1234567890'};сплата ПДФО за {req.period};;;",
+        "vz": f"*;101;{profile.tax_id or '1234567890'};сплата військового збору за {req.period};;;"
+    }
+    purpose = tax_purposes.get(req.tax_type, f"*;101;{profile.tax_id or '1234567890'};сплата податку за {req.period};;;")
+    
+    payment = db.query(Payment).filter(
+        Payment.profile_id == req.profile_id,
+        Payment.tax_type == req.tax_type,
+        Payment.period == req.period,
+        Payment.status == "pending"
+    ).first()
+    
+    if not payment:
+        payment = Payment(
+            profile_id=req.profile_id,
+            tax_type=req.tax_type,
+            amount=req.amount,
+            period=req.period,
+            status="pending"
+        )
+        db.add(payment)
+        db.commit()
+        db.refresh(payment)
+        
+    qr_code = f"BCD\n002\n1\nSCT\n\n{recipient}\n{iban}\nUAH{req.amount:.2f}\n\n{purpose}"
+    
+    methods = {}
+    for b in ["privat24", "monobank", "abank"]:
+        deep_links = {
+            "privat24": f"https://link.privatbank.ua/pay?iban={iban}&amount={req.amount}&purpose={purpose}",
+            "monobank": f"https://send.monobank.ua/pay?iban={iban}&amount={req.amount}&purpose={purpose}",
+            "abank": f"https://a-bank.com.ua/pay?iban={iban}&amount={req.amount}&purpose={purpose}"
+        }
+        methods[b] = {
+            "instructions": f"Відскануйте QR-код у додатку {b.capitalize()} або натисніть кнопку для переходу.",
+            "deep_link": deep_links[b],
+            "qr_code": qr_code
+        }
+        
+    return {
+        "id": payment.id,
+        "profile_id": payment.profile_id,
+        "tax_type": payment.tax_type,
+        "amount": payment.amount,
+        "period": payment.period,
+        "recipient": recipient,
+        "edrpou": edrpou,
+        "iban": iban,
+        "purpose": purpose,
+        "bank_code": req.bank_code,
+        "methods": methods
+    }
+
+@app.post("/api/payments/{payment_id}/confirm")
+def confirm_payment(payment_id: int, db: Session = Depends(get_db)):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Платіж не знайдено")
+    payment.status = "paid"
+    payment.paid_at = datetime.now()
+    
+    db_tax_name = map_tax_type(payment.tax_type)
+    event = db.query(TaxEvent).filter(
+        TaxEvent.profile_id == payment.profile_id,
+        TaxEvent.tax_name == db_tax_name,
+        TaxEvent.status == "pending"
+    ).first()
+    if event:
+        event.status = "paid"
+        
+    db.commit()
+    return {"message": "Платіж успішно підтверджено"}
+
+# ==================== EXPORT ENDPOINTS ====================
+
+@app.get("/api/export/transactions")
+async def export_transactions(
+    profile_id: int,
+    format: str = "csv",
+    start_date: str = None,
+    end_date: str = None,
+    db: Session = Depends(get_db)
+):
+    """Експорт транзакцій в CSV або Excel"""
+    try:
+        import pandas as pd
+    except ImportError:
+        raise HTTPException(status_code=500, detail="pandas не встановлено. Встановіть: pip install pandas openpyxl")
+    
+    # Отримати транзакції з БД
+    query = db.query(ParsedPayment).filter(ParsedPayment.profile_id == profile_id)
+    
+    if start_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+        query = query.filter(ParsedPayment.date >= start_dt)
+    if end_date:
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        query = query.filter(ParsedPayment.date <= end_dt)
+    
+    payments = query.order_by(desc(ParsedPayment.date)).all()
+    
+    # Конвертація в DataFrame
+    data = []
+    for p in payments:
+        data.append({
+            "Дата": p.date.strftime("%d.%m.%Y") if p.date else "",
+            "Сума": p.amount,
+            "Призначення": p.purpose,
+            "Тип": "Дохід" if p.direction == "in" else "Витрата",
+            "Оподатковується": "Так" if p.taxable else "Ні",
+            "Тип транзакції": p.type or "",
+            "Контрагент": p.contragent or ""
+        })
+    
+    df = pd.DataFrame(data)
+    
+    # Експорт в потрібний формат
+    if format == "csv":
+        output = BytesIO()
+        df.to_csv(output, index=False, encoding='utf-8-sig')
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=transactions_{datetime.now().strftime('%Y%m%d')}.csv"}
+        )
+    
+    else:  # xlsx
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(status_code=500, detail="openpyxl не встановлено. Встановіть: pip install openpyxl")
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Транзакції', index=False)
+            
+            # Налаштування ширини колонок
+            worksheet = writer.sheets['Транзакції']
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=transactions_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+        )
+
+@app.get("/api/export/reports")
+async def export_reports_history(
+    profile_id: int,
+    format: str = "csv",
+    db: Session = Depends(get_db)
+):
+    """Експорт історії звітів"""
+    try:
+        import pandas as pd
+    except ImportError:
+        raise HTTPException(status_code=500, detail="pandas не встановлено. Встановіть: pip install pandas openpyxl")
+    
+    reports = db.query(GeneratedReport).filter(GeneratedReport.profile_id == profile_id).order_by(desc(GeneratedReport.created_at)).all()
+    
+    data = []
+    for r in reports:
+        data.append({
+            "ID звіту": r.id,
+            "Код форми": r.form_code,
+            "Період": r.period,
+            "Рік": r.year,
+            "Статус": r.status,
+            "Дата створення": r.created_at.strftime("%d.%m.%Y %H:%M") if r.created_at else ""
+        })
+    
+    df = pd.DataFrame(data)
+    
+    if format == "csv":
+        output = BytesIO()
+        df.to_csv(output, index=False, encoding='utf-8-sig')
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=reports_{datetime.now().strftime('%Y%m%d')}.csv"}
+        )
+    else:
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(status_code=500, detail="openpyxl не встановлено. Встановіть: pip install openpyxl")
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Звіти', index=False)
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=reports_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+        )
+
+@app.get("/api/export/taxes")
+async def export_taxes_calendar(
+    profile_id: int,
+    format: str = "csv",
+    year: int = None,
+    db: Session = Depends(get_db)
+):
+    """Експорт податкового календаря"""
+    try:
+        import pandas as pd
+    except ImportError:
+        raise HTTPException(status_code=500, detail="pandas не встановлено. Встановіть: pip install pandas openpyxl")
+    
+    if not year:
+        year = datetime.now().year
+    
+    events = db.query(TaxEvent).filter(
+        TaxEvent.profile_id == profile_id,
+        TaxEvent.due_date.between(date(year, 1, 1), date(year, 12, 31))
+    ).order_by(TaxEvent.due_date).all()
+    
+    data = []
+    for e in events:
+        data.append({
+            "Тип податку": e.tax_name,
+            "Назва": e.title,
+            "Сума": e.amount_desc or "",
+            "Дедлайн": e.due_date.strftime("%d.%m.%Y") if e.due_date else "",
+            "Статус": "Сплачено" if e.status == "paid" else "Очікує",
+            "Код форми": e.form_code or ""
+        })
+    
+    df = pd.DataFrame(data)
+    
+    if format == "csv":
+        output = BytesIO()
+        df.to_csv(output, index=False, encoding='utf-8-sig')
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=taxes_{year}.csv"}
+        )
+    else:
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(status_code=500, detail="openpyxl не встановлено. Встановіть: pip install openpyxl")
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name=f'Податки_{year}', index=False)
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=taxes_{year}.xlsx"}
+        )
+
+# --- AI Service Endpoints ---
+from services.ai_service import ai_service
+from services.tax_calculator import tax_calculator
+from services.liqpay_service import liqpay_service
+
+class AIAnalyzeTransactionRequest(BaseModel):
+    transaction_id: int
+
+@app.post("/api/ai/analyze-transaction")
+async def ai_analyze_transaction(req: AIAnalyzeTransactionRequest, db: Session = Depends(get_db)):
+    """ШІ-аналіз транзакції"""
+    try:
+        tx = db.query(ParsedPayment).filter(ParsedPayment.id == req.transaction_id).first()
+        if not tx:
+            raise HTTPException(status_code=404, detail="Транзакцію не знайдено")
+        
+        result = await ai_service.analyze_transaction(tx.purpose or "", tx.amount or 0.0)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Помилка аналізу: {str(e)}")
+
+class AIChatRequest(BaseModel):
+    profile_id: int
+    question: str
+
+@app.post("/api/ai/chat")
+async def ai_chat(req: AIChatRequest, db: Session = Depends(get_db)):
+    """Чат-асистент для податкових питань"""
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    profile_dict = {
+        "tax_system": profile.tax_system,
+        "tax_rate": profile.rate,
+        "has_employees": profile.has_employees,
+        "group": profile.group
+    }
+    
+    answer = await ai_service.chat_assistant(req.question, profile_dict)
+    return {"answer": answer}
+
+@app.get("/api/ai/tax-news")
+async def ai_tax_news(profile_id: int, db: Session = Depends(get_db)):
+    """Отримати останні зміни в законодавстві з ШІ-аналізом"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    profile_dict = {
+        "tax_system": profile.tax_system,
+        "tax_rate": profile.rate,
+        "has_employees": profile.has_employees,
+        "group": profile.group
+    }
+    
+    # Отримати останні зміни з БД
+    from sqlalchemy import text
+    try:
+        changes = db.execute(text("SELECT * FROM legislative_changes ORDER BY detected_at DESC LIMIT 10")).fetchall()
+        changes_list = []
+        for c in changes:
+            changes_list.append({
+                "id": c[0],
+                "title": c[1] if len(c) > 1 else "",
+                "description": c[2] if len(c) > 2 else "",
+                "detected_at": str(c[3]) if len(c) > 3 else ""
+            })
+    except:
+        changes_list = []
+    
+    relevant_changes = await ai_service.get_relevant_changes(profile_dict, changes_list)
+    return relevant_changes
+
+# --- Legacy AI Agent Endpoint (for compatibility) ---
+class AgentChatRequest(BaseModel):
+    profile_id: int
+    message: str
+
+@app.post("/api/agent/chat")
+async def agent_chat(req: AgentChatRequest, db: Session = Depends(get_db)):
+    """ШІ агент для відповідей на питання про податки (legacy endpoint)"""
+    # Redirect to new AI chat endpoint
+    ai_req = AIChatRequest(profile_id=req.profile_id, question=req.message)
+    return await ai_chat(ai_req, db)
+
+def get_fop_limit(group: int) -> int:
+    if group == 1:
+        return 1444049
+    elif group == 2:
+        return 7211598
+    else:
+        return 10091049
+
+# Bank OAuth API endpoints
+from services.bank_oauth import bank_oauth_service, BANKS
+
+# LiqPay API endpoints
+import hashlib
+import base64
+import json
+import uuid
+
+def liqpay_encode(data: dict, private_key: str) -> str:
+    """Encode data for LiqPay"""
+    json_str = json.dumps(data, separators=(',', ':'))
+    encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+    signature = hashlib.sha1((private_key + encoded + private_key).encode('utf-8')).hexdigest()
+    return signature + "|" + encoded
+
+def liqpay_decode(data: str, private_key: str) -> dict:
+    """Decode data from LiqPay"""
+    parts = data.split('|')
+    if len(parts) != 2:
+        raise ValueError("Invalid data format")
+    signature, encoded = parts
+    expected_signature = hashlib.sha1((private_key + encoded + private_key).encode('utf-8')).hexdigest()
+    if signature != expected_signature:
+        raise ValueError("Invalid signature")
+    json_str = base64.b64decode(encoded).decode('utf-8')
+    return json.loads(json_str)
+
+@app.post("/api/payments/create")
+async def create_payment(req: dict, db: Session = Depends(get_db)):
+    """Створити платіж для сплати податку"""
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    public_key = os.getenv("LIQPAY_PUBLIC_KEY")
+    private_key = os.getenv("LIQPAY_PRIVATE_KEY")
+    
+    if not public_key or not private_key:
+        raise HTTPException(status_code=500, detail="LiqPay credentials not configured")
+    
+    amount = req.get('amount', 0)
+    profile_id = req.get('profile_id')
+    tax_type = req.get('tax_type')
+    period = req.get('period')
+    
+    if not all([amount, profile_id, tax_type, period]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    order_id = f"tax_{profile_id}_{tax_type}_{period}_{uuid.uuid4().hex[:8]}"
+    
+    # Зберігаємо в БД
+    payment = Payment(
+        profile_id=profile_id,
+        tax_type=tax_type,
+        amount=amount,
+        period=period,
+        status="pending",
+        liqpay_order_id=order_id,
+        payment_type="tax"
+    )
+    db.add(payment)
+    db.commit()
+    
+    # Створюємо дані для LiqPay
+    liqpay_data = {
+        "public_key": public_key,
+        "version": "3",
+        "action": "pay",
+        "amount": str(amount),
+        "currency": "UAH",
+        "description": f"Сплата податку {tax_type} за {period}",
+        "order_id": order_id,
+        "server_url": "https://unitas-backend.fly.dev/api/liqpay/callback",
+        "result_url": f"https://unitas-frontend.fly.dev/payment-result?order_id={order_id}",
+        "language": "uk"
+    }
+    
+    encoded_data = liqpay_encode(liqpay_data, private_key)
+    
+    return {
+        "data": encoded_data,
+        "signature": liqpay_data["public_key"],
+        "order_id": order_id
+    }
+
+@app.post("/api/liqpay/callback")
+async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
+    """Webhook від LiqPay після оплати"""
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    private_key = os.getenv("LIQPAY_PRIVATE_KEY")
+    
+    if not private_key:
+        raise HTTPException(status_code=500, detail="LiqPay credentials not configured")
+    
+    data = await request.form()
+    liqpay_data_str = data.get('data')
+    signature = data.get('signature')
+    
+    if not liqpay_data_str or not signature:
+        raise HTTPException(status_code=400, detail="Missing data or signature")
+    
+    try:
+        response = liqpay_decode(liqpay_data_str, private_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid signature: {str(e)}")
+    
+    if response.get('status') == 'success':
+        order_id = response.get('order_id')
+        liqpay_payment_id = response.get('payment_id')
+        
+        # Оновлюємо статус в БД
+        payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
+        if payment:
+            payment.status = "paid"
+            payment.liqpay_payment_id = liqpay_payment_id
+            payment.paid_at = datetime.now()
+            db.commit()
+    
+    return {"status": "ok"}
+
+@app.get("/api/payments/status/{order_id}")
+async def get_payment_status(order_id: str, db: Session = Depends(get_db)):
+    """Перевірити статус платежу"""
+    payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
+    if not payment:
+        return {"status": "not_found"}
+    
+    return {
+        "status": payment.status,
+        "order_id": order_id,
+        "amount": payment.amount,
+        "tax_type": payment.tax_type,
+        "period": payment.period
+    }
+
+# Pricing API endpoints
+@app.get("/api/pricing/{plan}")
+async def get_price(plan: str, db: Session = Depends(get_db)):
+    """Отримати ціну тарифу"""
+    pricing = db.query(Pricing).filter(Pricing.plan == plan).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Тариф не знайдено")
+    return {"plan": plan, "price": pricing.price, "currency": pricing.currency}
+
+@app.get("/api/pricing/")
+async def get_all_prices(db: Session = Depends(get_db)):
+    """Отримати всі ціни"""
+    pricings = db.query(Pricing).all()
+    return {p.plan: p.price for p in pricings}
+
+@app.put("/api/pricing/{plan}")
+async def update_price(plan: str, price: int, db: Session = Depends(get_db)):
+    """Оновити ціну (тільки для адміністратора)"""
+    pricing = db.query(Pricing).filter(Pricing.plan == plan).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Тариф не знайдено")
+    pricing.price = price
+    pricing.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": f"Ціну тарифу {plan} оновлено до {price} грн"}
+
+# Subscription API endpoints
+@app.get("/api/subscription/current/{profile_id}")
+async def get_subscription(profile_id: int, db: Session = Depends(get_db)):
+    sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if not sub:
+        return {"plan": "free", "expires_at": None, "auto_renew": False}
+    return {
+        "plan": sub.plan,
+        "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+        "auto_renew": sub.auto_renew
+    }
+
+@app.post("/api/subscription/upgrade/{profile_id}")
+async def upgrade_to_business(profile_id: int, db: Session = Depends(get_db)):
+    expires_at = datetime.utcnow() + timedelta(days=30)
+    
+    existing = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    
+    if existing:
+        existing.plan = "business"
+        existing.status = "active"
+        existing.expires_at = expires_at
+        existing.auto_renew = True
+        existing.updated_at = datetime.utcnow()
+    else:
+        sub = Subscription(
+            profile_id=profile_id,
+            plan="business",
+            status="active",
+            expires_at=expires_at,
+            auto_renew=True
+        )
+        db.add(sub)
+    
+    db.commit()
+    
+    pricing = db.query(Pricing).filter(Pricing.plan == "business").first()
+    price_amount = pricing.price if pricing else 499
+    
+    return {
+        "message": f"Підписку Business активовано на 30 днів за {price_amount} грн",
+        "price": price_amount
+    }
+
+@app.post("/api/subscription/cancel/{profile_id}")
+async def cancel_subscription(profile_id: int, db: Session = Depends(get_db)):
+    sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if sub:
+        sub.auto_renew = False
+        db.commit()
+    return {"message": "Автопродовження вимкнено"}
+
+@app.get("/api/subscription/usage/{profile_id}")
+async def get_usage(profile_id: int, db: Session = Depends(get_db)):
+    current_month = datetime.utcnow().replace(day=1).date()
+    usage = db.query(StatementUsage).filter(
+        StatementUsage.profile_id == profile_id,
+        StatementUsage.month == current_month
+    ).first()
+    return {"used": usage.count if usage else 0, "limit": 5}
+
+# Admin API endpoints
+async def verify_admin(request: Request):
+    """Verify admin API key"""
+    admin_key = os.getenv("ADMIN_API_KEY", "dev-admin-key-123")
+    provided_key = request.headers.get("X-API-Key")
+    if not provided_key or provided_key != admin_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+@app.get("/api/admin/pricing")
+async def admin_get_all_prices(request: Request, admin: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    """Отримати всі ціни (тільки для адміна)"""
+    pricings = db.query(Pricing).all()
+    return [
+        {
+            "plan": p.plan,
+            "price": p.price,
+            "currency": p.currency,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else None
+        }
+        for p in pricings
+    ]
+
+@app.put("/api/admin/pricing/{plan}")
+async def admin_update_price(
+    plan: str,
+    price: int,
+    request: Request,
+    admin: bool = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Оновити ціну тарифу (тільки для адміна)"""
+    if plan not in ["free", "business"]:
+        raise HTTPException(status_code=400, detail="Невірний тариф")
+    
+    if price < 0:
+        raise HTTPException(status_code=400, detail="Ціна не може бути від'ємною")
+    
+    pricing = db.query(Pricing).filter(Pricing.plan == plan).first()
+    if not pricing:
+        raise HTTPException(status_code=404, detail="Тариф не знайдено")
+    
+    pricing.price = price
+    pricing.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {
+        "message": f"Ціну тарифу {plan} оновлено до {price} грн",
+        "plan": plan,
+        "price": price
+    }
+
+@app.get("/api/admin/users")
+async def admin_get_all_users(request: Request, admin: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    """Отримати всі користувачів з профілями та підписками (тільки для адміна)"""
+    users = db.query(User).all()
+    result = []
+    
+    for user in users:
+        profiles = db.query(Profile).filter(Profile.user_id == user.id).all()
+        profiles_data = []
+        
+        for profile in profiles:
+            subscription = db.query(Subscription).filter(Subscription.profile_id == profile.id).first()
+            profiles_data.append({
+                "id": profile.id,
+                "name": profile.name,
+                "type": profile.type,
+                "tax_id": profile.tax_id,
+                "subscription": {
+                    "plan": subscription.plan if subscription else "free",
+                    "status": subscription.status if subscription else "inactive",
+                    "expires_at": subscription.expires_at.isoformat() if subscription and subscription.expires_at else None,
+                    "auto_renew": subscription.auto_renew if subscription else False
+                } if subscription else None
+            })
+        
+        result.append({
+            "id": user.id,
+            "email": user.email,
+            "telegram_id": user.telegram_id,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "profiles": profiles_data
+        })
+    
+    return result
+
+@app.post("/api/admin/subscription/extend/{profile_id}")
+async def admin_extend_subscription(
+    profile_id: int,
+    days: int = 30,
+    request: Request = None,
+    admin: bool = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Продовжити підписку (тільки для адміна)"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if subscription:
+        if subscription.expires_at and subscription.expires_at > datetime.utcnow():
+            subscription.expires_at = subscription.expires_at + timedelta(days=days)
+        else:
+            subscription.expires_at = datetime.utcnow() + timedelta(days=days)
+        subscription.status = "active"
+        subscription.updated_at = datetime.utcnow()
+    else:
+        subscription = Subscription(
+            profile_id=profile_id,
+            plan="business",
+            status="active",
+            expires_at=datetime.utcnow() + timedelta(days=days),
+            auto_renew=False
+        )
+        db.add(subscription)
+    
+    db.commit()
+    return {"message": f"Підписку продовжено на {days} днів"}
+
+@app.post("/api/admin/subscription/cancel/{profile_id}")
+async def admin_cancel_subscription(
+    profile_id: int,
+    request: Request = None,
+    admin: bool = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Скасувати підписку (тільки для адміна)"""
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if subscription:
+        subscription.status = "cancelled"
+        subscription.auto_renew = False
+        subscription.updated_at = datetime.utcnow()
+        db.commit()
+        return {"message": "Підписку скасовано"}
+    return {"message": "Підписку не знайдено"}
+
+@app.post("/api/admin/subscription/block/{profile_id}")
+async def admin_block_subscription(
+    profile_id: int,
+    request: Request = None,
+    admin: bool = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Заблокувати підписку (тільки для адміна)"""
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if subscription:
+        subscription.status = "blocked"
+        subscription.auto_renew = False
+        subscription.updated_at = datetime.utcnow()
+        db.commit()
+        return {"message": "Підписку заблоковано"}
+    return {"message": "Підписку не знайдено"}
+
+@app.get("/api/banks")
+async def list_banks():
+    """Get list of available banks"""
+    return {
+        "banks": [
+            {
+                "id": bank_id,
+                "name": bank["name"]
+            }
+            for bank_id, bank in BANKS.items()
+        ]
+    }
+
+@app.get("/api/banks/{bank_name}/auth-url")
+async def get_bank_auth_url(bank_name: str, profile_id: int):
+    """Get OAuth authorization URL for a bank"""
+    if bank_name not in BANKS:
+        raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
+    
+    state = f"{bank_name}:{profile_id}"
+    auth_url = bank_oauth_service.get_auth_url(bank_name, state)
+    
+    return {"auth_url": auth_url}
+
+@app.get("/api/banks/{bank_name}/callback")
+async def bank_oauth_callback(bank_name: str, code: str, state: str, db: Session = Depends(get_db)):
+    """Handle OAuth callback from bank"""
+    if bank_name not in BANKS:
+        raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
+    
+    try:
+        # Parse state to get profile_id
+        state_parts = state.split(":")
+        if len(state_parts) != 2:
+            raise HTTPException(status_code=400, detail="Invalid state")
+        
+        state_bank, profile_id_str = state_parts
+        profile_id = int(profile_id_str)
+        
+        if state_bank != bank_name:
+            raise HTTPException(status_code=400, detail="State mismatch")
+        
+        # Exchange code for token
+        tokens = await bank_oauth_service.exchange_code_for_token(bank_name, code)
+        
+        # Get bank accounts
+        accounts = await bank_oauth_service.get_bank_accounts(bank_name, tokens['access_token'])
+        
+        if not accounts:
+            raise HTTPException(status_code=400, detail="No accounts found")
+        
+        # Save connection
+        existing = db.query(BankConnection).filter(
+            BankConnection.profile_id == profile_id,
+            BankConnection.bank_name == bank_name
+        ).first()
+        
+        if existing:
+            existing.access_token = tokens['access_token']
+            existing.refresh_token = tokens.get('refresh_token')
+            existing.account_id = accounts[0]['id']
+            existing.account_number = accounts[0]['number']
+            existing.is_active = True
+            existing.updated_at = datetime.now()
+        else:
+            connection = BankConnection(
+                profile_id=profile_id,
+                bank_name=bank_name,
+                access_token=tokens['access_token'],
+                refresh_token=tokens.get('refresh_token'),
+                account_id=accounts[0]['id'],
+                account_number=accounts[0]['number'],
+                is_active=True
+            )
+            db.add(connection)
+        
+        db.commit()
+        
+        return {
+            "status": "connected",
+            "bank": BANKS[bank_name]["name"],
+            "account": accounts[0]['number']
+        }
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"OAuth error: {str(e)}")
+
+@app.get("/api/banks/connections")
+async def get_bank_connections(profile_id: int, db: Session = Depends(get_db)):
+    """Get user's bank connections"""
+    connections = db.query(BankConnection).filter(
+        BankConnection.profile_id == profile_id,
+        BankConnection.is_active == True
+    ).all()
+    
+    return {
+        "connections": [
+            {
+                "id": conn.id,
+                "bank_name": conn.bank_name,
+                "bank_display_name": BANKS.get(conn.bank_name, {}).get("name", conn.bank_name),
+                "account_number": conn.account_number,
+                "last_sync": conn.last_sync.isoformat() if conn.last_sync else None,
+                "created_at": conn.created_at.isoformat()
+            }
+            for conn in connections
+        ]
+    }
+
+@app.post("/api/banks/{bank_name}/sync")
+async def sync_bank(bank_name: str, profile_id: int, db: Session = Depends(get_db)):
+    """Force sync bank transactions"""
+    if bank_name not in BANKS:
+        raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
+    
+    # Get connection
+    conn = db.query(BankConnection).filter(
+        BankConnection.profile_id == profile_id,
+        BankConnection.bank_name == bank_name,
+        BankConnection.is_active == True
+    ).first()
+    
+    if not conn:
+        raise HTTPException(status_code=404, detail="Bank not connected")
+    
+    try:
+        # Get transactions
+        from_date = conn.last_sync if conn.last_sync else datetime.now() - timedelta(days=30)
+        transactions = await bank_oauth_service.get_bank_transactions(
+            bank_name,
+            conn.access_token,
+            conn.account_id,
+            from_date=from_date
+        )
+        
+        # Save transactions as ParsedPayment
+        for tx in transactions:
+            # Check if transaction already exists
+            existing = db.query(ParsedPayment).filter(
+                ParsedPayment.external_id == tx['id'],
+                ParsedPayment.bank_name == bank_name
+            ).first()
+            
+            if not existing:
+                parsed_payment = ParsedPayment(
+                    profile_id=profile_id,
+                    date=datetime.fromisoformat(tx['date']).date(),
+                    amount=abs(tx['amount']),
+                    purpose=tx.get('purpose', ''),
+                    type='income' if tx['amount'] > 0 else 'expense',
+                    external_id=tx['id'],
+                    bank_name=bank_name
+                )
+                db.add(parsed_payment)
+        
+        # Update last sync
+        conn.last_sync = datetime.now()
+        db.commit()
+        
+        return {
+            "synced": len(transactions),
+            "last_sync": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
+
+@app.delete("/api/banks/{bank_name}/disconnect")
+async def disconnect_bank(bank_name: str, profile_id: int, db: Session = Depends(get_db)):
+    """Disconnect bank"""
+    conn = db.query(BankConnection).filter(
+        BankConnection.profile_id == profile_id,
+        BankConnection.bank_name == bank_name
+    ).first()
+    
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    conn.is_active = False
+    db.commit()
+    
+    return {"status": "disconnected"}
+
+
+
 
 

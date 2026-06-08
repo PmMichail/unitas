@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 import {
   Calendar as CalendarIcon,
   CheckCircle,
@@ -18,7 +19,8 @@ import {
   Mail,
   Send,
   TrendingUp,
-  Activity
+  Activity,
+  RefreshCw
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -125,6 +127,28 @@ export default function CalendarPage() {
     setToastMessage("Нагадування успішно налаштовано!");
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
+  };
+
+  const handleRegenerateCalendar = async () => {
+    if (!activeProfileId) return;
+    if (!window.confirm("Ви впевнені, що хочете перегенерувати податковий календар? Всі існуючі події будуть видалені та створені нові.")) {
+      return;
+    }
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+      const response = await axios.post(`${apiUrl}/api/tax-calendar/regenerate`, null, {
+        params: { profile_id: activeProfileId }
+      });
+      setToastMessage(response.data.message);
+      fetchEvents();
+      triggerDashboardReload();
+      setTimeout(() => setShowToast(false), 4000);
+    } catch (err) {
+      console.error("Failed to regenerate calendar:", err);
+      setToastMessage("Помилка при перегенерації календаря");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    }
   };
 
   const handleNodeClick = (eventId: number) => {
@@ -284,6 +308,13 @@ export default function CalendarPage() {
             Відстежуйте дедлайни звітів та сплат для профілю: <span className="font-bold text-slate-200">{selectedProfile.name}</span>
           </p>
         </div>
+        <button
+          onClick={handleRegenerateCalendar}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-xl bg-amber-600 hover:bg-amber-500 text-white transition-colors shadow-lg shadow-amber-600/20"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Оновити календар
+        </button>
       </div>
 
       {/* Interactive Timeline Graph */}

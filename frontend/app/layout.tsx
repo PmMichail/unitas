@@ -26,7 +26,9 @@ import {
   LogOut,
   CreditCard,
   Shield,
-  AlertCircle
+  AlertCircle,
+  Cpu,
+  Bot
 } from "lucide-react";
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
@@ -84,10 +86,12 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Звіти", href: "/reports", icon: FileSpreadsheet },
     { name: "Пошта", href: "/settings/email", icon: Mail },
     { name: "КЕП (Підписи)", href: "/settings/certificates", icon: Shield },
+    { name: "API ДПС", href: "/settings/tax-api", icon: Cpu },
     { name: "Налаштування", href: "/settings", icon: SettingsIcon },
   ];
 
-  if (pathname === "/login") {
+  const noLayoutPaths = ["/login", "/admin", "/privacy", "/terms"];
+  if (noLayoutPaths.includes(pathname)) {
     return (
       <div className="min-h-screen bg-[#fafbfd] dark:bg-[#090d16] text-[#090e1a] dark:text-[#f1f5f9] font-sans">
         {children}

@@ -35,7 +35,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Дашборд',
-          headerTitle: 'UniTax Дашборд',
+          headerShown: false,
           tabBarLabel: 'Головна',
           tabBarIcon: ({ color, size }) => <LayoutDashboard size={size} color={color} />,
         }}

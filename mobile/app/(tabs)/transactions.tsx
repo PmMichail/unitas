@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,6 +12,12 @@ import {
   RefreshControl,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
+  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -41,6 +47,25 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export default function TransactionsScreen() {
   const { colors } = useTheme();
   const { telegramId } = useAuth();
+  const { height: windowHeight } = useWindowDimensions();
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardHeight(0)
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const modalMaxHeight = Math.min(windowHeight * 0.8, windowHeight - keyboardHeight - 100);
 
   const [profiles, setProfiles] = useState<ProfileData[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileData | null>(null);
@@ -568,114 +593,138 @@ export default function TransactionsScreen() {
       )}
 
       {/* Edit Transaction Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={editModalVisible}
-        onRequestClose={() => setEditModalVisible(false)}
-      >
+      {editModalVisible && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={editModalVisible}
+          onRequestClose={() => setEditModalVisible(false)}
+        >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Редагувати операцію</Text>
-              <Pressable onPress={() => setEditModalVisible(false)} style={styles.closeBtn}>
-                <X size={24} color={colors.text} />
-              </Pressable>
-            </View>
-
-            <View style={styles.txDetailBox}>
-              <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Контрагент (можна редагувати)</Text>
-              <TextInput
-                style={[
-                  styles.modalInput,
-                  {
-                    color: colors.text,
-                    borderColor: colors.border,
-                    backgroundColor: colors.background,
-                  }
-                ]}
-                value={txContragent}
-                onChangeText={setTxContragent}
-                placeholder="Невідомий контрагент"
-                placeholderTextColor={colors.textMuted + '80'}
-              />
-
-              <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Призначення платежу</Text>
-              <Text style={[styles.detailVal, { color: colors.text, fontSize: 13 }]}>
-                {selectedTx?.purpose}
-              </Text>
-
-              <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Сума операції (можна редагувати)</Text>
-              <TextInput
-                style={[
-                  styles.modalInput,
-                  {
-                    color: colors.text,
-                    borderColor: colors.border,
-                    backgroundColor: colors.background,
-                  }
-                ]}
-                keyboardType="numeric"
-                value={txAmount}
-                onChangeText={setTxAmount}
-                placeholder="Сума в ₴"
-                placeholderTextColor={colors.textMuted + '80'}
-              />
-            </View>
-
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-            {/* Taxable Toggle */}
-            <View style={styles.switchRow}>
-              <View>
-                <Text style={[styles.switchTitle, { color: colors.text }]}>Враховувати в податках</Text>
-                <Text style={[styles.switchDesc, { color: colors.textMuted }]}>
-                  Чи є ця операція об'єктом оподаткування?
-                </Text>
-              </View>
-              <Switch
-                value={txTaxable}
-                onValueChange={setTxTaxable}
-                trackColor={{ false: '#767577', true: colors.primary }}
-                thumbColor={txTaxable ? '#ffffff' : '#f4f3f4'}
-              />
-            </View>
-
-            {/* Category selection */}
-            <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Категорія операції</Text>
-            <View style={styles.categoryGrid}>
-              {[
-                { type: 'income', label: 'Дохід' },
-                { type: 'expense', label: 'Витрати' },
-                { type: 'own_funds', label: 'Власні' },
-                { type: 'refund', label: 'Поверн.' },
-                { type: 'loan', label: 'Позика' },
-              ].map((c) => (
-                <Pressable
-                  key={c.type}
-                  style={[
-                    styles.categoryBtn,
-                    txType === c.type && { backgroundColor: colors.primary },
-                    { borderColor: colors.cardBorder },
-                  ]}
-                  onPress={() => setTxType(c.type as any)}
-                >
-                  <Text style={[styles.categoryBtnText, txType === c.type && { color: '#ffffff' }, { color: colors.text }]}>
-                    {c.label}
-                  </Text>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setEditModalVisible(false)} />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ width: '100%', justifyContent: 'flex-end' }}
+            pointerEvents="box-none"
+          >
+            <View
+              style={[
+                styles.modalContent,
+                {
+                  backgroundColor: colors.background,
+                  borderColor: colors.cardBorder,
+                  maxHeight: modalMaxHeight,
+                  overflow: 'hidden',
+                  width: '100%',
+                  flexGrow: 0,
+                  flexShrink: 1,
+                },
+              ]}
+            >
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>Редагувати операцію</Text>
+                <Pressable onPress={() => setEditModalVisible(false)} style={styles.closeBtn}>
+                  <X size={24} color={colors.text} />
                 </Pressable>
-              ))}
-            </View>
+              </View>
 
-            <Button
-              title="Зберегти зміни"
-              onPress={handleSaveTx}
-              isLoading={updating}
-              style={styles.saveBtn}
-            />
-          </View>
+                  <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
+                    <View style={styles.txDetailBox}>
+                      <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Контрагент (можна редагувати)</Text>
+                      <TextInput
+                        style={[
+                          styles.modalInput,
+                          {
+                            color: colors.text,
+                            borderColor: colors.border,
+                            backgroundColor: colors.background,
+                          }
+                        ]}
+                        value={txContragent}
+                        onChangeText={setTxContragent}
+                        placeholder="Невідомий контрагент"
+                        placeholderTextColor={colors.textMuted + '80'}
+                      />
+
+                      <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Призначення платежу</Text>
+                      <Text style={[styles.detailVal, { color: colors.text, fontSize: 13 }]}>
+                        {selectedTx?.purpose}
+                      </Text>
+
+                      <Text style={[styles.detailLabel, { color: colors.textMuted }]}>Сума операції (можна редагувати)</Text>
+                      <TextInput
+                        style={[
+                          styles.modalInput,
+                          {
+                            color: colors.text,
+                            borderColor: colors.border,
+                            backgroundColor: colors.background,
+                          }
+                        ]}
+                        keyboardType="numeric"
+                        value={txAmount}
+                        onChangeText={setTxAmount}
+                        placeholder="Сума в ₴"
+                        placeholderTextColor={colors.textMuted + '80'}
+                      />
+                    </View>
+
+                    <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                    {/* Taxable Toggle */}
+                    <View style={styles.switchRow}>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={[styles.switchTitle, { color: colors.text }]}>Враховувати в податках</Text>
+                        <Text style={[styles.switchDesc, { color: colors.textMuted }]} numberOfLines={2}>
+                          Чи є ця операція об'єктом оподаткування?
+                        </Text>
+                      </View>
+                      <Switch
+                        value={txTaxable}
+                        onValueChange={setTxTaxable}
+                        trackColor={{ false: '#767577', true: colors.primary }}
+                        thumbColor={txTaxable ? '#ffffff' : '#f4f3f4'}
+                      />
+                    </View>
+
+                    {/* Category selection */}
+                    <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Категорія операції</Text>
+                    <View style={styles.categoryGrid}>
+                      {[
+                        { type: 'income', label: 'Дохід' },
+                        { type: 'expense', label: 'Витрати' },
+                        { type: 'own_funds', label: 'Власні' },
+                        { type: 'refund', label: 'Поверн.' },
+                        { type: 'loan', label: 'Позика' },
+                      ].map((c) => (
+                        <Pressable
+                          key={c.type}
+                          style={[
+                            styles.categoryBtn,
+                            txType === c.type && { backgroundColor: colors.primary },
+                            { borderColor: colors.cardBorder },
+                          ]}
+                          onPress={() => setTxType(c.type as any)}
+                        >
+                          <Text style={[styles.categoryBtnText, txType === c.type && { color: '#ffffff' }, { color: colors.text }]}>
+                            {c.label}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+
+                    <Button
+                      title="Зберегти зміни"
+                      onPress={handleSaveTx}
+                      isLoading={updating}
+                      style={styles.saveBtn}
+                    />
+                  </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
+      )}
     </View>
   );
 }
@@ -825,6 +874,13 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 1,
+    maxHeight: Dimensions.get('window').height * 0.80,
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 1,
+    overflow: 'hidden',
     padding: 24,
   },
   modalHeader: {

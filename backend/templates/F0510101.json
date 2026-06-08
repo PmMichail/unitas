@@ -1,0 +1,20 @@
+{
+  "form_code": "F0510101",
+  "name": "Об'єднаний звіт про нараховані суми доходів, утриманих та сплачених податків",
+  "description": "Об'єднаний звіт для подання до ДПС (включає ЄП, ЄСВ, військовий збір, ПДФО)",
+  "period_type": "quarterly",
+  "fields": [
+    {"id": "income_q1", "label": "Дохід за 1 квартал", "type": "number", "required": true},
+    {"id": "income_q2", "label": "Дохід за 2 квартал", "type": "number", "required": true},
+    {"id": "income_q3", "label": "Дохід за 3 квартал", "type": "number", "required": true},
+    {"id": "income_q4", "label": "Дохід за 4 квартал", "type": "number", "required": true},
+    {"id": "tax_due", "label": "Нараховано податку", "type": "number", "required": true},
+    {"id": "tax_paid", "label": "Сплачено податку", "type": "number", "required": true},
+    {"id": "esv_due", "label": "Нараховано ЄСВ", "type": "number", "required": true},
+    {"id": "esv_paid", "label": "Сплачено ЄСВ", "type": "number", "required": true},
+    {"id": "military_tax_due", "label": "Нараховано військовий збір", "type": "number", "required": true},
+    {"id": "military_tax_paid", "label": "Сплачено військовий збір", "type": "number", "required": true},
+    {"id": "pit_due", "label": "Нараховано ПДФО", "type": "number", "required": true},
+    {"id": "pit_paid", "label": "Сплачено ПДФО", "type": "number", "required": true}
+  ]
+}

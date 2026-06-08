@@ -3,6 +3,7 @@ primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
+  context = "."
 
 [env]
   NEXT_PUBLIC_API_URL = "https://unitas-backend.fly.dev"

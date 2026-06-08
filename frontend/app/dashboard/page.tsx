@@ -45,8 +45,16 @@ export default function Dashboard() {
   const [generatingReport, setGeneratingReport] = useState(false);
   const [activeModal, setActiveModal] = useState<"income" | "tax_due" | "tax_paid" | "debt" | null>(null);
 
-  const isFop = dashboardData?.type === "fop" || selectedProfile?.type === "fop" || String(dashboardData?.tax_system || "").includes("fop") || String(selectedProfile?.tax_system || "").includes("fop") || dashboardData?.tax_system === "ednuy-3-5%" || selectedProfile?.tax_system === "ednuy-3-5%";
-  const isSimplified = dashboardData?.tax_system === "ednuy-3-5%" || selectedProfile?.tax_system === "ednuy-3-5%";
+  const simplifiedSystems = ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"];
+  const isSimplified = simplifiedSystems.includes((dashboardData?.tax_system || selectedProfile?.tax_system || "").toLowerCase());
+  const isFop = (dashboardData?.type === "fop" || selectedProfile?.type === "fop" || 
+                 String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("фоп") ||
+                 String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("fop") ||
+                 String(dashboardData?.tax_system || "").includes("fop") || String(selectedProfile?.tax_system || "").includes("fop")) &&
+                !(String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("тов") ||
+                  String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("llc") ||
+                  String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("товариство") ||
+                  dashboardData?.type === "company" || selectedProfile?.type === "company");
   const [isChatOpen, setIsChatOpen] = useState(false);
 
   // Period Selection States
@@ -445,9 +453,21 @@ export default function Dashboard() {
                     <span className="text-xs font-bold text-indigo-400 tracking-wider uppercase">Особистий кабінет</span>
                     <h2 className="text-2xl font-bold text-white">{dashboardData?.company_name}</h2>
                     <div className="flex flex-wrap items-center gap-2 mt-2">
-                      <span className="bg-indigo-900/40 text-indigo-300 text-xs px-2.5 py-1 rounded-md border border-indigo-500/20 font-medium">ФОП Єдиний Податок</span>
-                      <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">Група {dashboardData?.group}</span>
-                      <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">Ставка {dashboardData?.rate}%</span>
+                      <span className="bg-indigo-900/40 text-indigo-300 text-xs px-2.5 py-1 rounded-md border border-indigo-500/20 font-medium">
+                        {isFop 
+                          ? (isSimplified ? "ФОП Спрощена система" : "ФОП Загальна система")
+                          : (isSimplified ? "ТОВ Спрощена система" : "ТОВ Загальна система")}
+                      </span>
+                      {isFop && dashboardData?.group && (
+                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
+                          Група {dashboardData.group}
+                        </span>
+                      )}
+                      {(dashboardData?.rate !== undefined && dashboardData?.rate !== null) && (
+                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
+                          Ставка {dashboardData.rate}%
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="mt-4 md:mt-0 flex space-x-3">
@@ -569,6 +589,15 @@ export default function Dashboard() {
                       <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full mr-1.5 animate-pulse"></span>
                       Дані з виписок
                     </p>
+                    
+                    {/* Taxable Income Block */}
+                    <div className="mt-4 pt-4 border-t border-slate-800/60">
+                      <div className="bg-blue-950/30 rounded-lg p-3 border border-blue-500/30">
+                        <p className="text-xs text-blue-400 font-medium">Оподатковуваний дохід:</p>
+                        <p className="text-lg font-bold text-blue-300">{dashboardData?.taxable_income?.toLocaleString("uk-UA")} грн</p>
+                        <p className="text-xs text-blue-500/80 mt-1">* Власні кошти та повернення виключено</p>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Metric 2 */}
@@ -583,10 +612,20 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <h3 className="text-2xl font-semibold text-white mt-4">
-                      {dashboardData?.tax_due?.toLocaleString("uk-UA")} <span className="text-lg font-bold text-slate-400">грн</span>
+                      {((dashboardData?.tax_due || 0) + 
+                        (dashboardData?.military_tax_due || 0) + 
+                        (dashboardData?.esv_due || 0) + 
+                        (dashboardData?.pit_due || 0)
+                      ).toLocaleString("uk-UA")} <span className="text-lg font-bold text-slate-400">грн</span>
                     </h3>
                     <p className="text-xs text-indigo-400/80 font-semibold mt-2">
-                      5% від загального доходу
+                      {isSimplified 
+                        ? (dashboardData?.group === 1 
+                          ? "Фіксована сума (1 група)" 
+                          : dashboardData?.group === 2 
+                            ? "Фіксована сума (2 група)" 
+                            : `${dashboardData?.rate || selectedProfile?.rate || 5}% від оподатковуваного доходу`)
+                        : (isFop ? "18% ПДФО від чистого прибутку" : "18% податок на прибуток")}
                     </p>
                   </div>
 
@@ -1163,7 +1202,7 @@ export default function Dashboard() {
                 onClick={() => setActiveModal(null)}
               >
                 <div 
-                  className="bg-[#0b101c]/95 border border-slate-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl relative"
+                  className="bg-[#0b101c]/95 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl relative"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Modal Header */}
@@ -1186,29 +1225,46 @@ export default function Dashboard() {
                   </div>
 
                   {/* Modal Content */}
-                  <div className="p-6 space-y-6 text-sm text-slate-300">
+                  <div className="p-6 space-y-6 text-sm text-slate-300 overflow-y-auto flex-1 custom-scrollbar">
                     {activeModal === "income" && (
                       <div className="space-y-4">
                         <p>
-                          <strong>Загальний дохід</strong> — це сумарний обсяг коштів, отриманих ФОП на розрахункові рахунки протягом звітного періоду ({getPeriodLabel()}).
+                          <strong>Загальний дохід</strong> — це сумарний обсяг коштів, отриманих {isFop ? 'ФОП' : 'ТОВ'} на розрахункові рахунки протягом звітного періоду ({getPeriodLabel()}).
                         </p>
                         <div className="p-4 rounded-xl bg-indigo-950/20 border border-indigo-500/10 space-y-2">
                           <div className="flex justify-between">
-                            <span className="text-slate-400">Поточний дохід:</span>
-                            <span className="font-normal text-slate-100">{dashboardData?.total_income?.toLocaleString("uk-UA")} грн</span>
+                            <span className="text-slate-400">Загальний дохід:</span>
+                            <span className="font-semibold text-slate-100">{dashboardData?.total_income?.toLocaleString("uk-UA")} грн</span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-400">Річний ліміт ФОП ({dashboardData?.group || selectedProfile?.group || 3} група):</span>
-                            <span className="font-normal text-slate-200">{fopLimit.toLocaleString("uk-UA")} грн</span>
-                          </div>
-                          <div className="w-full bg-slate-900 rounded-full h-1.5 mt-2">
-                            <div 
-                              className="bg-emerald-500 h-1.5 rounded-full" 
-                              style={{ width: `${Math.min(100, ((dashboardData?.total_income || 0) / fopLimit) * 100)}%` }}
-                            />
-                          </div>
-                          <p className="text-[10px] text-slate-500 text-right mt-1">Використано {(((dashboardData?.total_income || 0) / fopLimit) * 100).toFixed(2)}% ліміту</p>
                         </div>
+
+                        <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-500/30 space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-blue-400 font-medium">Оподатковуваний дохід:</span>
+                            <span className="font-semibold text-blue-300">{dashboardData?.taxable_income?.toLocaleString("uk-UA")} грн</span>
+                          </div>
+                          <p className="text-xs text-blue-500/80">* Доходи, що не оподатковуються (власні кошти, повернення) виключено</p>
+                        </div>
+
+                        {isSimplified && (
+                          <div className="p-4 rounded-xl bg-indigo-950/20 border border-indigo-500/10 space-y-2">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">
+                                {isFop 
+                                  ? `Річний ліміт ФОП (${dashboardData?.group || selectedProfile?.group || 3} група):`
+                                  : `Річний ліміт ТОВ (Спрощена система):`}
+                              </span>
+                              <span className="font-normal text-slate-200">{fopLimit.toLocaleString("uk-UA")} грн</span>
+                            </div>
+                            <div className="w-full bg-slate-900 rounded-full h-1.5 mt-2">
+                              <div 
+                                className="bg-emerald-500 h-1.5 rounded-full" 
+                                style={{ width: `${Math.min(100, ((dashboardData?.total_income || 0) / fopLimit) * 100)}%` }}
+                              />
+                            </div>
+                            <p className="text-[10px] text-slate-500 text-right mt-1">Використано {(((dashboardData?.total_income || 0) / fopLimit) * 100).toFixed(2)}% ліміту</p>
+                          </div>
+                        )}
 
                         {dashboardData?.breakdown && dashboardData.breakdown.length > 1 && (
                           <div className="mt-6">
@@ -1448,8 +1504,8 @@ export default function Dashboard() {
                                 </span>
                                 <p className="text-[10px] text-slate-500">Нараховано: {(dashboardData?.tax_due || 0).toLocaleString("uk-UA")} грн | Сплачено: {(dashboardData?.ep_paid || 0).toLocaleString("uk-UA")} грн</p>
                               </div>
-                              <span className={`font-normal ${dashboardData?.ep_diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                {dashboardData?.ep_diff > 0 ? `+${dashboardData?.ep_diff?.toLocaleString("uk-UA")} грн борг` : `Сплачено`}
+                              <span className={`font-normal ${dashboardData?.ep_diff > 0 ? 'text-amber-400' : dashboardData?.ep_diff < 0 ? 'text-emerald-400' : 'text-emerald-400'}`}>
+                                {dashboardData?.ep_diff > 0 ? `+${dashboardData?.ep_diff?.toLocaleString("uk-UA")} грн борг` : dashboardData?.ep_diff < 0 ? `Переплата: ${Math.abs(dashboardData?.ep_diff)?.toLocaleString("uk-UA")} грн` : `Сплачено`}
                               </span>
                             </div>
 
@@ -1459,8 +1515,8 @@ export default function Dashboard() {
                                 <span className="text-slate-300 font-medium text-amber-400/90">Військовий збір (ФОП + працівники)</span>
                                 <p className="text-[10px] text-slate-500">Нараховано: {(dashboardData?.military_tax_due || 0).toLocaleString("uk-UA")} грн | Сплачено: {(dashboardData?.mil_paid || 0).toLocaleString("uk-UA")} грн</p>
                               </div>
-                              <span className={`font-normal ${dashboardData?.mil_diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                {dashboardData?.mil_diff > 0 ? `+${dashboardData?.mil_diff?.toLocaleString("uk-UA")} грн борг` : `Сплачено`}
+                              <span className={`font-normal ${dashboardData?.mil_diff > 0 ? 'text-amber-400' : dashboardData?.mil_diff < 0 ? 'text-emerald-400' : 'text-emerald-400'}`}>
+                                {dashboardData?.mil_diff > 0 ? `+${dashboardData?.mil_diff?.toLocaleString("uk-UA")} грн борг` : dashboardData?.mil_diff < 0 ? `Переплата: ${Math.abs(dashboardData?.mil_diff)?.toLocaleString("uk-UA")} грн` : `Сплачено`}
                               </span>
                             </div>
 
@@ -1470,8 +1526,8 @@ export default function Dashboard() {
                                 <span className="text-slate-300 font-medium">Єдиний соціальний внесок (ЄСВ)</span>
                                 <p className="text-[10px] text-slate-500">Нараховано: {(dashboardData?.esv_due || 0).toLocaleString("uk-UA")} грн | Сплачено: {(dashboardData?.esv_paid || 0).toLocaleString("uk-UA")} грн</p>
                               </div>
-                              <span className={`font-normal ${dashboardData?.esv_diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                {dashboardData?.esv_diff > 0 ? `+${dashboardData?.esv_diff?.toLocaleString("uk-UA")} грн борг` : `Сплачено`}
+                              <span className={`font-normal ${dashboardData?.esv_diff > 0 ? 'text-amber-400' : dashboardData?.esv_diff < 0 ? 'text-emerald-400' : 'text-emerald-400'}`}>
+                                {dashboardData?.esv_diff > 0 ? `+${dashboardData?.esv_diff?.toLocaleString("uk-UA")} грн борг` : dashboardData?.esv_diff < 0 ? `Переплата: ${Math.abs(dashboardData?.esv_diff)?.toLocaleString("uk-UA")} грн` : `Сплачено`}
                               </span>
                             </div>
 
@@ -1482,8 +1538,8 @@ export default function Dashboard() {
                                   <span className="text-slate-300 font-medium">ПДФО з зарплати працівників</span>
                                   <p className="text-[10px] text-slate-500">Нараховано: {(dashboardData?.employee_pit_due || 0).toLocaleString("uk-UA")} грн | Сплачено: {(dashboardData?.pit_paid || 0).toLocaleString("uk-UA")} грн</p>
                                 </div>
-                                <span className={`font-normal ${dashboardData?.pit_diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                  {dashboardData?.pit_diff > 0 ? `+${dashboardData?.pit_diff?.toLocaleString("uk-UA")} грн борг` : `Сплачено`}
+                                <span className={`font-normal ${dashboardData?.pit_diff > 0 ? 'text-amber-400' : dashboardData?.pit_diff < 0 ? 'text-emerald-400' : 'text-emerald-400'}`}>
+                                  {dashboardData?.pit_diff > 0 ? `+${dashboardData?.pit_diff?.toLocaleString("uk-UA")} грн борг` : dashboardData?.pit_diff < 0 ? `Переплата: ${Math.abs(dashboardData?.pit_diff)?.toLocaleString("uk-UA")} грн` : `Сплачено`}
                                 </span>
                               </div>
                             )}

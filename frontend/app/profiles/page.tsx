@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import { 
@@ -27,6 +27,27 @@ export default function Profiles() {
   const [editingProfile, setEditingProfile] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [subscriptions, setSubscriptions] = useState<{ [key: number]: any }>({});
+
+  // Fetch subscriptions for all profiles
+  useEffect(() => {
+    const fetchSubscriptions = async () => {
+      const subs: { [key: number]: any } = {};
+      for (const profile of profiles) {
+        try {
+          const res = await fetch(`https://unitas-backend.fly.dev/api/subscription/current/${profile.id}`);
+          const data = await res.json();
+          subs[profile.id] = data;
+        } catch (error) {
+          subs[profile.id] = { plan: "free" };
+        }
+      }
+      setSubscriptions(subs);
+    };
+    if (profiles.length > 0) {
+      fetchSubscriptions();
+    }
+  }, [profiles]);
 
   // Invoices Modal States
   const [isInvoicesModalOpen, setIsInvoicesModalOpen] = useState(false);
@@ -292,6 +313,8 @@ export default function Profiles() {
   const [formEsvPaidByEmployer, setFormEsvPaidByEmployer] = useState(false);
   const [formRegDate, setFormRegDate] = useState(new Date().toISOString().split("T")[0]);
   const [formAddress, setFormAddress] = useState("");
+  const [formDirectorName, setFormDirectorName] = useState("");
+  const [formPhone, setFormPhone] = useState("");
 
   // Open modal for creation
   const handleOpenCreate = () => {
@@ -307,6 +330,8 @@ export default function Profiles() {
     setFormEsvPaidByEmployer(false);
     setFormRegDate(new Date().toISOString().split("T")[0]);
     setFormAddress("");
+    setFormDirectorName("");
+    setFormPhone("");
     setError(null);
     setIsModalOpen(true);
   };
@@ -326,6 +351,8 @@ export default function Profiles() {
     setFormEsvPaidByEmployer(!!profile.esv_paid_by_employer);
     setFormRegDate(profile.reg_date ? profile.reg_date.split("T")[0] : new Date().toISOString().split("T")[0]);
     setFormAddress(profile.address || "");
+    setFormDirectorName(profile.director_name || "");
+    setFormPhone(profile.phone || "");
     setError(null);
     setIsModalOpen(true);
   };
@@ -357,7 +384,9 @@ export default function Profiles() {
       is_vat_payer: formIsVatPayer,
       reg_date: formRegDate,
       esv_paid_by_employer: formType === "fop" ? formEsvPaidByEmployer : false,
-      address: formAddress || undefined
+      address: formAddress || undefined,
+      director_name: formDirectorName || undefined,
+      phone: formPhone || undefined
     };
 
     try {
@@ -498,6 +527,41 @@ export default function Profiles() {
                     <span className="text-[10px] text-slate-400">Юридична адреса:</span>
                     <span className="font-semibold text-slate-700 dark:text-slate-350 line-clamp-2">{profile.address}</span>
                   </div>
+                )}
+                {profile.director_name && (
+                  <div className="flex justify-between pt-1">
+                    <span>Директор (ПІБ):</span>
+                    <span className="font-bold text-slate-705 dark:text-slate-300">{profile.director_name}</span>
+                  </div>
+                )}
+                {profile.phone && (
+                  <div className="flex justify-between">
+                    <span>Телефон:</span>
+                    <span className="font-bold text-slate-705 dark:text-slate-300">{profile.phone}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Subscription info */}
+              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Тариф:</span>
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
+                    subscriptions[profile.id]?.plan === 'business' 
+                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' 
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                  }`}>
+                    {subscriptions[profile.id]?.plan === 'business' ? 'Business' : 'Free'}
+                  </span>
+                </div>
+                
+                {subscriptions[profile.id]?.plan === 'free' && (
+                  <button 
+                    onClick={() => window.location.href = "/settings/subscription"}
+                    className="mt-3 w-full text-xs bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 py-1.5 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-950/50 transition-all font-semibold"
+                  >
+                    Оновити до Business
+                  </button>
                 )}
               </div>
 
@@ -650,6 +714,36 @@ export default function Profiles() {
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold resize-none h-18"
                 />
               </div>
+
+              {/* Phone input */}
+              <div>
+                <label className="text-[10px] text-slate-400 text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                  Номер телефону
+                </label>
+                <input
+                  type="text"
+                  placeholder="+380XXXXXXXXX"
+                  value={formPhone}
+                  onChange={(e) => setFormPhone(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                />
+              </div>
+
+              {/* Director name input */}
+              {formType === "company" && (
+                <div>
+                  <label className="text-[10px] text-slate-400 text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                    ПІБ Директора
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Іванов Іван Іванович"
+                    value={formDirectorName}
+                    onChange={(e) => setFormDirectorName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 {/* Tax system switcher */}

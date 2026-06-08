@@ -1,0 +1,11 @@
+{
+  "form_code": "F0120109",
+  "name": "Декларація військового збору",
+  "description": "Декларація з військового збору",
+  "period_type": "quarterly",
+  "fields": [
+    {"id": "military_tax_due", "label": "Сума військового збору до сплати", "type": "number", "required": true},
+    {"id": "military_tax_paid", "label": "Сума сплаченого військового збору", "type": "number", "required": true},
+    {"id": "military_tax_diff", "label": "Сума до сплати (борг)", "type": "calculated", "formula": "military_tax_due - military_tax_paid"}
+  ]
+}

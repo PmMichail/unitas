@@ -207,11 +207,11 @@ export default function TaxDebtPage() {
               Будь ласка, оберіть активний профіль підприємства для роботи.
             </div>
           ) : debtInfo ? (
-            debtInfo.error ? (
+            (debtInfo.error || typeof debtInfo.has_debt === "undefined") ? (
               <div className="p-4 rounded-xl border border-red-500/20 bg-red-950/10 text-red-400 text-xs flex items-center gap-2">
                 <ShieldAlert className="w-5 h-5 shrink-0" />
                 <div>
-                  <span className="font-bold">Помилка підключення:</span> {debtInfo.error}
+                  <span className="font-bold">Помилка підключення:</span> {debtInfo.error || "Отримано некоректну відповідь від сервера."}
                 </div>
               </div>
             ) : (
@@ -235,7 +235,7 @@ export default function TaxDebtPage() {
                     </h4>
                     <p className="text-[11px] opacity-80 mt-0.5 leading-relaxed font-semibold">
                       {debtInfo.has_debt
-                        ? `Зафіксовано заборгованість перед бюджетом на загальну суму ${debtInfo.total_debt.toLocaleString("uk-UA")} грн.`
+                        ? `Зафіксовано заборгованість перед бюджетом на загальну суму ${debtInfo.total_debt?.toLocaleString("uk-UA") || 0} грн.`
                         : "Ви не маєте прострочених платежів та боргів перед податковою службою України."}
                     </p>
                   </div>

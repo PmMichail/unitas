@@ -1,0 +1,11 @@
+{
+  "form_code": "F3007012",
+  "name": "Звіт про ЄСВ",
+  "description": "Звіт про суми нарахованої єдиного внеску на загальнообов'язкове державне соціальне страхування",
+  "period_type": "quarterly",
+  "fields": [
+    {"id": "esv_due", "label": "Сума ЄСВ до сплати", "type": "number", "required": true},
+    {"id": "esv_paid", "label": "Сума сплаченого ЄСВ", "type": "number", "required": true},
+    {"id": "esv_diff", "label": "Сума до сплати (борг)", "type": "calculated", "formula": "esv_due - esv_paid"}
+  ]
+}

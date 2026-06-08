@@ -11,9 +11,22 @@
       "expo-router"
     ],
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.unitas.app",
+      "buildNumber": "1.0.0",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "UniTax використовує Face ID для безпечного входу",
+        "NSPhotoLibraryUsageDescription": "UniTax потребує доступу до фото для завантаження чеків",
+        "NSCameraUsageDescription": "UniTax використовує камеру для сканування QR-кодів оплати"
+      }
     },
     "android": {
+      "package": "com.unitas.app",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
