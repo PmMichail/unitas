@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -181,6 +181,16 @@ export default function DashboardScreen() {
   const [chatMessages, setChatMessages] = useState<Array<{ sender: 'user' | 'agent'; text: string }>>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
+
+  const flatListRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    if (chatMessages.length > 0 && flatListRef.current) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [chatMessages, sendingChat]);
 
   // Period Selector States
   const [periodType, setPeriodType] = useState<string>('all');
@@ -1098,6 +1108,7 @@ export default function DashboardScreen() {
 
             {/* Messages List */}
             <FlatList
+              ref={flatListRef}
               data={chatMessages}
               keyExtractor={(_, index) => index.toString()}
               contentContainerStyle={styles.chatMessagesList}

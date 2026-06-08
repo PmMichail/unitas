@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api, legislationApi, agentApi } from "@/lib/api";
 import { useApp } from "@/context/AppContext";
 import { 
@@ -98,6 +98,22 @@ export default function Dashboard() {
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [sendingChat, setSendingChat] = useState(false);
+
+  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
+  const floatingChatMessagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto scroll to bottom of chat containers when messages or state change
+  useEffect(() => {
+    if (activeAiTab === "chat" && chatMessagesEndRef.current) {
+      chatMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatMessages, sendingChat, activeAiTab]);
+
+  useEffect(() => {
+    if (isChatOpen && floatingChatMessagesEndRef.current) {
+      floatingChatMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatMessages, sendingChat, isChatOpen]);
 
   // Sync active profile from context
   useEffect(() => {
@@ -866,6 +882,7 @@ export default function Dashboard() {
                                 <span className="text-[10px] text-slate-500 ml-1.5">Асистент аналізує...</span>
                               </div>
                             )}
+                            <div ref={chatMessagesEndRef} />
                           </div>
 
                           {/* Message input */}
@@ -1693,6 +1710,7 @@ export default function Dashboard() {
                   <span className="text-[9px] text-slate-500 ml-1.5">Асистент аналізу...</span>
                 </div>
               )}
+              <div ref={floatingChatMessagesEndRef} />
             </div>
 
             {/* Input Footer */}
