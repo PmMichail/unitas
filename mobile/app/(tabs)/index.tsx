@@ -822,6 +822,12 @@ export default function DashboardScreen() {
                 <Text style={[styles.metricValue, { color: colors.text }]}>
                   {dashboardData?.total_income?.toLocaleString('uk-UA')} ₴
                 </Text>
+                <View style={{ borderTopWidth: 0.5, borderTopColor: colors.border, marginTop: 6, paddingTop: 6 }}>
+                  <Text style={{ fontSize: 10, color: colors.primary }}>Оподатковуваний:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 1 }}>
+                    {dashboardData?.taxable_income?.toLocaleString('uk-UA')} ₴
+                  </Text>
+                </View>
               </Pressable>
 
               <Pressable
@@ -1209,9 +1215,16 @@ export default function DashboardScreen() {
                   
                   <View style={[styles.mobileStatsBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
                     <View style={styles.mobileStatRow}>
-                      <Text style={{ color: colors.textMuted, fontSize: 13 }}>Поточний дохід:</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 13 }}>Загальний дохід:</Text>
                       <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>
                         {dashboardData?.total_income?.toLocaleString('uk-UA')} ₴
+                      </Text>
+                    </View>
+                    
+                    <View style={[styles.mobileStatRow, { borderTopWidth: 0.5, borderTopColor: colors.border, paddingTop: 6, marginTop: 6 }]}>
+                      <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Оподатковуваний дохід:</Text>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {dashboardData?.taxable_income?.toLocaleString('uk-UA')} ₴
                       </Text>
                     </View>
                     
