@@ -148,8 +148,8 @@ class TaxCalculator:
         default_rate = self.get_rate("unified_tax_rate_group_3")
         
         if group == 1:
-            # Фіксований єдиний податок 1 групи: 10% від прожиткового мінімуму
-            return num_months * 302.80
+            # Фіксований єдиний податок 1 групи: 10% від прожиткового мінімуму (332.80 грн за прожиткового мінімуму 3328 грн)
+            return num_months * 332.80
         elif group == 2:
             # Фіксований єдиний податок 2 групи: 20% від мінімальної зарплати
             return num_months * (min_sal * 0.20)
@@ -328,6 +328,10 @@ class TaxCalculator:
         }
         
         # Calculate taxes
+        has_statements = db.query(BankStatement).filter(BankStatement.profile_id == profile_id).first() is not None
+        if not has_statements:
+            num_months = 0
+            
         taxes = self.calculate_profile_taxes(
             profile=profile_dict,
             transactions=transactions,
@@ -369,10 +373,11 @@ class TaxCalculator:
             if p.date:
                 payments_months.add((p.date.year, p.date.month))
         if not payments_months:
-            import datetime
-            curr_y = datetime.date.today().year
-            for m in range(1, datetime.date.today().month + 1):
-                payments_months.add((curr_y, m))
+            if has_statements:
+                import datetime
+                curr_y = datetime.date.today().year
+                for m in range(1, datetime.date.today().month + 1):
+                    payments_months.add((curr_y, m))
         months_to_gen = sorted(list(payments_months))
         
         def local_is_simplified(tax_system_str):
@@ -412,7 +417,7 @@ class TaxCalculator:
             m_tax_due = 0.0
             if local_is_simplified(profile.tax_system):
                 if local_is_fop(profile) and profile.group == 1:
-                    m_tax_due = 302.80
+                    m_tax_due = 332.80
                 elif local_is_fop(profile) and profile.group == 2:
                     m_tax_due = self.get_rate("min_salary") * 0.20
                 else:

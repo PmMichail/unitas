@@ -70,7 +70,6 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Календар", href: "/calendar", icon: Calendar },
     { name: "Профілі", href: "/profiles", icon: Building2 },
     { name: "Транзакції", href: "/transactions", icon: Receipt },
-    { name: "Рахунки", href: "/invoices", icon: FileText },
     { name: "Податки", href: "/taxes", icon: CreditCard },
     { name: "Податковий борг", href: "/tax-debt", icon: AlertCircle },
     { name: "Статус звітів", href: "/reports-status", icon: FileText },
@@ -83,7 +82,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
           },
         ]
       : []),
-    { name: "Звіти", href: "/reports", icon: FileSpreadsheet },
+    { name: "Рахунки (Сформувати та відправити)", href: "/invoices", icon: FileText },
     { name: "Пошта", href: "/settings/email", icon: Mail },
     { name: "КЕП (Підписи)", href: "/settings/certificates", icon: Shield },
     { name: "API ДПС", href: "/settings/tax-api", icon: Cpu },

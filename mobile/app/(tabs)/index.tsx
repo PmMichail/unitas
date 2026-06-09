@@ -563,7 +563,7 @@ export default function DashboardScreen() {
                       <Pressable
                         onPress={() => {
                           if (isReport) {
-                            router.push('/reports');
+                            router.push('/invoices');
                           } else {
                             handleMarkEventPaid(event.id, event.title);
                           }
@@ -664,10 +664,10 @@ export default function DashboardScreen() {
 
               <Pressable
                 style={[styles.actionBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-                onPress={() => router.push('/reports')}
+                onPress={() => router.push('/invoices')}
               >
                 <FileText size={20} color={colors.primary} />
-                <Text style={[styles.actionBoxText, { color: colors.text }]}>Згенерувати звіт</Text>
+                <Text style={[styles.actionBoxText, { color: colors.text }]}>Рахунки та Акти</Text>
               </Pressable>
 
               <Pressable

@@ -26,6 +26,12 @@ interface Profile {
   bank_name?: string;
   mfo?: string;
   iban?: string;
+  custom_recipient?: string;
+  custom_edrpou?: string;
+  custom_iban_edp?: string;
+  custom_iban_esv?: string;
+  custom_iban_pdfo?: string;
+  custom_iban_vz?: string;
 }
 
 interface AppContextType {

@@ -34,6 +34,22 @@ export default function Reports() {
   
   const activeProfileId = selectedProfile?.id;
 
+  // Auto-default form based on profile type and tax group
+  useEffect(() => {
+    if (selectedProfile?.type === "fop") {
+      if (selectedProfile.group === 1 || selectedProfile.group === 2) {
+        setSelectedForm("F0103406");
+        setSelectedPeriod("Рік");
+      } else {
+        setSelectedForm("F0103306");
+        setSelectedPeriod("1 Квартал");
+      }
+    } else if (selectedProfile?.type === "company") {
+      setSelectedForm("J0500109");
+      setSelectedPeriod("1 Квартал");
+    }
+  }, [selectedProfile]);
+
   const renderFields = () => {
     if (!activeReport || !activeReport.fields) return null;
     
@@ -241,6 +257,7 @@ export default function Reports() {
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none"
               >
                 <option value="F0103306">F0103306 — Декларація єдинника 3 групи (ФОП)</option>
+                <option value="F0103406">F0103406 — Декларація єдинника 1 та 2 груп (ФОП)</option>
                 <option value="J0500109">J0500109 — Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ТОВ)</option>
                 <option value="F0510101">F0510101 — Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ФОП)</option>
                 <option value="F0110210">F0110210 — Декларація з ПДВ (ТОВ)</option>

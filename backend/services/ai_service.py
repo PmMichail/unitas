@@ -17,7 +17,7 @@ class AIService:
         
         if gemini_key:
             genai.configure(api_key=gemini_key)
-            self.model = genai.GenerativeModel('gemini-flash-latest')
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
             self.use_gemini = True
             print("✅ Gemini API налаштовано")
         elif openai_key:

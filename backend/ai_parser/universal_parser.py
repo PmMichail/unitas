@@ -147,8 +147,20 @@ class UniversalParser:
                     if page_text:
                         text += page_text + "\n"
             
+            text = self._normalize_ukrainian_i(text)
+            
             # Fix concatenated dates with amount (e.g. "05/02/2026100 000,00" -> "05/02/2026; 100 000,00")
             text = re.sub(r"(\d{2}[./](?:0[1-9]|1[0-2])[./]202\d)(-?\d)", r"\1; \2", text)
+            # Fix concatenated times with payment numbers (e.g. "19:40:45858716..." -> "19:40:45; 858716...")
+            text = re.sub(r"(\b\d{2}:\d{2}:\d{2})([A-Za-z0-9-])", r"\1; \2", text)
+            # Fix concatenated numbers/payment IDs with P2P
+            text = re.sub(r"(\b\d+(?:\.\d+)?)(P2P)\b", r"\1 \2", text, flags=re.IGNORECASE)
+            # Fix A-Bank hex payment IDs concatenated with Cyrillic names (e.g. "13C7752EЗАГОРУЛЬКО" -> "13C7752E ЗАГОРУЛЬКО")
+            text = re.sub(r"(\b1[23][A-Fa-f0-9]{6})([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
+            # Fix digits concatenated with Cyrillic letters (e.g. "2746Картки" -> "2746 Картки")
+            text = re.sub(r"(\d+)([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
+            # Fix Latin characters or quotes concatenated with Cyrillic (e.g. "БАНК\"Переказ" -> "БАНК\" Переказ")
+            text = re.sub(r"([a-zA-Z0-9\"'`])([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
             
             self._extract_period(text)
             
@@ -241,8 +253,20 @@ class UniversalParser:
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
             
+            text = self._normalize_ukrainian_i(text)
+            
             # Fix concatenated dates with amount (e.g. "05/02/2026100 000,00" -> "05/02/2026; 100 000,00")
             text = re.sub(r"(\d{2}[./](?:0[1-9]|1[0-2])[./]202\d)(-?\d)", r"\1; \2", text)
+            # Fix concatenated times with payment numbers (e.g. "19:40:45858716..." -> "19:40:45; 858716...")
+            text = re.sub(r"(\b\d{2}:\d{2}:\d{2})([A-Za-z0-9-])", r"\1; \2", text)
+            # Fix concatenated numbers/payment IDs with P2P
+            text = re.sub(r"(\b\d+(?:\.\d+)?)(P2P)\b", r"\1 \2", text, flags=re.IGNORECASE)
+            # Fix A-Bank hex payment IDs concatenated with Cyrillic names (e.g. "13C7752EЗАГОРУЛЬКО" -> "13C7752E ЗАГОРУЛЬКО")
+            text = re.sub(r"(\b1[23][A-Fa-f0-9]{6})([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
+            # Fix digits concatenated with Cyrillic letters (e.g. "2746Картки" -> "2746 Картки")
+            text = re.sub(r"(\d+)([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
+            # Fix Latin characters or quotes concatenated with Cyrillic (e.g. "БАНК\"Переказ" -> "БАНК\" Переказ")
+            text = re.sub(r"([a-zA-Z0-9\"'`])([а-яА-ЯёЁіІїЇєЄґҐ])", r"\1 \2", text)
             
             self._extract_period(text)
             
@@ -704,7 +728,7 @@ class UniversalParser:
                 tx_type = "tax_payment"
                 tax_type = "pit"
                 transaction_type = "tax_payment"
-            elif re.search(r"\b(військовий\s+збір|вз|військового\s+збору|military\s+tax|voennyi\s+sbor|vijskovyj\s+zbir|viiskovoho\s+zboru|вiйськовий\s+збiр|вiйськового\s+збору|вiйськовоий\s+збiр|вiйськовий\s+збір)\b", purpose_lower):
+            elif re.search(r"\b(військовий\s+збір|вз|військового\s+збору|military\s+tax|voennyi\s+sbor|vijskovyj\s+zbir|viiskovoho\s+zboru|вiйськовий\s+збiр|вiйськового\s+збору|вiйськовоий\s+збiр|вiйськовий\s+збір|військовоий\s+збір)\b", purpose_lower):
                 tx_type = "tax_payment"
                 tax_type = "military_tax"
                 transaction_type = "tax_payment"
@@ -760,7 +784,9 @@ class UniversalParser:
                 if remainder:
                     # Якщо суму не було вилучено (макет А-Банку), перевіряємо чи remainder є номером платежу
                     if not amount_extracted:
-                        num_match = re.match(r"^([\d\s\./-]+)", remainder)
+                        if remainder.startswith(";"):
+                            remainder = remainder[1:].strip()
+                        num_match = re.match(r"^([A-Za-z0-9\s\./_-]+)", remainder)
                         if num_match:
                             remainder_details = remainder[len(num_match.group(0)):].strip()
                             if remainder_details:
@@ -774,8 +800,12 @@ class UniversalParser:
                 
                 # Пропускаємо рядок номера документа, якщо він записаний окремим рядком (тільки для макета А-Банку)
                 if not amount_extracted:
-                    if j < len(lines) and re.match(r"^[\d\s\./-]+$", lines[j]):
-                        j += 1
+                    if j < len(lines):
+                        line_to_check = lines[j]
+                        if line_to_check.startswith(";"):
+                            line_to_check = line_to_check[1:].strip()
+                        if re.match(r"^[A-Za-z0-9\s\./_-]+$", line_to_check):
+                            j += 1
                         
                 balance_val = None
                 while j < len(lines):
@@ -824,6 +854,10 @@ class UniversalParser:
                     
                 if amount_val is not None:
                     purpose, contragent, tx_edrpou, tx_iban = self._extract_details_from_lines(detail_lines)
+                    
+                    # Clean up leading semicolon/junk from purpose/contragent if they leaked in
+                    purpose = re.sub(r"^;\s*", "", purpose)
+                    contragent = re.sub(r"^;\s*", "", contragent)
                     
                     tx_dict = self._create_transaction_dict(
                         date=self._clean_date(date_str),
@@ -886,6 +920,18 @@ class UniversalParser:
             return float(value)
         except ValueError:
             return 0.0
+
+    def _normalize_ukrainian_i(self, text: str) -> str:
+        """Нормалізація латинської 'i' / 'I' до кириличної 'і' / 'І', якщо вони знаходяться у кириличному контексті"""
+        cyr = r"[а-яА-ЯёЁіІїЇєЄґҐ]"
+        for _ in range(2):
+            text = re.sub(f"({cyr})i({cyr})", r"\1і\2", text)
+            text = re.sub(f"({cyr})I({cyr})", r"\1І\2", text)
+            text = re.sub(f"({cyr})i", r"\1і", text)
+            text = re.sub(f"({cyr})I", r"\1І", text)
+            text = re.sub(f"i({cyr})", r"і\1", text)
+            text = re.sub(f"I({cyr})", r"І\1", text)
+        return text
 
     def _extract_contragent(self, purpose):
         """Евристичне вилучення назви контрагента з призначення платежу"""

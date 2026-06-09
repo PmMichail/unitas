@@ -34,7 +34,45 @@ export default function TaxesPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Auto-detect region on profile change
+  // Custom budget accounts configurations
+  const [showCustomAccounts, setShowCustomAccounts] = useState(false);
+  const [customRecipient, setCustomRecipient] = useState("");
+  const [customEdrpou, setCustomEdrpou] = useState("");
+  const [customIbanEdp, setCustomIbanEdp] = useState("");
+  const [customIbanEsv, setCustomIbanEsv] = useState("");
+  const [customIbanPdfo, setCustomIbanPdfo] = useState("");
+  const [customIbanVz, setCustomIbanVz] = useState("");
+  const [savingCustom, setSavingCustom] = useState(false);
+
+  // Modal editing states
+  const [modalRecipient, setModalRecipient] = useState("");
+  const [modalEdrpou, setModalEdrpou] = useState("");
+  const [modalIban, setModalIban] = useState("");
+  const [modalPurpose, setModalPurpose] = useState("");
+  const [modalAmount, setModalAmount] = useState("");
+
+  // Dynamic QR Code and Deep Link calculations
+  const qrCodeValue = paymentData
+    ? `BCD\n002\n1\nSCT\n\n${modalRecipient}\n${modalIban}\nUAH${Number(modalAmount || 0).toFixed(2)}\n\n${modalPurpose}`
+    : "";
+
+  const currentDeepLink = paymentData
+    ? (() => {
+        const bank = paymentData.bank_code;
+        const urlEncodedPurpose = encodeURIComponent(modalPurpose);
+        const amountNum = modalAmount;
+        if (bank === "privat24") {
+          return `https://link.privatbank.ua/pay?iban=${modalIban}&amount=${amountNum}&purpose=${urlEncodedPurpose}`;
+        } else if (bank === "monobank") {
+          return `https://send.monobank.ua/pay?iban=${modalIban}&amount=${amountNum}&purpose=${urlEncodedPurpose}`;
+        } else if (bank === "abank") {
+          return `https://a-bank.com.ua/pay?iban=${modalIban}&amount=${amountNum}&purpose=${urlEncodedPurpose}`;
+        }
+        return `https://link.privatbank.ua/pay?iban=${modalIban}&amount=${amountNum}&purpose=${urlEncodedPurpose}`;
+      })()
+    : "";
+
+  // Auto-detect region and load custom budget accounts on profile change
   useEffect(() => {
     if (selectedProfile && selectedProfile.address) {
       const addr = selectedProfile.address.toLowerCase();
@@ -50,7 +88,56 @@ export default function TaxesPage() {
         setSelectedRegion("kyiv");
       }
     }
+
+    if (selectedProfile) {
+      setCustomRecipient(selectedProfile.custom_recipient || "");
+      setCustomEdrpou(selectedProfile.custom_edrpou || "");
+      setCustomIbanEdp(selectedProfile.custom_iban_edp || "");
+      setCustomIbanEsv(selectedProfile.custom_iban_esv || "");
+      setCustomIbanPdfo(selectedProfile.custom_iban_pdfo || "");
+      setCustomIbanVz(selectedProfile.custom_iban_vz || "");
+    } else {
+      setCustomRecipient("");
+      setCustomEdrpou("");
+      setCustomIbanEdp("");
+      setCustomIbanEsv("");
+      setCustomIbanPdfo("");
+      setCustomIbanVz("");
+    }
   }, [selectedProfile]);
+
+  const handleSaveCustomAccounts = async () => {
+    if (!selectedProfile) return;
+    setSavingCustom(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      await api.updateProfile(selectedProfile.id, {
+        custom_recipient: customRecipient.trim(),
+        custom_edrpou: customEdrpou.trim(),
+        custom_iban_edp: customIbanEdp.trim(),
+        custom_iban_esv: customIbanEsv.trim(),
+        custom_iban_pdfo: customIbanPdfo.trim(),
+        custom_iban_vz: customIbanVz.trim()
+      });
+      
+      // Update local profile fields in-memory
+      selectedProfile.custom_recipient = customRecipient.trim();
+      selectedProfile.custom_edrpou = customEdrpou.trim();
+      selectedProfile.custom_iban_edp = customIbanEdp.trim();
+      selectedProfile.custom_iban_esv = customIbanEsv.trim();
+      selectedProfile.custom_iban_pdfo = customIbanPdfo.trim();
+      selectedProfile.custom_iban_vz = customIbanVz.trim();
+      
+      setSuccessMsg("Бюджетні рахунки успішно збережено!");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to save custom budget accounts:", err);
+      setErrorMsg("Помилка при збереженні бюджетних рахунків.");
+    } finally {
+      setSavingCustom(false);
+    }
+  };
 
   const fetchLiabilities = useCallback(async () => {
     if (!selectedProfile) {
@@ -107,6 +194,11 @@ export default function TaxesPage() {
         bank_code: selectedBank
       });
       setPaymentData(data);
+      setModalRecipient(data.recipient || "");
+      setModalEdrpou(data.edrpou || "");
+      setModalIban(data.iban || "");
+      setModalPurpose(data.purpose || "");
+      setModalAmount(String(data.amount || liability.amount));
     } catch (err) {
       console.error("Failed to generate payment:", err);
       setErrorMsg("Не вдалося згенерувати платіжні реквізити.");
@@ -374,6 +466,101 @@ export default function TaxesPage() {
               <option value="odesa">ГУ ДПС в Одеській обл. (м. Одеса)</option>
               <option value="kharkiv">ГУ ДПС у Харківській обл. (м. Харків)</option>
             </select>
+
+            {/* Custom budget accounts editor */}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => setShowCustomAccounts(!showCustomAccounts)}
+                className="text-xs font-bold text-indigo-500 hover:text-indigo-400 flex items-center gap-1.5 transition-colors"
+              >
+                {showCustomAccounts ? "Приховати налаштування рахунків" : "Налаштувати власні бюджетні рахунки (якщо автоматичні невірні)"}
+              </button>
+
+              {showCustomAccounts && (
+                <div className="mt-4 space-y-4 bg-slate-50 dark:bg-slate-950/40 p-4 rounded-xl border border-slate-100 dark:border-slate-800/40 animate-in fade-in duration-200">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Отримувач платежу</label>
+                      <input
+                        type="text"
+                        value={customRecipient}
+                        onChange={(e) => setCustomRecipient(e.target.value)}
+                        placeholder="Наприклад: ГУ ДПС у Львівській області"
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-semibold"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Код ЄДРПОУ отримувача</label>
+                      <input
+                        type="text"
+                        value={customEdrpou}
+                        onChange={(e) => setCustomEdrpou(e.target.value)}
+                        placeholder="Наприклад: 44081023"
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">IBAN Єдиного податку (ЄП)</label>
+                      <input
+                        type="text"
+                        value={customIbanEdp}
+                        onChange={(e) => setCustomIbanEdp(e.target.value)}
+                        placeholder="UA..."
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-mono font-semibold"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">IBAN ЄСВ за себе</label>
+                      <input
+                        type="text"
+                        value={customIbanEsv}
+                        onChange={(e) => setCustomIbanEsv(e.target.value)}
+                        placeholder="UA..."
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-mono font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">IBAN Військового збору (ВЗ)</label>
+                      <input
+                        type="text"
+                        value={customIbanVz}
+                        onChange={(e) => setCustomIbanVz(e.target.value)}
+                        placeholder="UA..."
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-mono font-semibold"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">IBAN ПДФО</label>
+                      <input
+                        type="text"
+                        value={customIbanPdfo}
+                        onChange={(e) => setCustomIbanPdfo(e.target.value)}
+                        placeholder="UA..."
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none text-slate-800 dark:text-slate-200 font-mono font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      disabled={savingCustom}
+                      onClick={handleSaveCustomAccounts}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+                    >
+                      {savingCustom ? "Збереження..." : "Зберегти реквізити"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Liabilities List */}
@@ -489,7 +676,7 @@ export default function TaxesPage() {
                 {paymentData.methods[paymentData.bank_code]?.qr_code ? (
                   <div className="space-y-3">
                     <div className="p-3 bg-white dark:bg-white inline-block rounded-xl shadow-sm border border-slate-200/50">
-                      <QRCodeSVG value={paymentData.methods[paymentData.bank_code].qr_code} size={180} />
+                      <QRCodeSVG value={qrCodeValue} size={180} />
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-center gap-1">
                       <Info className="w-3.5 h-3.5 text-slate-400" />
@@ -502,79 +689,119 @@ export default function TaxesPage() {
                   </div>
                 )}
 
-                {paymentData.methods[paymentData.bank_code]?.deep_link && (
+                {currentDeepLink && (
                   <a
-                    href={paymentData.methods[paymentData.bank_code].deep_link}
+                    href={currentDeepLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/15 transition-all text-sm"
                   >
-                    Відкрити в додатку
+                    Відкрити в додатку ({banks.find(b => b.id === paymentData.bank_code)?.name})
                     <ExternalLink className="w-4 h-4" />
                   </a>
                 )}
               </div>
 
               {/* Payment Details */}
-              <div className="space-y-3.5">
+              <div className="space-y-4">
                 <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800/60 pb-1">
                   Реквізити платежу
                 </h4>
                 
-                <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
-                  <div className="flex justify-between items-start gap-4">
-                    <span className="text-slate-400 flex-shrink-0 w-24">Отримувач:</span>
-                    <span className="font-medium text-slate-800 dark:text-slate-200 text-right">{paymentData.recipient}</span>
+                <div className="space-y-4">
+                  {/* Recipient */}
+                  <div className="space-y-1 text-left">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">Отримувач</label>
+                      <button
+                        onClick={() => copyToClipboard(modalRecipient, "recipient")}
+                        className="text-slate-400 hover:text-indigo-500 p-0.5"
+                      >
+                        {copiedField === "recipient" ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={modalRecipient}
+                      onChange={(e) => setModalRecipient(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/60 rounded-xl text-xs focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-200 font-semibold"
+                    />
                   </div>
 
-                  <div className="flex justify-between items-center gap-4">
-                    <span className="text-slate-400 flex-shrink-0">Код ЄДРПОУ:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono font-medium text-slate-800 dark:text-slate-200">{paymentData.edrpou}</span>
+                  {/* EDRPOU */}
+                  <div className="space-y-1 text-left">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">Код ЄДРПОУ</label>
                       <button
-                        onClick={() => copyToClipboard(paymentData.edrpou, "edrpou")}
+                        onClick={() => copyToClipboard(modalEdrpou, "edrpou")}
                         className="text-slate-400 hover:text-indigo-500 p-0.5"
                       >
                         {copiedField === "edrpou" ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
+                    <input
+                      type="text"
+                      value={modalEdrpou}
+                      onChange={(e) => setModalEdrpou(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/60 rounded-xl text-xs focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-200 font-mono font-semibold"
+                    />
                   </div>
 
-                  <div className="flex justify-between items-start gap-4">
-                    <span className="text-slate-400 flex-shrink-0">IBAN:</span>
-                    <div className="flex items-start gap-1.5 max-w-[260px] text-right">
-                      <span className="font-mono font-bold text-slate-800 dark:text-slate-200 break-all">{paymentData.iban}</span>
+                  {/* IBAN */}
+                  <div className="space-y-1 text-left">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">IBAN отримувача</label>
                       <button
-                        onClick={() => copyToClipboard(paymentData.iban, "iban")}
-                        className="text-slate-400 hover:text-indigo-500 p-0.5 mt-0.5 flex-shrink-0"
+                        onClick={() => copyToClipboard(modalIban, "iban")}
+                        className="text-slate-400 hover:text-indigo-500 p-0.5"
                       >
                         {copiedField === "iban" ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
+                    <input
+                      type="text"
+                      value={modalIban}
+                      onChange={(e) => setModalIban(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/60 rounded-xl text-xs focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-200 font-mono font-bold"
+                    />
                   </div>
 
-                  <div className="flex justify-between items-center gap-4">
-                    <span className="text-slate-400 flex-shrink-0">Сума:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-slate-800 dark:text-slate-200">{paymentData.amount.toFixed(2)} грн</span>
+                  {/* Amount */}
+                  <div className="space-y-1 text-left">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">Сума (грн)</label>
                       <button
-                        onClick={() => copyToClipboard(paymentData.amount.toFixed(2), "amount")}
+                        onClick={() => copyToClipboard(modalAmount, "amount")}
                         className="text-slate-400 hover:text-indigo-500 p-0.5"
                       >
                         {copiedField === "amount" ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
+                    <input
+                      type="text"
+                      value={modalAmount}
+                      onChange={(e) => setModalAmount(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/60 rounded-xl text-xs focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-200 font-bold"
+                    />
                   </div>
 
-                  <div className="flex justify-between items-start gap-4">
-                    <span className="text-slate-400 flex-shrink-0">Призначення:</span>
-                    <div className="flex items-start gap-1.5 text-right max-w-[260px]">
-                      <span className="font-medium text-slate-800 dark:text-slate-200 break-words">{paymentData.purpose}</span>
+                  {/* Purpose */}
+                  <div className="space-y-1 text-left">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold">Призначення платежу</label>
                       <button
-                        onClick={() => copyToClipboard(paymentData.purpose, "purpose")}
-                        className="text-slate-400 hover:text-indigo-500 p-0.5 flex-shrink-0"
+                        onClick={() => copyToClipboard(modalPurpose, "purpose")}
+                        className="text-slate-400 hover:text-indigo-500 p-0.5"
                       >
                         {copiedField === "purpose" ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
+                    <textarea
+                      rows={3}
+                      value={modalPurpose}
+                      onChange={(e) => setModalPurpose(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/60 rounded-xl text-xs focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-200 font-semibold resize-y"
+                    />
                   </div>
                 </div>
               </div>

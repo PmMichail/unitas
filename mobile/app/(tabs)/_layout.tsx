@@ -59,11 +59,11 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="reports"
+        name="invoices"
         options={{
-          title: 'Звіти',
-          headerTitle: 'Декларації та звіти',
-          tabBarLabel: 'Звіти',
+          title: 'Рахунки',
+          headerTitle: 'Рахунки (Сформувати та відправити)',
+          tabBarLabel: 'Рахунки',
           tabBarIcon: ({ color, size }) => <FileText size={size} color={color} />,
         }}
       />

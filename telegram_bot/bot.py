@@ -51,7 +51,7 @@ AI_CHAT = range(25, 26)
 def get_main_menu_keyboard():
     keyboard = [
         ["📊 Дашборд", "📁 Мої дані"],
-        ["📤 Завантажити виписку", "📄 Звіти"],
+        ["📤 Завантажити виписку", "🧾 Рахунки"],
         ["👥 Працівники", "➕ Додати підприємство"],
         ["📊 Податковий аналіз", "💵 Сплата податків"],
         ["📥 Експорт даних", "🔏 Підписати документи"],
@@ -2282,8 +2282,8 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mydata(update, context)
     elif text == "📤 Завантажити виписку":
         await upload_prompt(update, context)
-    elif text == "📄 Звіти":
-        await generate_report_cmd(update, context)
+    elif text == "🧾 Рахунки":
+        await invoices_cmd(update, context)
     elif text == "👥 Працівники":
         await employees_cmd(update, context)
     elif text == "➕ Додати підприємство":
@@ -3156,6 +3156,162 @@ async def handle_txsub_start_callback(update: Update, context: ContextTypes.DEFA
         logger.error(f"Error in handle_txsub_start_callback: {e}")
         await query.message.reply_text("⚠️ Помилка зв'язку з бекендом.")
 
+async def invoices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отримання списку рахунків для профілів користувача."""
+    telegram_id = str(update.effective_user.id)
+    message = update.message if update.message else update.callback_query.message
+    try:
+        res_profiles = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+        if res_profiles.status_code != 200 or len(res_profiles.json()) == 0:
+            await message.reply_text(
+                "У вас поки немає зареєстрованих профілів.\n"
+                "Будь ласка, почніть з реєстрації через /start або додайте новий профіль через /add_profile."
+            )
+            return
+            
+        profiles = res_profiles.json()
+        if len(profiles) == 1:
+            await show_profile_invoices(message, profiles[0]["id"], profiles[0]["name"])
+        else:
+            keyboard = [
+                [InlineKeyboardButton(p["name"], callback_data=f"inv_p_{p['id']}")]
+                for p in profiles
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.reply_text(
+                "🧾 **Вибір профілю для рахунків**\n\nОберіть підприємство:",
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.error(f"Error in invoices_cmd: {e}")
+        await message.reply_text("⚠️ Виникла помилка зв'язку з бекендом.")
+
+async def handle_invoice_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    profile_id = int(query.data.split("_")[2])
+    
+    # Get profile name
+    telegram_id = str(update.effective_user.id)
+    res_profiles = requests.get(f"{BACKEND_URL}/api/profiles/{telegram_id}", timeout=3)
+    profile_name = "Підприємство"
+    if res_profiles.status_code == 200:
+        for p in res_profiles.json():
+            if p["id"] == profile_id:
+                profile_name = p["name"]
+                
+    await show_profile_invoices(query.message, profile_id, profile_name)
+
+async def show_profile_invoices(message, profile_id: int, profile_name: str):
+    try:
+        res = requests.get(f"{BACKEND_URL}/api/invoices/{profile_id}", timeout=5)
+        if res.status_code == 200:
+            invoices = res.json()
+            if not invoices:
+                await message.reply_text(
+                    f"🧾 **Рахунки для {profile_name}:**\n\n"
+                    "У вас поки немає створених рахунків. Ви можете сформувати рахунок у веб-кабінеті."
+                )
+                return
+                
+            msg = f"🧾 **Останні рахунки для {profile_name}:**\n\n"
+            keyboard = []
+            for inv in invoices[:5]:
+                status_ua = "сплачено" if inv["status"] == "paid" else "надіслано" if inv["status"] == "sent" else "чернетка"
+                msg += f"• **Рахунок №{inv['invoice_number']}**\n" \
+                       f"  Клієнт: {inv.get('client_name') or 'не вказано'}\n" \
+                       f"  Послуга: {inv.get('service_name') or 'не вказано'}\n" \
+                       f"  Сума: **{inv['amount']:,.2f} грн** (статус: {status_ua})\n\n"
+                       
+                # Add action buttons for unsigned/unsent invoices
+                buttons = []
+                if inv["status"] != "signed":
+                    buttons.append(InlineKeyboardButton(f"✍️ Підписати №{inv['invoice_number']}", callback_data=f"sig_sel_invoice_{inv['id']}_{profile_id}"))
+                if inv["status"] == "draft":
+                    buttons.append(InlineKeyboardButton(f"📧 Надіслати №{inv['invoice_number']}", callback_data=f"inv_send_{inv['id']}_{profile_id}"))
+                if buttons:
+                    keyboard.append(buttons)
+            
+            # Add a button to open the web version or generate new
+            keyboard.append([
+                InlineKeyboardButton("➕ Створити рахунок (на сайті)", url="https://unitas-frontend.fly.dev/invoices/new")
+            ])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await message.reply_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            await message.reply_text("⚠️ Не вдалося отримати рахунки.")
+    except Exception as e:
+        logger.error(f"Error in show_profile_invoices: {e}")
+        await message.reply_text("⚠️ Помилка зв'язку з бекендом.")
+
+async def handle_invoice_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("_")
+    invoice_id = int(parts[2])
+    profile_id = int(parts[3])
+    
+    await query.edit_message_text("⏳ Надсилаємо рахунок контрагенту на email...")
+    
+    try:
+        # Find invoice in profile invoices to get client_email and invoice_number
+        res = requests.get(f"{BACKEND_URL}/api/invoices/{profile_id}", timeout=5)
+        if res.status_code == 200:
+            invoices = res.json()
+            target_inv = None
+            for inv in invoices:
+                if inv["id"] == invoice_id:
+                    target_inv = inv
+                    break
+                    
+            if not target_inv:
+                await query.edit_message_text("❌ Рахунок не знайдено.")
+                return
+                
+            client_email = target_inv.get("client_email")
+            invoice_number = target_inv.get("invoice_number")
+            
+            if not client_email:
+                await query.edit_message_text(
+                    f"⚠️ **У рахунку №{invoice_number} не вказано email контрагента.**\n\n"
+                    f"Будь ласка, вкажіть email у веб-кабінеті UniTax: https://unitas-frontend.fly.dev/invoices"
+                )
+                return
+                
+            # Call send invoice backend API
+            payload = {
+                "toEmail": client_email,
+                "subject": f"Рахунок №{invoice_number}",
+                "message": f"Доброго дня!\n\nВам виписано рахунок №{invoice_number} на суму {target_inv['amount']:,.2f} грн.\n\nДокументи прикріплено до листа.\n\nДякуємо за співпрацю!"
+            }
+            res_send = requests.post(f"{BACKEND_URL}/api/invoices/{invoice_id}/send", json=payload, timeout=10)
+            if res_send.status_code == 200:
+                await query.edit_message_text(f"✅ **Рахунок №{invoice_number} успішно надіслано на {client_email}!**")
+            else:
+                await query.edit_message_text(f"❌ Помилка надсилання: {res_send.text}")
+        else:
+            await query.edit_message_text("⚠️ Не вдалося завантажити деталі рахунку з бекенду.")
+    except Exception as e:
+        logger.error(f"Error in handle_invoice_send_callback: {e}")
+        await query.edit_message_text("⚠️ Виникла помилка зв'язку з бекендом.")
+
+async def post_init(application: Application) -> None:
+    from telegram import BotCommand
+    commands = [
+        BotCommand("start", "Почати роботу / Налаштування"),
+        BotCommand("menu", "Показати головне меню"),
+        BotCommand("invoices", "🧾 Рахунки (Сформувати та відправити)"),
+        BotCommand("pay", "💵 Сплата податків та QR-коди"),
+        BotCommand("status", "📊 Статус доходів та ліміти"),
+        BotCommand("tax_analysis", "📊 Податковий аналіз"),
+        BotCommand("check_debt", "🔍 Перевірити податковий борг"),
+        BotCommand("sign", "🔏 Підписати документи (КЕП/Дія)"),
+        BotCommand("alerts", "🔔 Сповіщення про дедлайни"),
+        BotCommand("ai", "💬 Чат з ШІ-асистентом UniTax"),
+    ]
+    await application.bot.set_my_commands(commands)
+
+
 def main() -> None:
     """Запуск бота."""
     if TOKEN == "MOCK_TOKEN_FOR_TESTS":
@@ -3163,7 +3319,7 @@ def main() -> None:
         return
 
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
     # Add conversation handler for registration
     conv_handler = ConversationHandler(
@@ -3258,6 +3414,7 @@ def main() -> None:
     application.add_handler(CommandHandler("support", support))
     application.add_handler(CommandHandler("debug", debug))
     application.add_handler(CommandHandler("menu", menu))
+    application.add_handler(CommandHandler("invoices", invoices_cmd))
     application.add_handler(CommandHandler("check_employees", check_employees_cmd))
     application.add_handler(CommandHandler("edit_transaction", edit_transaction_start))
     application.add_handler(CommandHandler("tax_analysis", tax_analysis_cmd))
@@ -3282,6 +3439,8 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.Regex(r"^/submit_(\d+)$"), handle_submit_by_id))
     
     # Callback handlers
+    application.add_handler(CallbackQueryHandler(handle_invoice_profile_callback, pattern="^inv_p_"))
+    application.add_handler(CallbackQueryHandler(handle_invoice_send_callback, pattern="^inv_send_"))
     application.add_handler(CallbackQueryHandler(handle_callback_download, pattern="^dl_"))
     application.add_handler(CallbackQueryHandler(handle_report_selection, pattern="^rep_"))
     application.add_handler(CallbackQueryHandler(handle_tx_profile_callback, pattern="^tx_edit_p_"))
@@ -3311,7 +3470,7 @@ def main() -> None:
             "📊 Дашборд", 
             "📁 Мої дані", 
             "📤 Завантажити виписку", 
-            "📄 Звіти", 
+            "🧾 Рахунки", 
             "👥 Працівники", 
             "➕ Додати підприємство",
             "📊 Податковий аналіз",

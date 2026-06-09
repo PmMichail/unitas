@@ -584,7 +584,7 @@ export default function Profiles() {
       tax_id: formTaxId,
       tax_system: formTaxSystem,
       group: formTaxSystem === "ednuy-3-5%" ? formGroup : undefined,
-      rate: formTaxSystem === "ednuy-3-5%" ? formRate : undefined,
+      rate: formTaxSystem === "ednuy-3-5%" ? (formGroup === 3 ? formRate : 0) : undefined,
       has_employees: formHasEmployees,
       is_vat_payer: formIsVatPayer,
       reg_date: formRegDate,
@@ -738,7 +738,11 @@ export default function Profiles() {
                 {["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(profile.tax_system) && (
                   <div className="flex justify-between">
                     <span>Ставка податку:</span>
-                    <span className="font-bold text-slate-700 dark:text-slate-300">{profile.rate || 5}%</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-300">
+                      {profile.type === "fop" && (profile.group === 1 || profile.group === 2)
+                        ? "Фіксована ставка"
+                        : `${profile.rate || 5}%`}
+                    </span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -758,19 +762,19 @@ export default function Profiles() {
                 {profile.address && (
                   <div className="flex flex-col gap-0.5 pt-1 border-t border-slate-100 dark:border-slate-800">
                     <span className="text-[10px] text-slate-400">Юридична адреса:</span>
-                    <span className="font-semibold text-slate-700 dark:text-slate-350 line-clamp-2">{profile.address}</span>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300 line-clamp-2">{profile.address}</span>
                   </div>
                 )}
                 {profile.director_name && (
                   <div className="flex justify-between pt-1">
                     <span>Директор (ПІБ):</span>
-                    <span className="font-bold text-slate-705 dark:text-slate-300">{profile.director_name}</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-300">{profile.director_name}</span>
                   </div>
                 )}
                 {profile.phone && (
                   <div className="flex justify-between">
                     <span>Телефон:</span>
-                    <span className="font-bold text-slate-705 dark:text-slate-300">{profile.phone}</span>
+                    <span className="font-bold text-slate-700 dark:text-slate-300">{profile.phone}</span>
                   </div>
                 )}
               </div>
@@ -830,7 +834,7 @@ export default function Profiles() {
           <div className="col-span-full py-16 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl p-6 bg-slate-50/50 dark:bg-slate-950/10">
             <Briefcase className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-4" />
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Не додано жодного профілю</h3>
-            <p className="text-xs text-slate-555 dark:text-slate-400 mt-1 max-w-sm mx-auto">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
               Для того, щоб переглядати аналітику та подавати звіти, будь ласка, додайте свій перший ФОП або підприємство.
             </p>
             <button
@@ -888,7 +892,7 @@ export default function Profiles() {
                       type="button"
                       onClick={() => handleSubscribe("free", "monthly")}
                       disabled={loading}
-                      className="w-full py-2 rounded-xl border border-slate-250 dark:border-slate-750 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-800 dark:text-slate-200 font-bold text-xs transition-all"
+                      className="w-full py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-800 dark:text-slate-200 font-bold text-xs transition-all"
                     >
                       Активувати Free
                     </button>
@@ -943,7 +947,7 @@ export default function Profiles() {
                     className={`p-5 rounded-2xl border text-left space-y-2 transition-all ${
                       selectedPeriod === "monthly"
                         ? "border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/10 ring-1 ring-indigo-500"
-                        : "border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-750"
+                        : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
                     }`}
                   >
                     <span className="text-[10px] uppercase font-bold text-indigo-500 tracking-wider">Помісячно</span>
@@ -961,7 +965,7 @@ export default function Profiles() {
                     className={`p-5 rounded-2xl border text-left space-y-2 transition-all relative overflow-hidden ${
                       selectedPeriod === "yearly"
                         ? "border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/10 ring-1 ring-indigo-500"
-                        : "border-slate-200 dark:border-slate-800 hover:border-slate-350 dark:hover:border-slate-750"
+                        : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
                     }`}
                   >
                     <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-0.5 rounded-bl-lg">
@@ -987,7 +991,7 @@ export default function Profiles() {
                   <button
                     type="button"
                     onClick={() => setModalStep("plan")}
-                    className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
+                    className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
                   >
                     Назад
                   </button>
@@ -1035,13 +1039,13 @@ export default function Profiles() {
                       <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
                         Тип організації
                       </label>
-                      <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-855">
+                      <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-800">
                         <button
                           type="button"
                           onClick={() => setFormType("fop")}
                           className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                             formType === "fop"
-                              ? "bg-white dark:bg-slate-805 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                              ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
                               : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                           }`}
                         >
@@ -1053,7 +1057,7 @@ export default function Profiles() {
                           onClick={() => setFormType("company")}
                           className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                             formType === "company"
-                              ? "bg-white dark:bg-slate-805 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                              ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
                               : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                           }`}
                         >
@@ -1218,7 +1222,7 @@ export default function Profiles() {
 
                     {/* Group and rate fields (if EP) */}
                     {formTaxSystem === "ednuy-3-5%" && (
-                      <div className="grid grid-cols-2 gap-4 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-850">
+                      <div className="grid grid-cols-2 gap-4 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
                         <div>
                           <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
                             Група ЄП
@@ -1237,15 +1241,21 @@ export default function Profiles() {
                           <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
                             Ставка податку
                           </label>
-                          <select
-                            value={formRate}
-                            onChange={(e) => setFormRate(Number(e.target.value))}
-                            className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-bold"
-                          >
-                            <option value={2}>2% (пільгова)</option>
-                            <option value={3}>3% (+ПДВ)</option>
-                            <option value={5}>5%</option>
-                          </select>
+                          {formGroup === 1 || formGroup === 2 ? (
+                            <div className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-500 dark:text-slate-400">
+                              Фіксована ставка
+                            </div>
+                          ) : (
+                            <select
+                              value={formRate}
+                              onChange={(e) => setFormRate(Number(e.target.value))}
+                              className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-bold"
+                            >
+                              <option value={2}>2% (пільгова)</option>
+                              <option value={3}>3% (+ПДВ)</option>
+                              <option value={5}>5%</option>
+                            </select>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1334,13 +1344,13 @@ export default function Profiles() {
             </div>
 
             {/* Tabs */}
-            <div className="flex bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-850">
+            <div className="flex bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-800">
               <button
                 onClick={() => { setInvActiveTab("schedules"); setInvoiceFormOpen(false); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   invActiveTab === "schedules" && !invoiceFormOpen
-                    ? "bg-white dark:bg-slate-850 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-350"
+                    ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
               >
                 Авто-відправка
@@ -1349,8 +1359,8 @@ export default function Profiles() {
                 onClick={() => { setInvActiveTab("oneoff"); setInvoiceFormOpen(false); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   invActiveTab === "oneoff"
-                    ? "bg-white dark:bg-slate-850 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-350"
+                    ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
               >
                 Разовий рахунок
@@ -1359,8 +1369,8 @@ export default function Profiles() {
                 onClick={() => { setInvActiveTab("history"); setInvoiceFormOpen(false); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   invActiveTab === "history"
-                    ? "bg-white dark:bg-slate-855 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
-                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-350"
+                    ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
               >
                 Історія документів
@@ -1463,7 +1473,7 @@ export default function Profiles() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-850">
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Генерувати акт виконаних робіт</span>
                     <span className="text-[10px] text-slate-400">Автоматично створювати та надсилати акт разом із рахунком</span>
@@ -1642,7 +1652,7 @@ export default function Profiles() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-850">
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Генерувати акт виконаних робіт</span>
                     <span className="text-[10px] text-slate-400">Створити та надіслати акт виконаних робіт разом із рахунком</span>
@@ -1816,7 +1826,7 @@ export default function Profiles() {
             </div>
 
             {/* Include act toggler */}
-            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-850">
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
               <div className="flex flex-col">
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Генерувати акт виконаних робіт</span>
               </div>
@@ -1824,12 +1834,12 @@ export default function Profiles() {
                 type="checkbox"
                 checked={sendIncludeAct}
                 onChange={(e) => setSendIncludeAct(e.target.checked)}
-                className="w-5 h-5 text-indigo-600 border-slate-350 rounded cursor-pointer"
+                className="w-5 h-5 text-indigo-600 border-slate-300 rounded cursor-pointer"
               />
             </div>
 
             {/* Custom date toggler */}
-            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-850">
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
               <div className="flex flex-col">
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200">Встановити дату документа вручную</span>
               </div>
@@ -1837,7 +1847,7 @@ export default function Profiles() {
                 type="checkbox"
                 checked={customDateEnabled}
                 onChange={(e) => setCustomDateEnabled(e.target.checked)}
-                className="w-5 h-5 text-indigo-600 border-slate-350 rounded cursor-pointer"
+                className="w-5 h-5 text-indigo-600 border-slate-300 rounded cursor-pointer"
               />
             </div>
 
@@ -1976,7 +1986,7 @@ export default function Profiles() {
                         <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 ${
                           subModalSubscription?.plan !== "business"
                             ? "bg-slate-50 dark:bg-slate-900/40 border-indigo-500/30"
-                            : "bg-slate-50/20 dark:bg-slate-950/20 border-slate-100 dark:border-slate-850/60 opacity-60"
+                            : "bg-slate-50/20 dark:bg-slate-950/20 border-slate-100 dark:border-slate-800/60 opacity-60"
                         }`}>
                           <div>
                             <div className="flex justify-between items-start">
@@ -2040,7 +2050,7 @@ export default function Profiles() {
                         <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 relative ${
                           subModalSubscription?.plan === "business"
                             ? "bg-slate-50 dark:bg-slate-900/40 border-amber-500/35"
-                            : "bg-slate-50/20 dark:bg-slate-950/20 border-slate-100 dark:border-slate-850/60 hover:border-slate-200 dark:hover:border-slate-800"
+                            : "bg-slate-50/20 dark:bg-slate-950/20 border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-800"
                         }`}>
                           <div>
                             <div className="flex justify-between items-start">
@@ -2079,7 +2089,7 @@ export default function Profiles() {
                                 subModalLoading
                                   ? "bg-amber-600/50 text-white/50 cursor-not-allowed"
                                   : subModalSubscription?.plan === "business" && subModalSubscription?.payment_period === subModalPeriod
-                                    ? "bg-slate-100 dark:bg-slate-800 text-slate-805 dark:text-white border border-slate-200 dark:border-slate-700"
+                                    ? "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700"
                                     : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white"
                               }`}
                             >
@@ -2212,9 +2222,9 @@ export default function Profiles() {
                         <span>Журнал оплат порожній</span>
                       </div>
                     ) : (
-                      <div className="border border-slate-200 dark:border-slate-850 rounded-2xl overflow-hidden overflow-x-auto">
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden overflow-x-auto">
                         <table className="w-full border-collapse text-left text-xs">
-                          <thead className="bg-slate-100 dark:bg-slate-900/65 text-slate-500 border-b border-slate-250 dark:border-slate-800">
+                          <thead className="bg-slate-100 dark:bg-slate-900/65 text-slate-500 border-b border-slate-200 dark:border-slate-800">
                             <tr>
                               <th className="p-3 font-bold uppercase tracking-wider text-[10px]">Призначення</th>
                               <th className="p-3 font-bold uppercase tracking-wider text-[10px]">Сума</th>
@@ -2271,7 +2281,7 @@ export default function Profiles() {
               <button
                 type="button"
                 onClick={() => setIsSubModalOpen(false)}
-                className="px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-850 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
+                className="px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
               >
                 Закрити
               </button>

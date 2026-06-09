@@ -26,7 +26,8 @@ import {
   ExternalLink,
   X,
   Send,
-  MessageSquare
+  MessageSquare,
+  Trash2
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -34,6 +35,7 @@ export default function Dashboard() {
 
   // States
   const [companyId, setCompanyId] = useState<number>(1);
+  const [statements, setStatements] = useState<any[]>([]);
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,8 +57,6 @@ export default function Dashboard() {
                   String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("llc") ||
                   String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("товариство") ||
                   dashboardData?.type === "company" || selectedProfile?.type === "company");
-  const [isChatOpen, setIsChatOpen] = useState(false);
-
   // Period Selection States
   const [periodType, setPeriodType] = useState<string>("all");
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
@@ -100,7 +100,6 @@ export default function Dashboard() {
   const [sendingChat, setSendingChat] = useState(false);
 
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
-  const floatingChatMessagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll to bottom of chat containers when messages or state change
   useEffect(() => {
@@ -109,16 +108,22 @@ export default function Dashboard() {
     }
   }, [chatMessages, sendingChat, activeAiTab]);
 
-  useEffect(() => {
-    if (isChatOpen && floatingChatMessagesEndRef.current) {
-      floatingChatMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [chatMessages, sendingChat, isChatOpen]);
-
-  // Sync active profile from context
+  // Sync active profile from context and load chat history
   useEffect(() => {
     if (selectedProfile) {
       setCompanyId(selectedProfile.id);
+      const saved = localStorage.getItem(`chat_history_${selectedProfile.id}`);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setChatMessages(parsed);
+            return;
+          }
+        } catch (e) {
+          console.error("Failed to parse saved chat history", e);
+        }
+      }
       setChatMessages([
         {
           sender: "agent",
@@ -126,7 +131,14 @@ export default function Dashboard() {
         }
       ]);
     }
-  }, [selectedProfile]);
+  }, [selectedProfile?.id]);
+
+  // Sync chat history to localStorage
+  useEffect(() => {
+    if (companyId && chatMessages.length > 0) {
+      localStorage.setItem(`chat_history_${companyId}`, JSON.stringify(chatMessages));
+    }
+  }, [chatMessages, companyId]);
 
   // Fetch dashboard data
   const fetchDashboardData = async () => {
@@ -229,13 +241,31 @@ export default function Dashboard() {
     }
   };
 
+  const fetchStatements = async () => {
+    if (!companyId) return;
+    try {
+      const data = await api.getStatements(companyId);
+      setStatements(data);
+    } catch (err) {
+      console.warn("Помилка завантаження виписок, використовуємо порожній список.");
+      setStatements([]);
+    }
+  };
+
   useEffect(() => {
     fetchDashboardData();
   }, [companyId, periodType, selectedYear, selectedMonth, selectedQuarter]);
 
   useEffect(() => {
     fetchLegislationData();
+    fetchStatements();
   }, [companyId]);
+
+  useEffect(() => {
+    if (activeTab === "statements") {
+      fetchStatements();
+    }
+  }, [activeTab, companyId]);
 
   // Handle statement upload
   const handleFileUpload = async (e: React.FormEvent) => {
@@ -249,8 +279,9 @@ export default function Dashboard() {
       const result = await api.uploadStatement(companyId, selectedFile);
       setUploadSuccess(result.message);
       setSelectedFile(null);
-      // Refresh dashboard
+      // Refresh dashboard & statements
       fetchDashboardData();
+      fetchStatements();
     } catch (err: any) {
       console.warn("Симулюємо успішне завантаження виписки у демо-режимі");
       // Simulation response
@@ -322,6 +353,19 @@ export default function Dashboard() {
     }
   };
 
+  // Handle Clear Chat
+  const handleClearChat = () => {
+    if (selectedProfile) {
+      localStorage.removeItem(`chat_history_${selectedProfile.id}`);
+      setChatMessages([
+        {
+          sender: "agent",
+          text: `Вітаю! Я ваш персональний ШІ-Асистент UniTax для профілю **${selectedProfile.name}**. Я знаю все про ваші податки, доходи, працівників та військовий збір. Запитайте мене про будь-що, наприклад:\n\n• *«Який військовий збір мені потрібно сплатити?»*\n• *«Який мій дохід та поточний ліміт?»*\n• *«Які податки треба сплатити за працівників?»*`
+        }
+      ]);
+    }
+  };
+
   // Handle Send Chat Message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -329,12 +373,22 @@ export default function Dashboard() {
 
     const userMsg = inputMessage.trim();
     setInputMessage("");
-    setChatMessages((prev) => [...prev, { sender: "user", text: userMsg }]);
+    
+    // Add user message to state
+    const updatedMessages = [...chatMessages, { sender: "user" as const, text: userMsg }];
+    setChatMessages(updatedMessages);
     setSendingChat(true);
 
+    // Get the last 10 messages as history
+    const history = chatMessages.slice(-10).map(msg => ({
+      sender: msg.sender,
+      text: msg.text
+    }));
+
     try {
-      const res = await agentApi.chat(companyId, userMsg);
-      setChatMessages((prev) => [...prev, { sender: "agent", text: res.response }]);
+      const res = await agentApi.chat(companyId, userMsg, history);
+      const agentAnswer = res.response || res.answer || "Не вдалося отримати відповідь від ШІ-агента.";
+      setChatMessages((prev) => [...prev, { sender: "agent", text: agentAnswer }]);
     } catch (err) {
       console.error("Помилка відправки повідомлення ШІ-агенту:", err);
       setChatMessages((prev) => [
@@ -430,15 +484,18 @@ export default function Dashboard() {
             >
               Виписки
             </button>
-            <button 
-              onClick={() => setActiveTab("reports")} 
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${activeTab === "reports" ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20" : "text-slate-400 hover:text-slate-200"}`}
-            >
-              Звіти
-            </button>
           </nav>
 
           <div className="flex items-center space-x-3">
+            <a 
+              href="https://t.me/unitas_tax_bot" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="flex items-center space-x-2 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-xl px-3.5 py-1.5 text-xs font-semibold shadow-md shadow-indigo-600/10 transition-all hover:scale-[1.03] active:scale-95"
+            >
+              <Send className="w-3.5 h-3.5 text-indigo-200" />
+              <span>Мій Telegram ID: Перейти</span>
+            </a>
             <div className="flex items-center space-x-2 bg-slate-900/60 border border-slate-800/60 rounded-xl px-3.5 py-1.5">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -479,11 +536,15 @@ export default function Dashboard() {
                           Група {dashboardData.group}
                         </span>
                       )}
-                      {(dashboardData?.rate !== undefined && dashboardData?.rate !== null) && (
+                      {(dashboardData?.rate !== undefined && dashboardData?.rate !== null && !(isFop && (dashboardData?.group === 1 || dashboardData?.group === 2))) ? (
                         <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
                           Ставка {dashboardData.rate}%
                         </span>
-                      )}
+                      ) : (isFop && (dashboardData?.group === 1 || dashboardData?.group === 2) && (
+                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
+                          Фіксована ставка
+                        </span>
+                      ))}
                     </div>
                   </div>
                   <div className="mt-4 md:mt-0 flex space-x-3">
@@ -797,15 +858,27 @@ export default function Dashboard() {
                     {/* AI Legislation Monitor Panel */}
                     <div className="p-6 rounded-2xl glass-panel">
                       <div className="flex flex-col gap-4 mb-6">
-                        <div className="flex items-center space-x-2">
-                          <Cpu className="w-5 h-5 text-indigo-400 animate-pulse shrink-0" />
-                          <div>
-                            <h3 className="text-base font-bold text-white flex items-center">
-                              ШІ-Асистент UniTax
-                              <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded">AI</span>
-                            </h3>
-                            <p className="text-xs text-slate-400">Управляюча площадка та консультації</p>
+                        <div className="flex justify-between items-start w-full">
+                          <div className="flex items-center space-x-2">
+                            <Cpu className="w-5 h-5 text-indigo-400 animate-pulse shrink-0" />
+                            <div>
+                              <h3 className="text-base font-bold text-white flex items-center">
+                                ШІ-Асистент UniTax
+                                <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded">AI</span>
+                              </h3>
+                              <p className="text-xs text-slate-400">Управляюча площадка та консультації</p>
+                            </div>
                           </div>
+                          {activeAiTab === "chat" && (
+                            <button
+                              type="button"
+                              onClick={handleClearChat}
+                              className="text-[11px] px-2.5 py-1.5 bg-slate-900 border border-slate-800 hover:border-red-500/30 hover:bg-red-950/10 hover:text-red-400 text-slate-400 rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-medium"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Очистити
+                            </button>
+                          )}
                         </div>
 
                         {/* Segmented Tab Control */}
@@ -1139,28 +1212,39 @@ export default function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        <tr className="border-b border-slate-800/40 bg-slate-900/10">
-                          <td className="px-6 py-4 font-semibold text-white">monobank_statement_mar2025.csv</td>
-                          <td className="px-6 py-4">monobank</td>
-                          <td className="px-6 py-4">2026-05-24</td>
-                          <td className="px-6 py-4">
-                            <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-xs font-semibold">Розпізнано AI</span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <button className="text-indigo-400 hover:text-indigo-300 font-semibold">Переглянути транзакції</button>
-                          </td>
-                        </tr>
-                        <tr className="border-b border-slate-800/40 bg-slate-900/10">
-                          <td className="px-6 py-4 font-semibold text-white">privat24_statement_2025.pdf</td>
-                          <td className="px-6 py-4">ПриватБанк</td>
-                          <td className="px-6 py-4">2026-05-24</td>
-                          <td className="px-6 py-4">
-                            <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-xs font-semibold">Розпізнано AI</span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <button className="text-indigo-400 hover:text-indigo-300 font-semibold">Переглянути транзакції</button>
-                          </td>
-                        </tr>
+                        {statements.map((stmt: any) => (
+                          <tr key={stmt.id} className="border-b border-slate-800/40 bg-slate-900/10">
+                            <td className="px-6 py-4 font-semibold text-white">{stmt.file_name}</td>
+                            <td className="px-6 py-4 capitalize">{stmt.bank_name}</td>
+                            <td className="px-6 py-4">{stmt.uploaded_at || "—"}</td>
+                            <td className="px-6 py-4">
+                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                stmt.status === "parsed"
+                                  ? "bg-emerald-950/40 text-emerald-400 border border-emerald-500/20"
+                                  : stmt.status === "failed"
+                                  ? "bg-rose-950/40 text-rose-400 border border-rose-500/20"
+                                  : "bg-amber-950/40 text-amber-400 border border-amber-500/20"
+                              }`}>
+                                {stmt.status === "parsed" ? "Розпізнано AI" : stmt.status === "failed" ? "Помилка" : "Обробка"}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <button 
+                                onClick={() => setActiveTab("dashboard")} 
+                                className="text-indigo-400 hover:text-indigo-300 font-semibold"
+                              >
+                                Перейти до дашборду
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {statements.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="px-6 py-8 text-center text-slate-500 font-semibold">
+                              У вас немає завантажених виписок для цього профілю.
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -1328,7 +1412,9 @@ export default function Dashboard() {
                             <div className="flex justify-between">
                               <span className="text-slate-400">
                                 {isSimplified 
-                                  ? `Єдиний податок (${dashboardData?.rate || selectedProfile?.rate || 5}%):`
+                                  ? (isFop && (dashboardData?.group === 1 || dashboardData?.group === 2 || selectedProfile?.group === 1 || selectedProfile?.group === 2)
+                                      ? "Єдиний податок (фіксована ставка):"
+                                      : `Єдиний податок (${dashboardData?.rate || selectedProfile?.rate || 5}%):`)
                                   : isFop 
                                     ? `ПДФО від прибутку (18%):` 
                                     : `Податок на прибуток (18%):`}
@@ -1466,16 +1552,14 @@ export default function Dashboard() {
                             <span className="text-slate-400">Сплачено Єдиного податку / Прибутку:</span>
                             <span className="font-normal text-slate-200">{(dashboardData?.tax_breakdown?.unified_tax || 0).toLocaleString("uk-UA")} грн</span>
                           </div>
-                          {dashboardData?.tax_breakdown?.pit > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Сплачено Військового збору:</span>
+                            <span className="font-normal text-slate-200">{(dashboardData?.tax_breakdown?.military_tax || 0).toLocaleString("uk-UA")} грн</span>
+                          </div>
+                          {(!isFop || dashboardData?.has_employees || selectedProfile?.has_employees || (dashboardData?.tax_breakdown?.pit || 0) > 0) && (
                             <div className="flex justify-between">
                               <span className="text-slate-400">Сплачено ПДФО:</span>
                               <span className="font-normal text-slate-200">{(dashboardData?.tax_breakdown?.pit || 0).toLocaleString("uk-UA")} грн</span>
-                            </div>
-                          )}
-                          {dashboardData?.tax_breakdown?.military_tax > 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-slate-400">Сплачено Військового збору:</span>
-                              <span className="font-normal text-slate-200">{(dashboardData?.tax_breakdown?.military_tax || 0).toLocaleString("uk-UA")} грн</span>
                             </div>
                           )}
                           <div className="flex justify-between border-t border-slate-800 pt-2 mt-2">
@@ -1641,111 +1725,108 @@ export default function Dashboard() {
             )}
           </>
         )}
-      </div>
 
-      {/* Floating AI Chat Button & Dialog */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
-        {isChatOpen && (
-          <div className="mb-4 w-[360px] sm:w-[400px] h-[500px] rounded-2xl border border-slate-850 bg-[#0b101c]/95 backdrop-blur-md shadow-2xl flex flex-col overflow-hidden animate-slideUp">
-            {/* Header */}
-            <div className="p-4 border-b border-slate-800/80 bg-slate-900/40 flex justify-between items-center shrink-0">
-              <div className="flex items-center space-x-2">
-                <Cpu className="w-5 h-5 text-indigo-400 animate-pulse" />
-                <div>
-                  <h4 className="text-xs font-bold text-white flex items-center">
-                    ШІ-Асистент UniTax
-                    <span className="ml-1.5 px-1 py-0.5 text-[8px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded">AI</span>
-                  </h4>
-                  <p className="text-[10px] text-slate-400">Податковий консультант 24/7</p>
+        {/* Compliance Footer */}
+        <footer className="mt-20 pt-10 pb-8 border-t border-slate-800/60 text-slate-400 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+            {/* Column 1: Info & Brand */}
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 bg-gradient-to-tr from-indigo-600 to-indigo-400 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/20">
+                  <span className="font-extrabold text-white text-md">U</span>
                 </div>
+                <span className="text-lg font-bold text-white">UniTax</span>
               </div>
-              <button
-                onClick={() => setIsChatOpen(false)}
-                className="p-1 rounded-lg bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <p className="text-[11px] leading-relaxed text-slate-400">
+                Сучасний податковий AI-асистент для підприємців та компаній. Автоматизація обліку, звітності та сплати податків у кілька кліків.
+              </p>
+              <div className="flex items-center space-x-3 pt-2">
+                {/* Visa Badge */}
+                <div className="px-2 py-1 bg-slate-900 border border-slate-800/80 rounded-md text-[9px] font-bold tracking-wider text-slate-300">VISA</div>
+                {/* Mastercard Badge */}
+                <div className="px-2 py-1 bg-slate-900 border border-slate-800/80 rounded-md text-[9px] font-bold tracking-wider text-slate-300 font-serif italic">mastercard</div>
+                {/* LiqPay logo/text badge */}
+                <div className="px-2 py-1 bg-slate-900 border border-slate-800/80 rounded-md text-[9px] font-bold tracking-wider text-green-400">LiqPay</div>
+              </div>
             </div>
 
-            {/* Messages body */}
-            <div className="flex-1 p-4 overflow-y-auto custom-scrollbar flex flex-col gap-3">
-              {chatMessages.map((msg, idx) => {
-                const isAgent = msg.sender === "agent";
-                return (
-                  <div
-                    key={idx}
-                    className={`flex flex-col max-w-[85%] ${
-                      isAgent ? "self-start items-start" : "self-end items-end"
-                    }`}
-                  >
-                    <div
-                      className={`p-3 rounded-2xl text-[11px] leading-relaxed whitespace-pre-wrap ${
-                        isAgent
-                          ? "bg-slate-900/50 border border-slate-800/60 text-slate-200 rounded-tl-none"
-                          : "bg-indigo-600 text-white rounded-tr-none shadow-md"
-                      }`}
-                    >
-                      {isAgent ? (
-                        <span
-                          dangerouslySetInnerHTML={{
-                            __html: msg.text
-                              .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-                              .replace(/\*(.*?)\*/g, "<strong>$1</strong>")
-                              .replace(/•/g, "<span class='text-indigo-400 mr-1 font-bold'>•</span>")
-                          }}
-                        />
-                      ) : (
-                        <span>{msg.text}</span>
-                      )}
-                    </div>
+            {/* Column 2: Legal / Compliance Links */}
+            <div className="space-y-3">
+              <h4 className="text-white font-bold text-xs uppercase tracking-wider font-sans">Правова інформація</h4>
+              <ul className="space-y-2 text-[11px]">
+                <li>
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
+                    Політика конфіденційності
+                  </a>
+                </li>
+                <li>
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
+                    Угода користувача та Публічна оферта
+                  </a>
+                </li>
+                <li>
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
+                    Правила повернення коштів
+                  </a>
+                </li>
+                <li>
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 transition-colors">
+                    Умови оплати та надання послуг
+                  </a>
+                </li>
+              </ul>
+            </div>
+
+            {/* Column 3: Contact Details */}
+            <div className="space-y-3">
+              <h4 className="text-white font-bold text-xs uppercase tracking-wider font-sans">Контакти та реквізити</h4>
+              <ul className="space-y-2 text-[11px] text-slate-400">
+                <li className="font-semibold text-slate-300">ФОП Повєткін Михайло Михайлович</li>
+                <li>ІПН: 3234512345</li>
+                <li>Адреса: Україна, м. Київ, вул. Хрещатик, буд. 1, оф. 10</li>
+                <li>Email: <a href="mailto:support@unitas.com" className="hover:text-indigo-400 transition-colors font-medium">support@unitas.com</a></li>
+                <li>Тел: <a href="tel:+380441234567" className="hover:text-indigo-400 transition-colors font-medium">+380 (44) 123-45-67</a></li>
+              </ul>
+            </div>
+
+            {/* Column 4: App Download Badges */}
+            <div className="space-y-3">
+              <h4 className="text-white font-bold text-xs uppercase tracking-wider font-sans">Мобільні додатки</h4>
+              <p className="text-[11px] leading-relaxed text-slate-400">Завантажуйте UniTax на свій смартфон:</p>
+              <div className="flex flex-col gap-2 pt-1.5">
+                {/* App Store Badge */}
+                <a href="#" className="flex items-center space-x-2 bg-slate-900 border border-slate-800/80 hover:border-indigo-500/30 rounded-xl px-3 py-1.5 transition-all w-fit group">
+                  <svg className="w-5 h-5 text-white group-hover:text-indigo-400 transition-colors" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,22C14.32,22.05 13.89,21.24 12.37,21.24C10.84,21.24 10.37,21.97 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <div className="text-left leading-none">
+                    <p className="text-[8px] text-slate-500 uppercase font-semibold">Завантажити з</p>
+                    <p className="text-[11px] font-bold text-white group-hover:text-indigo-300 transition-colors">App Store</p>
                   </div>
-                );
-              })}
+                </a>
 
-              {sendingChat && (
-                <div className="self-start flex items-center space-x-1 p-3 rounded-2xl bg-slate-900/50 border border-slate-800 text-slate-400 rounded-tl-none text-[11px]">
-                  <span className="inline-block animate-bounce font-bold" style={{ animationDelay: '0ms' }}>•</span>
-                  <span className="inline-block animate-bounce font-bold" style={{ animationDelay: '150ms' }}>•</span>
-                  <span className="inline-block animate-bounce font-bold" style={{ animationDelay: '300ms' }}>•</span>
-                  <span className="text-[9px] text-slate-500 ml-1.5">Асистент аналізу...</span>
-                </div>
-              )}
-              <div ref={floatingChatMessagesEndRef} />
+                {/* Google Play Badge */}
+                <a href="#" className="flex items-center space-x-2 bg-slate-900 border border-slate-800/80 hover:border-indigo-500/30 rounded-xl px-3 py-1.5 transition-all w-fit group">
+                  <svg className="w-5 h-5 text-white group-hover:text-indigo-400 transition-colors" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.85,12.32L17.87,13.3L3.81,20.3L15.65,12.32L3.81,4.32L17.87,11.33Z" />
+                  </svg>
+                  <div className="text-left leading-none">
+                    <p className="text-[8px] text-slate-500 uppercase font-semibold">Доступно в</p>
+                    <p className="text-[11px] font-bold text-white group-hover:text-indigo-300 transition-colors">Google Play</p>
+                  </div>
+                </a>
+              </div>
             </div>
-
-            {/* Input Footer */}
-            <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-800/80 bg-slate-900/20 flex gap-2 shrink-0">
-              <input
-                type="text"
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                disabled={sendingChat}
-                placeholder="Запитайте про ліміти, ЄСВ, збори..."
-                className="flex-1 bg-slate-950/40 border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500/50 transition-all"
-              />
-              <button
-                type="submit"
-                disabled={!inputMessage.trim() || sendingChat}
-                className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all disabled:opacity-40 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed shadow-md glow-button flex items-center justify-center shrink-0"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
-            </form>
           </div>
-        )}
 
-        <button
-          type="button"
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          className="w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl flex items-center justify-center transition-all hover:scale-105 active:scale-95 glow-button group relative"
-        >
-          {isChatOpen ? <X className="w-6 h-6" /> : <MessageSquare className="w-6 h-6" />}
-          {!isChatOpen && (
-            <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-slate-950 flex items-center justify-center">
-              <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
-            </span>
-          )}
-        </button>
+          <div className="border-t border-slate-800/40 pt-4 flex flex-col md:flex-row justify-between items-center gap-4 text-[10px] text-slate-550">
+            <p>© {new Date().getFullYear()} UniTax. Усі права захищено. Торгові марки належать їх відповідним власникам.</p>
+            <p className="flex items-center space-x-1">
+              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+              <span>Моніторинг сервісів ДПС: Активний</span>
+            </p>
+          </div>
+        </footer>
       </div>
     </div>
   );

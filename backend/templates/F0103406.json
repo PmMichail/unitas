@@ -1,0 +1,12 @@
+{
+  "form_code": "F0103406",
+  "name": "Декларація єдиного податку 1 та 2 груп (ФОП)",
+  "description": "Річна декларація платника єдиного податку для ФОП 1 та 2 груп",
+  "period_type": "yearly",
+  "fields": [
+    {"id": "taxable_income", "label": "Оподатковуваний дохід за рік", "type": "number", "required": true},
+    {"id": "tax_due", "label": "Сума фіксованого єдиного податку до сплати за рік", "type": "number", "required": true},
+    {"id": "tax_paid", "label": "Сума сплаченого податку", "type": "number", "required": true},
+    {"id": "tax_diff", "label": "Сума до сплати (борг)", "type": "calculated", "formula": "tax_due - tax_paid"}
+  ]
+}

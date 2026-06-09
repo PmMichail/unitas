@@ -25,16 +25,18 @@ class XMLGenerator:
         profile: Dict,
         tax_data: Dict,
         period: str,
-        year: int
+        year: int,
+        form_code: str = "F0103306"
     ) -> str:
         """
-        Генерація XML для декларації єдиного податку (F0103306)
+        Генерація XML для декларації єдиного податку (F0103306 / F0103406)
         
         Args:
             profile: Дані профілю (tax_id, name, address, etc.)
             tax_data: Податкові дані (income, tax_due, paid, etc.)
             period: Період (Q1, Q2, Q3, Q4)
             year: Рік
+            form_code: Код форми звіту
             
         Returns:
             XML рядок
@@ -43,13 +45,13 @@ class XMLGenerator:
         root = ET.Element("DECLAR")
         root.set("xmlns", "http://tax.gov.ua")
         root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
-        root.set("xsi:schemaLocation", "http://tax.gov.ua F0103306.xsd")
+        root.set("xsi:schemaLocation", f"http://tax.gov.ua {form_code}.xsd")
         
         # Заголовок декларації
         decl_head = ET.SubElement(root, "DECLARHEAD")
         
         # Код документу
-        ET.SubElement(decl_head, "C_DOC").text = "F0103306"
+        ET.SubElement(decl_head, "C_DOC").text = form_code
         ET.SubElement(decl_head, "C_DOC_SUB").text = "010"
         ET.SubElement(decl_head, "C_DOC_VER").text = "12"
         ET.SubElement(decl_head, "C_DOC_TYPE").text = "0"

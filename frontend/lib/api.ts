@@ -50,6 +50,12 @@ export const api = {
     bank_name?: string;
     mfo?: string;
     iban?: string;
+    custom_recipient?: string;
+    custom_edrpou?: string;
+    custom_iban_edp?: string;
+    custom_iban_esv?: string;
+    custom_iban_pdfo?: string;
+    custom_iban_vz?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.post("/api/profiles", formData);
@@ -77,6 +83,12 @@ export const api = {
       bank_name?: string;
       mfo?: string;
       iban?: string;
+      custom_recipient?: string;
+      custom_edrpou?: string;
+      custom_iban_edp?: string;
+      custom_iban_esv?: string;
+      custom_iban_pdfo?: string;
+      custom_iban_vz?: string;
     }
   ) => {
     const formData = toFormData(data);
@@ -180,6 +192,11 @@ export const api = {
 
   clearStatements: async (profileId: number) => {
     const response = await client.post(`/api/profiles/${profileId}/clear-statements`);
+    return response.data;
+  },
+
+  getStatements: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/statements`);
     return response.data;
   },
 
@@ -424,6 +441,11 @@ export const api = {
     const formData = toFormData(data);
     const response = await client.post("/api/auth/login", formData);
     return response.data;
+  },
+  registerUser: async (data: Record<string, any>) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/auth/register", formData);
+    return response.data;
   }
 };
 
@@ -658,10 +680,11 @@ export const legislationApi = {
 };
 
 export const agentApi = {
-  chat: async (profileId: number, message: string) => {
+  chat: async (profileId: number, message: string, history?: any[]) => {
     const response = await client.post("/api/agent/chat", {
       profile_id: profileId,
-      message: message
+      message: message,
+      history: history
     });
     return response.data;
   }
