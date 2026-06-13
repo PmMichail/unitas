@@ -67,7 +67,7 @@ export default function CalendarPage() {
     setError(null);
     try {
       const data = await api.getCalendar(activeProfileId);
-      setEvents(data);
+      setEvents(data || []);
     } catch (err) {
       console.error("Error loading calendar events:", err);
       setError("Не вдалося завантажити календарні події");
@@ -186,6 +186,7 @@ export default function CalendarPage() {
 
   // Prepare chronological chart data
   const chartData = [...filteredEvents]
+    .filter((ev) => ev && typeof ev.due_date === "string")
     .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
     .map((ev) => {
       const isReport = ev.type === "report";
@@ -204,9 +205,12 @@ export default function CalendarPage() {
         amount = 1200; // slightly different height baseline for reports
       }
 
+      const parts = ev.due_date.split("-");
+      const formattedDate = parts.length > 1 ? parts.slice(1).join(".") : ev.due_date;
+
       return {
         id: ev.id,
-        date: ev.due_date.split("-").slice(1).join("."), // Format MM.DD or similar
+        date: formattedDate, // Format MM.DD or similar safely
         fullName: ev.due_date,
         name: ev.title,
         amount: amount,

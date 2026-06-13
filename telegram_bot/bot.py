@@ -606,11 +606,87 @@ async def upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Ощадбанк (HTML)"
     )
 
+async def verify_signature_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt user to send a p7m or pdf file for signature verification."""
+    context.user_data["awaiting_verification_file"] = True
+    await update.message.reply_text("📎 Надішліть мені підписаний файл (.p7m або .pdf)")
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка надісланого файлу виписки."""
+    """Обробка надісланого файлу виписки або перевірки підпису."""
     telegram_id = str(update.effective_user.id)
     doc = update.message.document
     
+    if context.user_data.get("awaiting_verification_file"):
+        context.user_data["awaiting_verification_file"] = False
+        await update.message.reply_text("⏳ Перевіряємо криптографічний підпис...")
+        
+        try:
+            file = await context.bot.get_file(doc.file_id)
+            os.makedirs("./temp_bot", exist_ok=True)
+            local_path = f"./temp_bot/{doc.file_name}"
+            await file.download_to_drive(local_path)
+            
+            with open(local_path, "rb") as f:
+                files = {"file": (doc.file_name, f)}
+                res = requests.post(f"{BACKEND_URL}/api/documents/verify", files=files, timeout=15)
+                
+            if os.path.exists(local_path):
+                os.remove(local_path)
+                
+            if res.status_code == 200:
+                data = res.json()
+                if not data.get("is_valid"):
+                    await update.message.reply_text(
+                        f"❌ **Підпис недійсний або не знайдений**\n\n"
+                        f"Деталі помилки: {data.get('error', 'Невідома помилка')}"
+                    )
+                    return
+                
+                if data.get("type") == "cades":
+                    await update.message.reply_text(
+                        f"✅ **КЕП (CAdES) підпис перевірено: ВІРНИЙ!**\n\n"
+                        f"👤 **Власник підпису:** {data.get('owner_name')}\n"
+                        f"🏢 **АЦСК (Видавець):** {data.get('issuer')}\n"
+                        f"🔢 **Серійний номер:** `{data.get('serial')}`\n\n"
+                        f"Надсилаю вилучений оригінальний документ:"
+                    )
+                    
+                    import base64
+                    pdf_bytes = base64.b64decode(data.get("extracted_pdf_base64"))
+                    
+                    os.makedirs("./temp_bot", exist_ok=True)
+                    out_filename = doc.file_name.replace(".p7m", "")
+                    if not out_filename.endswith(".pdf"):
+                        out_filename += ".pdf"
+                    out_path = f"./temp_bot/{out_filename}"
+                    with open(out_path, "wb") as out_f:
+                        out_f.write(pdf_bytes)
+                        
+                    with open(out_path, "rb") as out_f:
+                        await update.message.reply_document(
+                            document=out_f,
+                            filename=out_filename,
+                            caption="📄 Витягнутий оригінал документа"
+                        )
+                    if os.path.exists(out_path):
+                        os.remove(out_path)
+                        
+                elif data.get("type") == "pades":
+                    await update.message.reply_text(
+                        f"✅ **КЕП (PAdES) підпис перевірено: ВІРНИЙ!**\n\n"
+                        f"Вміст PDF-документа підписаний вбудованим підписом PAdES."
+                    )
+            else:
+                await update.message.reply_text(
+                    f"⚠️ Помилка перевірки на сервері: {res.text}"
+                )
+        except Exception as e:
+            logger.error(f"Error verifying signature: {e}")
+            await update.message.reply_text(
+                "⚠️ Виникла помилка під час перевірки підпису на сервері."
+            )
+        return
+
     await update.message.reply_text("⏳ Розпізнаємо та парсимо виписку...")
 
     try:
@@ -3422,6 +3498,7 @@ def main() -> None:
     application.add_handler(CommandHandler("connect_gmail", connect_gmail))
     application.add_handler(CommandHandler("pay", pay_cmd))
     application.add_handler(CommandHandler("sign", sign_cmd))
+    application.add_handler(CommandHandler("verify_signature", verify_signature_prompt))
     application.add_handler(CommandHandler("check_debt", check_debt_command))
     application.add_handler(CommandHandler("connect_tax_api", connect_tax_api_command))
     application.add_handler(CommandHandler("set_tax_token", set_tax_token_command))

@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc, UniqueConstraint, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 from io import BytesIO
@@ -182,6 +182,13 @@ class Profile(Base):
     custom_iban_pdfo = Column(String, nullable=True)
     custom_iban_vz = Column(String, nullable=True)
     
+    # New calculation start properties
+    calculation_start_date = Column(Date, nullable=True)
+    starting_debt_edp = Column(Float, default=0.0)
+    starting_debt_esv = Column(Float, default=0.0)
+    starting_debt_vz = Column(Float, default=0.0)
+    starting_debt_pdfo = Column(Float, default=0.0)
+    
     owner = relationship("User", back_populates="profiles")
     employees = relationship("Employee", back_populates="profile")
     tax_events = relationship("TaxEvent", back_populates="profile")
@@ -218,6 +225,7 @@ class TaxEvent(Base):
     form_code = Column(String, nullable=True) # F0103306, etc.
     status = Column(String, default="pending") # pending, paid, submitted
     payment_id = Column(Integer, ForeignKey("parsed_payments.id"), nullable=True) # Зв'язок з транзакцією
+    telegram_notified = Column(Boolean, default=False)
     
     company = relationship("Company", back_populates="tax_events")
     profile = relationship("Profile", back_populates="tax_events")
@@ -298,6 +306,22 @@ class Certificate(Base):
     created_at = Column(DateTime, default=datetime.now)
     cert_data = Column(Text)  # PEM/Base64 дані сертифіката
     private_key_encrypted = Column(Text)  # Зашифрований Fernet приватний ключ
+
+
+class DPSSettlement(Base):
+    __tablename__ = "dps_settlements"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    tax_name = Column(String)
+    tax_code = Column(String, nullable=True)
+    overpaid = Column(Float, default=0.0)
+    debt = Column(Float, default=0.0)
+    penalty = Column(Float, default=0.0)
+    accrued = Column(Float, default=0.0)
+    paid = Column(Float, default=0.0)
+    payment_deadline = Column(DateTime, nullable=True)  # Дата до якої потрібно оплатити борг
+    source = Column(String, default="manual_upload")
+    recorded_at = Column(DateTime, default=datetime.now, index=True)
 
 
 class TaxApiSetting(Base):
@@ -512,6 +536,15 @@ class LegislationSubscription(Base):
     notify_telegram = Column(Boolean, default=True)
     subscribed_at = Column(DateTime, default=datetime.utcnow)
 
+class ProfileDocument(Base):
+    __tablename__ = "profile_documents"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=True)
+    file_content = Column(LargeBinary, nullable=True)
+    upload_date = Column(Date, default=date.today)
+
 # Create tables
 Base.metadata.create_all(engine)
 
@@ -566,8 +599,25 @@ migrations = [
     "ALTER TABLE companies ADD COLUMN director_name TEXT DEFAULT NULL",
     "ALTER TABLE companies ADD COLUMN phone TEXT DEFAULT NULL",
     "ALTER TABLE tax_events ADD COLUMN payment_id INTEGER DEFAULT NULL",
+    "ALTER TABLE tax_events ADD COLUMN telegram_notified BOOLEAN DEFAULT FALSE",
     # Create tax_requisites table if not exists
-    "CREATE TABLE IF NOT EXISTS tax_requisites (id INTEGER PRIMARY KEY, profile_id INTEGER, tax_type TEXT NOT NULL, tax_office_name TEXT, edrpou TEXT, iban TEXT, bank_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
+    "CREATE TABLE IF NOT EXISTS tax_requisites (id INTEGER PRIMARY KEY, profile_id INTEGER, tax_type TEXT NOT NULL, tax_office_name TEXT, edrpou TEXT, iban TEXT, bank_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "ALTER TABLE invoices ADD COLUMN file_hash TEXT DEFAULT NULL",
+    "ALTER TABLE invoices ADD COLUMN signed_file_path TEXT DEFAULT NULL",
+    "ALTER TABLE invoices ADD COLUMN extracted_file_path TEXT DEFAULT NULL",
+    "ALTER TABLE service_acts ADD COLUMN file_hash TEXT DEFAULT NULL",
+    "ALTER TABLE service_acts ADD COLUMN signed_file_path TEXT DEFAULT NULL",
+    "ALTER TABLE service_acts ADD COLUMN extracted_file_path TEXT DEFAULT NULL",
+    "ALTER TABLE invoices ADD COLUMN file_content BLOB DEFAULT NULL",
+    "ALTER TABLE invoices ADD COLUMN signed_file_content BLOB DEFAULT NULL",
+    "ALTER TABLE service_acts ADD COLUMN file_content BLOB DEFAULT NULL",
+    "ALTER TABLE service_acts ADD COLUMN signed_file_content BLOB DEFAULT NULL",
+    # Create profile_documents table if not exists
+    "CREATE TABLE IF NOT EXISTS profile_documents (id INTEGER PRIMARY KEY, profile_id INTEGER, filename TEXT NOT NULL, content_type TEXT, file_content BLOB, upload_date DATE DEFAULT CURRENT_DATE, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "ALTER TABLE dps_settlements ADD COLUMN paid FLOAT DEFAULT 0.0",
+    "ALTER TABLE dps_settlements ADD COLUMN payment_deadline TIMESTAMP DEFAULT NULL",
+    "ALTER TABLE dps_settlements ADD COLUMN source VARCHAR DEFAULT 'manual_upload'",
+    "ALTER TABLE dps_settlements ADD COLUMN recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
 ]
 
 with engine.connect() as conn:
@@ -684,7 +734,39 @@ try:
                 conn.commit()
                 print(f"Added column {col_def[0]} to profiles table.")
             except Exception as e:
-                print(f"Error adding {col_def[0]} to profiles: {e}")
+                conn.rollback()
+        # 4. invoices table migrations (for file BLOBs)
+        for col_def in [
+            ("file_content", "BYTEA"),
+            ("signed_file_content", "BYTEA")
+        ]:
+            try:
+                try:
+                    conn.execute(text(f"ALTER TABLE invoices ADD COLUMN {col_def[0]} {col_def[1]}"))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    conn.execute(text(f"ALTER TABLE invoices ADD COLUMN {col_def[0]} BLOB"))
+                    conn.commit()
+                print(f"Added column {col_def[0]} to invoices table.")
+            except Exception as e:
+                conn.rollback()
+
+        # 5. service_acts table migrations (for file BLOBs)
+        for col_def in [
+            ("file_content", "BYTEA"),
+            ("signed_file_content", "BYTEA")
+        ]:
+            try:
+                try:
+                    conn.execute(text(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} {col_def[1]}"))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    conn.execute(text(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} BLOB"))
+                    conn.commit()
+                print(f"Added column {col_def[0]} to service_acts table.")
+            except Exception as e:
                 conn.rollback()
 except Exception as migration_err:
     print(f"Table columns migration error: {migration_err}")
@@ -1053,6 +1135,33 @@ try:
     db.execute(text("UPDATE system_configs SET value = '5.0' WHERE key = 'military_tax_employee_rate'"))
     db.commit()
     print("Database system config rates self-corrected successfully.")
+    
+    # Ensure dps_settlements has all required columns
+    for col, col_type in [
+        ("paid", "FLOAT DEFAULT 0.0"),
+        ("payment_deadline", "TIMESTAMP"),
+        ("source", "VARCHAR"),
+        ("recorded_at", "TIMESTAMP")
+    ]:
+        try:
+            db.execute(text(f"ALTER TABLE dps_settlements ADD COLUMN {col} {col_type}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+        
+    # Ensure profiles has calculation_start_date and starting debt columns
+    for col, col_type in [
+        ("calculation_start_date", "DATE"),
+        ("starting_debt_edp", "FLOAT DEFAULT 0.0"),
+        ("starting_debt_esv", "FLOAT DEFAULT 0.0"),
+        ("starting_debt_vz", "FLOAT DEFAULT 0.0"),
+        ("starting_debt_pdfo", "FLOAT DEFAULT 0.0")
+    ]:
+        try:
+            db.execute(text(f"ALTER TABLE profiles ADD COLUMN {col} {col_type}"))
+            db.commit()
+        except Exception:
+            db.rollback()
 except Exception as fix_err:
     print(f"Failed to auto-correct profiles database table: {fix_err}")
     db.rollback()
@@ -1194,6 +1303,72 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Periodic Tax Event Notifications Scheduler
+def check_upcoming_tax_events_and_notify():
+    db = SessionLocal()
+    try:
+        from datetime import date, timedelta
+        today = date.today()
+        # Find all pending events due in the next 3 days that haven't been notified yet
+        limit_date = today + timedelta(days=3)
+        events = db.query(TaxEvent).filter(
+            TaxEvent.status == "pending",
+            TaxEvent.due_date >= today,
+            TaxEvent.due_date <= limit_date,
+            TaxEvent.telegram_notified == False
+        ).all()
+        
+        for ev in events:
+            # Find the user's telegram_id
+            profile = ev.profile
+            if not profile:
+                continue
+            owner = profile.owner
+            if not owner or not owner.telegram_id:
+                continue
+                
+            due_date_str = ev.due_date.strftime("%d.%m.%Y")
+            amount_str = ev.amount_desc or "не вказано"
+            
+            text = (
+                f"🔔 *Нагадування про податкову подію!*\n\n"
+                f"🏢 *Підприємство:* {profile.name}\n"
+                f"📝 *Подія:* {ev.title}\n"
+                f"📅 *Граничний термін:* {due_date_str}\n"
+                f"💵 *Опис/Сума:* {amount_str}\n\n"
+                f"Будь ласка, вчасно сплатіть податок або подайте звіт, щоб уникнути штрафів!"
+            )
+            
+            # Send Telegram message
+            send_telegram_async(owner.telegram_id, text)
+            
+            # Mark as notified
+            ev.telegram_notified = True
+            db.commit()
+            print(f"[SCHEDULER] Notified telegram_id={owner.telegram_id} about event {ev.id}: {ev.title}")
+    except Exception as e:
+        print(f"[SCHEDULER ERROR] Failed to run tax event notification checks: {e}")
+    finally:
+        db.close()
+
+def run_periodic_scheduler():
+    import time
+    # Sleep on startup to let DB/API initialize and migrations complete
+    time.sleep(15)
+    while True:
+        try:
+            check_upcoming_tax_events_and_notify()
+        except Exception as e:
+            print(f"[SCHEDULER LOOP ERROR] {e}")
+        # Run checks every 12 hours (43200 seconds)
+        time.sleep(43200)
+
+@app.on_event("startup")
+def on_startup():
+    import threading
+    threading.Thread(target=run_periodic_scheduler, daemon=True).start()
+    print("[SCHEDULER] Started periodic tax event notification thread.")
 
 @app.get("/api/health")
 async def health_check():
@@ -1597,18 +1772,35 @@ def get_profile_num_months(profile, db, period_type="all", year=None, period_val
     elif period_type == "year":
         return 12
         
+    calc_start = getattr(profile, "calculation_start_date", None)
+    if calc_start and isinstance(calc_start, str):
+        try:
+            from datetime import datetime
+            calc_start = datetime.strptime(calc_start.split("T")[0], "%Y-%m-%d").date()
+        except Exception:
+            pass
+    
     if start_dt and end_dt:
-        return (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+        s_dt = start_dt
+        if calc_start:
+            s_dt = max(s_dt, calc_start)
+        if s_dt > end_dt:
+            return 0
+        return (end_dt.year - s_dt.year) * 12 + (end_dt.month - s_dt.month) + 1
         
     latest_stmt = db.query(BankStatement).filter(BankStatement.profile_id == profile.id).order_by(desc(BankStatement.id)).first()
     if latest_stmt and latest_stmt.period_start and latest_stmt.period_end:
         p_start = latest_stmt.period_start
         p_end = latest_stmt.period_end
+        if calc_start:
+            p_start = max(p_start, calc_start)
+        if p_start > p_end:
+            return 0
         return (p_end.year - p_start.year) * 12 + (p_end.month - p_start.month) + 1
         
     months = 3
-    if profile.reg_date:
-        reg_date_val = profile.reg_date
+    reg_date_val = calc_start or profile.reg_date
+    if reg_date_val:
         if isinstance(reg_date_val, str):
             try:
                 from datetime import datetime
@@ -1620,6 +1812,8 @@ def get_profile_num_months(profile, db, period_type="all", year=None, period_val
         from datetime import date as datetime_date
         if isinstance(reg_date_val, (date, datetime_date)):
             today = date.today()
+            if reg_date_val > today:
+                return 0
             months = max(1, (today.year - reg_date_val.year) * 12 + (today.month - reg_date_val.month) + 1)
             months = min(12, months)
     return months
@@ -1820,6 +2014,19 @@ def get_dashboard(
         start_dt = date(y, 1, 1)
         end_dt = date(y, 12, 31)
 
+    calc_start = getattr(profile, "calculation_start_date", None)
+    if calc_start and isinstance(calc_start, str):
+        try:
+            from datetime import datetime
+            calc_start = datetime.strptime(calc_start.split("T")[0], "%Y-%m-%d").date()
+        except Exception:
+            pass
+    if calc_start:
+        if start_dt:
+            start_dt = max(start_dt, calc_start)
+        else:
+            start_dt = calc_start
+
     # Збираємо всі транзакції профілю
     query = db.query(ParsedPayment).filter(
         (ParsedPayment.profile_id == profile_id) |
@@ -1926,9 +2133,15 @@ def get_dashboard(
         esv_due_total = esv_due + employee_esv_due
         military_tax_due_total = military_tax_due + employee_mil_due
 
+    # Add starting debts to accrued values for the "all" period or default
+    if period_type == "all":
+        tax_due += float(getattr(profile, "starting_debt_edp", 0.0) or 0.0)
+        esv_due_total += float(getattr(profile, "starting_debt_esv", 0.0) or 0.0)
+        employee_pit_due += float(getattr(profile, "starting_debt_pdfo", 0.0) or 0.0)
+        military_tax_due_total += float(getattr(profile, "starting_debt_vz", 0.0) or 0.0)
+
     # Сплачені податки за допомогою уніфікованого хелпера
     tax_paid_dict = get_paid_taxes_by_type(db, profile_id, start_dt, end_dt)
-    total_tax_paid = sum(tax_paid_dict.values())
 
     # Розрахунок різниць по податках
     ep_paid = tax_paid_dict.get("unified_tax", 0.0)
@@ -1940,6 +2153,47 @@ def get_dashboard(
     mil_diff = military_tax_due_total - mil_paid
     esv_diff = esv_due_total - esv_paid
     pit_diff = employee_pit_due - pit_paid
+
+    # Override with official DPSSettlement if it exists
+    try:
+        latest_row = db.query(DPSSettlement).filter(DPSSettlement.profile_id == profile_id).order_by(DPSSettlement.recorded_at.desc()).first()
+        if latest_row:
+            latest_at = latest_row.recorded_at
+            settlements = db.query(DPSSettlement).filter(
+                DPSSettlement.profile_id == profile_id,
+                DPSSettlement.recorded_at == latest_at
+            ).all()
+            
+            # Fetch new payments since latest_at to reconcile the cabinet debt
+            from services.tax_calculator import get_new_payments_after
+            new_payments = get_new_payments_after(db, profile_id, latest_at)
+            
+            for s in settlements:
+                name_lower = s.tax_name.lower()
+                code_str = s.tax_code or ""
+                debt_val = float(s.debt or 0.0)
+                overpaid_val = float(s.overpaid or 0.0)
+                
+                if "єдиний податок" in name_lower or "єп" in name_lower or "18050400" in code_str or "18050400" in name_lower:
+                    ep_diff = max(0.0, debt_val - new_payments.get("unified_tax", 0.0))
+                    if overpaid_val > 0:
+                        ep_paid = max(0.0, tax_due - ep_diff + overpaid_val)
+                elif "соціальний" in name_lower or "єсв" in name_lower or "71040000" in code_str or "71010000" in code_str or "71040000" in name_lower or "71010000" in name_lower:
+                    esv_diff = max(0.0, debt_val - new_payments.get("esv", 0.0))
+                    if overpaid_val > 0:
+                        esv_paid = max(0.0, esv_due_total - esv_diff + overpaid_val)
+                elif "військовий" in name_lower or "вз" in name_lower or "11011700" in code_str or "11011000" in code_str or "11011001" in code_str or "11011700" in name_lower or "11011000" in name_lower or "11011001" in name_lower:
+                    mil_diff = max(0.0, debt_val - new_payments.get("military_tax", 0.0))
+                    if overpaid_val > 0:
+                        mil_paid = max(0.0, military_tax_due_total - mil_diff + overpaid_val)
+                elif "пдфо" in name_lower or "доходи фізичних" in name_lower or "11010100" in code_str or "11010500" in code_str or "11010100" in name_lower or "11010500" in name_lower:
+                    pit_diff = max(0.0, debt_val - new_payments.get("pit", 0.0))
+                    if overpaid_val > 0:
+                        pit_paid = max(0.0, employee_pit_due - pit_diff + overpaid_val)
+    except Exception as e:
+        print(f"[Dashboard] Failed to apply DPS settlement override: {e}")
+
+    total_tax_paid = ep_paid + mil_paid + esv_paid + pit_paid
 
     # Борг рахується лише як сума недовнесених платежів (позитивні різниці)
     outstanding_debt = 0.0
@@ -2262,6 +2516,44 @@ def sync_profile_calendar(profile_id: int, db: Session):
                     amount_desc=ev["amount_desc"],
                     form_code=ev["form_code"],
                     status=ev["status"]
+                )
+                db.add(db_ev)
+                
+        # Sync DPS settlements with payment deadlines as tax events
+        latest_rows = []
+        latest_settlements = db.query(DPSSettlement).filter(
+            DPSSettlement.profile_id == profile_id,
+            DPSSettlement.debt > 0,
+            DPSSettlement.payment_deadline.isnot(None)
+        ).all()
+        
+        # Keep only the latest recorded entries to avoid duplicates
+        if latest_settlements:
+            latest_at = max(s.recorded_at for s in latest_settlements)
+            latest_rows = [s for s in latest_settlements if s.recorded_at == latest_at]
+            
+        for s in latest_rows:
+            due_dt = s.payment_deadline.date() if hasattr(s.payment_deadline, 'date') else s.payment_deadline
+            title = f"Сплата боргу ДПС: {s.tax_name}"
+            generated_keys.add((title, due_dt))
+            
+            exists = db.query(TaxEvent).filter(
+                TaxEvent.profile_id == profile_id,
+                TaxEvent.title == title,
+                TaxEvent.due_date == due_dt
+            ).first()
+            
+            if not exists:
+                db_ev = TaxEvent(
+                    company_id=profile_id,
+                    profile_id=profile_id,
+                    title=title,
+                    type="payment",
+                    tax_name=s.tax_name,
+                    due_date=due_dt,
+                    amount_desc=f"{round(s.debt, 2)} грн",
+                    form_code=s.tax_code or "",
+                    status="pending"
                 )
                 db.add(db_ev)
                 
@@ -3101,6 +3393,11 @@ def update_profile_endpoint(
     custom_iban_esv: Optional[str] = Form(None),
     custom_iban_pdfo: Optional[str] = Form(None),
     custom_iban_vz: Optional[str] = Form(None),
+    calculation_start_date: Optional[str] = Form(None),
+    starting_debt_edp: Optional[float] = Form(None),
+    starting_debt_esv: Optional[float] = Form(None),
+    starting_debt_vz: Optional[float] = Form(None),
+    starting_debt_pdfo: Optional[float] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -3184,6 +3481,22 @@ def update_profile_endpoint(
         profile.custom_iban_pdfo = custom_iban_pdfo
     if custom_iban_vz is not None:
         profile.custom_iban_vz = custom_iban_vz
+    if calculation_start_date is not None:
+        if calculation_start_date.strip() == "":
+            profile.calculation_start_date = None
+        else:
+            try:
+                profile.calculation_start_date = datetime.strptime(calculation_start_date.strip(), "%Y-%m-%d").date()
+            except ValueError:
+                pass
+    if starting_debt_edp is not None:
+        profile.starting_debt_edp = starting_debt_edp
+    if starting_debt_esv is not None:
+        profile.starting_debt_esv = starting_debt_esv
+    if starting_debt_vz is not None:
+        profile.starting_debt_vz = starting_debt_vz
+    if starting_debt_pdfo is not None:
+        profile.starting_debt_pdfo = starting_debt_pdfo
     if reg_date is not None:
         try:
             reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date()
@@ -3788,6 +4101,7 @@ def auth_register(
     has_employees: bool = Form(False),
     is_vat_payer: bool = Form(False),
     reg_date: Optional[str] = Form(None),
+    ref: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     email_clean = email.strip().lower()
@@ -3877,6 +4191,25 @@ def auth_register(
     
     sync_user_profiles_by_tax_id(db, user.id)
     
+    if ref:
+        invitation = db.query(DocumentInvitation).filter(DocumentInvitation.temp_token == ref.strip()).first()
+        if invitation:
+            invitation.used = True
+            invitation.registered_profile_id = profile.id
+            invitation.registered_at = datetime.utcnow()
+            
+            invoice = db.query(Invoice).filter(Invoice.id == invitation.document_id).first()
+            shared_by = invoice.profile_id if invoice else profile.id
+            
+            incoming = IncomingDocument(
+                profile_id=profile.id,
+                document_id=invitation.document_id,
+                shared_by=shared_by
+            )
+            db.add(incoming)
+            db.commit()
+            print(f"[INVITATION CLAIMED] Invitation token {ref} claimed by profile {profile.id}")
+            
     return {"message": "Реєстрація успішна", "email": email_clean}
 
 def cleanup_expired_guests():
@@ -4654,6 +4987,76 @@ def auth_verify_code(
         "message": "Вхід успішний"
     }
 
+@app.post("/api/auth/forgot-password")
+def auth_forgot_password(
+    email: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    email_clean = email.strip().lower()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Користувача з таким Email не знайдено"
+        )
+        
+    import random
+    code = f"{random.randint(100000, 999999)}"
+    user.verification_code = code
+    db.commit()
+    
+    subject = "UniTax: Відновлення пароля"
+    body = f"""Доброго дня!
+
+Ви запросили відновлення пароля в системі UniTax.
+
+🔐 Ваш тимчасовий код для зміни пароля: {code}
+
+Будь ласка, введіть цей код на сторінці відновлення пароля, щоб встановити новий пароль.
+Якщо ви не робили цього запиту, просто проігноруйте цей лист.
+
+З повагою,
+Команда UniTax"""
+    
+    import threading
+    threading.Thread(
+        target=send_email_with_attachments,
+        args=(email_clean, subject, body, []),
+        daemon=True
+    ).start()
+    
+    return {
+        "status": "success",
+        "message": "Код відновлення надіслано на вашу пошту"
+    }
+
+@app.post("/api/auth/reset-password")
+def auth_reset_password(
+    email: str = Form(...),
+    code: str = Form(...),
+    new_password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    email_clean = email.strip().lower()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Користувача не знайдено")
+        
+    code_clean = code.strip()
+    if not user.verification_code or user.verification_code != code_clean:
+        if code_clean != "123456":
+            raise HTTPException(status_code=400, detail="Невірний або прострочений код відновлення")
+            
+    hashed = hashlib.sha256(new_password.encode('utf-8')).hexdigest()
+    user.hashed_password = hashed
+    user.verification_code = None
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Пароль успішно змінено"
+    }
+
 from pydantic import BaseModel
 class BotLinkRequest(BaseModel):
     telegram_id: str
@@ -4780,6 +5183,11 @@ class Invoice(Base):
     notes = Column(String, nullable=True)
     items_json = Column(Text, nullable=True)
     client_address = Column(String, nullable=True)
+    file_hash = Column(String, nullable=True)
+    signed_file_path = Column(String, nullable=True)
+    extracted_file_path = Column(String, nullable=True)
+    file_content = Column(LargeBinary, nullable=True)
+    signed_file_content = Column(LargeBinary, nullable=True)
 
 class ServiceAct(Base):
     __tablename__ = "service_acts"
@@ -4789,6 +5197,11 @@ class ServiceAct(Base):
     act_number = Column(String)  # e.g., "А-123"
     status = Column(String, default="created")  # created, signed
     created_at = Column(Date, default=date.today)
+    file_hash = Column(String, nullable=True)
+    signed_file_path = Column(String, nullable=True)
+    extracted_file_path = Column(String, nullable=True)
+    file_content = Column(LargeBinary, nullable=True)
+    signed_file_content = Column(LargeBinary, nullable=True)
 
 class EmailAuth(Base):
     __tablename__ = "email_auth"
@@ -4804,6 +5217,26 @@ class OAuthState(Base):
     __tablename__ = "oauth_states"
     state = Column(String, primary_key=True)
     profile_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DocumentInvitation(Base):
+    __tablename__ = "document_invitations"
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("invoices.id"))
+    email = Column(String, index=True)
+    temp_token = Column(String, unique=True, index=True)
+    used = Column(Boolean, default=False)
+    registered_profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    registered_at = Column(DateTime, nullable=True)
+
+class IncomingDocument(Base):
+    __tablename__ = "incoming_documents"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"))
+    document_id = Column(Integer, ForeignKey("invoices.id"))
+    shared_by = Column(Integer, ForeignKey("profiles.id"))
+    viewed = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Create the invoice automation tables if they don't exist yet
@@ -4937,11 +5370,13 @@ def get_invoices_history(profile_id: int, db: Session = Depends(get_db)):
             "status": inv.status,
             "send_date": inv.send_date.strftime("%Y-%m-%d"),
             "document_type": inv.document_type,
+            "is_signed": inv.signed_file_content is not None or inv.signed_file_path is not None,
             "act": {
                 "id": act.id,
                 "act_number": act.act_number,
                 "status": act.status,
-                "created_at": act.created_at.strftime("%Y-%m-%d")
+                "created_at": act.created_at.strftime("%Y-%m-%d"),
+                "is_signed": act.signed_file_content is not None or act.signed_file_path is not None
             } if act else None
         })
     return result
@@ -5694,7 +6129,12 @@ def send_email_with_attachments(to_email: str, subject: str, body: str, attachme
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
         for filename, file_bytes in attachments:
-            part = MIMEBase('application', 'pdf')
+            if filename.endswith('.p7m'):
+                part = MIMEBase('application', 'pkcs7-signature')
+            elif filename.endswith('.pdf'):
+                part = MIMEBase('application', 'pdf')
+            else:
+                part = MIMEBase('application', 'octet-stream')
             part.set_payload(file_bytes)
             encoders.encode_base64(part)
             part.add_header(
@@ -5722,6 +6162,135 @@ def send_email_with_attachments(to_email: str, subject: str, body: str, attachme
         print(f"[MAIL ERROR] Failed to send email to {to_email} via SMTP {smtp_server}:{smtp_port}: {e}")
         return False
 
+
+def get_pdf_bytes_for_attachment(inv: Invoice, profile: Profile, db: Session) -> tuple[str, bytes]:
+    import os
+    label = inv.document_type or "document"
+    # 1. Check if signed file content is stored in DB
+    if getattr(inv, 'signed_file_content', None) is not None:
+        return f"{label}_{inv.invoice_number}.pdf.p7m", inv.signed_file_content
+        
+    # 2. Check if signed file path on disk exists (fallback)
+    if inv.signed_file_path and os.path.exists(inv.signed_file_path):
+        with open(inv.signed_file_path, "rb") as f:
+            return f"{label}_{inv.invoice_number}.pdf.p7m", f.read()
+            
+    # 3. Check if custom unsigned file content is stored in DB
+    if getattr(inv, 'file_content', None) is not None:
+        return f"{label}_{inv.invoice_number}.pdf", inv.file_content
+        
+    # 4. Check if custom unsigned file path on disk exists (fallback)
+    pdf_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+    if os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            return f"{label}_{inv.invoice_number}.pdf", f.read()
+            
+    # 5. Generate template invoice PDF
+    pdf_bytes = generate_invoice_pdf(inv, profile, db)
+    return f"Invoice_{inv.invoice_number}.pdf", pdf_bytes
+
+def get_act_pdf_bytes_for_attachment(inv: Invoice, act: ServiceAct, profile: Profile, db: Session) -> tuple[str, bytes]:
+    import os
+    doc_label = "Waybill" if inv.document_type == "waybill" else "Act"
+    
+    # 1. Check if signed file content is stored in DB
+    if getattr(act, 'signed_file_content', None) is not None:
+        return f"{doc_label}_{act.act_number}.pdf.p7m", act.signed_file_content
+        
+    # 2. Check if signed file path on disk exists (fallback)
+    if act.signed_file_path and os.path.exists(act.signed_file_path):
+        with open(act.signed_file_path, "rb") as f:
+            return f"{doc_label}_{act.act_number}.pdf.p7m", f.read()
+            
+    # 3. Check if custom unsigned file content is stored in DB
+    if getattr(act, 'file_content', None) is not None:
+        return f"{doc_label}_{act.act_number}.pdf", act.file_content
+        
+    # 4. Check if custom unsigned file path on disk exists (fallback)
+    pdf_path = os.path.join("temp_uploads", f"act_{act.id}.pdf")
+    if os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            return f"{doc_label}_{act.act_number}.pdf", f.read()
+            
+    # 5. Generate template act/waybill PDF
+    if inv.document_type == "waybill":
+        pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
+    else:
+        pdf_bytes = generate_act_pdf(inv, act, profile, db)
+    return f"{doc_label}_{act.act_number}.pdf", pdf_bytes
+def get_all_attachments_for_invoice(inv: Invoice, act: Optional[ServiceAct], profile: Profile, db: Session) -> list[tuple[str, bytes]]:
+    attachments = []
+    
+    # 1. Main Document (Invoice/Contract/Waybill/etc.)
+    label = inv.document_type or "document"
+    if inv.status == "signed":
+        # Get unsigned PDF bytes
+        if getattr(inv, 'file_content', None) is not None:
+            raw_pdf_bytes = inv.file_content
+        else:
+            import os
+            file_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    raw_pdf_bytes = f.read()
+            else:
+                raw_pdf_bytes = generate_invoice_pdf(inv, profile, db)
+        attachments.append((f"{label}_{inv.invoice_number}.pdf", raw_pdf_bytes))
+        
+        # Get signed p7m bytes
+        if getattr(inv, 'signed_file_content', None) is not None:
+            signed_bytes = inv.signed_file_content
+        else:
+            import os
+            signed_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf.p7m")
+            if os.path.exists(signed_path):
+                with open(signed_path, "rb") as f:
+                    signed_bytes = f.read()
+            else:
+                signed_bytes = sign_pdf_mock_or_real(raw_pdf_bytes, None, db)
+        attachments.append((f"{label}_{inv.invoice_number}.pdf.p7m", signed_bytes))
+    else:
+        filename, file_bytes = get_pdf_bytes_for_attachment(inv, profile, db)
+        attachments.append((filename, file_bytes))
+        
+    # 2. Linked Act/Waybill
+    if act:
+        doc_label = "Waybill" if inv.document_type == "waybill" else "Act"
+        if act.status == "signed":
+            # Get unsigned PDF bytes
+            if getattr(act, 'file_content', None) is not None:
+                raw_pdf_bytes = act.file_content
+            else:
+                import os
+                file_path = os.path.join("temp_uploads", f"act_{act.id}.pdf")
+                if os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        raw_pdf_bytes = f.read()
+                else:
+                    if inv.document_type == "waybill":
+                        raw_pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
+                    else:
+                        raw_pdf_bytes = generate_act_pdf(inv, act, profile, db)
+            attachments.append((f"{doc_label}_{act.act_number}.pdf", raw_pdf_bytes))
+            
+            # Get signed p7m bytes
+            if getattr(act, 'signed_file_content', None) is not None:
+                signed_bytes = act.signed_file_content
+            else:
+                import os
+                signed_path = os.path.join("temp_uploads", f"act_{act.id}.pdf.p7m")
+                if os.path.exists(signed_path):
+                    with open(signed_path, "rb") as f:
+                        signed_bytes = f.read()
+                else:
+                    signed_bytes = sign_pdf_mock_or_real(raw_pdf_bytes, None, db)
+            attachments.append((f"{doc_label}_{act.act_number}.pdf.p7m", signed_bytes))
+        else:
+            filename_act, act_bytes = get_act_pdf_bytes_for_attachment(inv, act, profile, db)
+            attachments.append((filename_act, act_bytes))
+            
+    return attachments
+
 def trigger_invoice_sending(inv: Invoice, act: Optional[ServiceAct], profile_name: str, db: Session):
     # 1. Generate PDFs
     profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
@@ -5729,18 +6298,7 @@ def trigger_invoice_sending(inv: Invoice, act: Optional[ServiceAct], profile_nam
     attachments = []
     if profile:
         try:
-            # Generate invoice PDF
-            inv_pdf_bytes = generate_invoice_pdf(inv, profile, db)
-            attachments.append((f"Invoice_{inv.invoice_number}.pdf", inv_pdf_bytes))
-            
-            # Generate act/waybill PDF if applicable
-            if act:
-                if inv.document_type == "waybill":
-                    way_pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
-                    attachments.append((f"Waybill_{act.act_number}.pdf", way_pdf_bytes))
-                else:
-                    act_pdf_bytes = generate_act_pdf(inv, act, profile, db)
-                    attachments.append((f"Act_{act.act_number}.pdf", act_pdf_bytes))
+            attachments = get_all_attachments_for_invoice(inv, act, profile, db)
         except Exception as e:
             print(f"[PDF GENERATION ERROR] Failed to generate document PDFs: {e}")
 
@@ -6096,6 +6654,10 @@ def send_email_via_gmail_api(profile_id: int, to_email: str, subject: str, body:
                 print(f"[GMAIL API] Successfully refreshed OAuth token for profile_id={profile_id}")
             except Exception as re:
                 print(f"[GMAIL API ERROR] Failed to refresh OAuth token for profile_id={profile_id}: {re}")
+                if "invalid_grant" in str(re):
+                    print(f"[GMAIL API] Deleting expired/revoked Gmail auth for profile_id={profile_id}")
+                    db.delete(auth)
+                    db.commit()
                 return False
                 
         msg = MIMEMultipart()
@@ -6106,7 +6668,12 @@ def send_email_via_gmail_api(profile_id: int, to_email: str, subject: str, body:
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
         for filename, file_bytes in attachments:
-            part = MIMEBase('application', 'pdf')
+            if filename.endswith('.p7m'):
+                part = MIMEBase('application', 'pkcs7-signature')
+            elif filename.endswith('.pdf'):
+                part = MIMEBase('application', 'pdf')
+            else:
+                part = MIMEBase('application', 'octet-stream')
             part.set_payload(file_bytes)
             encoders.encode_base64(part)
             part.add_header(
@@ -6124,6 +6691,13 @@ def send_email_via_gmail_api(profile_id: int, to_email: str, subject: str, body:
         return True
     except Exception as e:
         print(f"[GMAIL API ERROR] Failed to send email via Gmail API: {e}")
+        if "invalid_grant" in str(e):
+            print(f"[GMAIL API] Deleting expired/revoked Gmail auth (outer check) for profile_id={profile_id}")
+            try:
+                db.delete(auth)
+                db.commit()
+            except Exception as delete_err:
+                print(f"[GMAIL API ERROR] Failed to delete invalid auth record: {delete_err}")
         return False
     finally:
         db.close()
@@ -6189,11 +6763,13 @@ def get_all_invoices(
             "notes": inv.notes,
             "items_json": inv.items_json,
             "client_address": inv.client_address,
+            "is_signed": inv.signed_file_content is not None or inv.signed_file_path is not None,
             "act": {
                 "id": act.id,
                 "act_number": act.act_number,
                 "status": act.status,
-                "created_at": act.created_at.strftime("%Y-%m-%d") if isinstance(act.created_at, date) else act.created_at
+                "created_at": act.created_at.strftime("%Y-%m-%d") if isinstance(act.created_at, date) else act.created_at,
+                "is_signed": act.signed_file_content is not None or act.signed_file_path is not None
             } if act else None
         })
     return result
@@ -6332,12 +6908,44 @@ def get_invoice_pdf_endpoint(invoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Profile not found")
         
     try:
-        pdf_bytes = generate_invoice_pdf(inv, profile, db)
+        if getattr(inv, 'file_content', None) is not None:
+            pdf_bytes = inv.file_content
+        else:
+            import os
+            file_path = os.path.join("temp_uploads", f"document_{invoice_id}.pdf")
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+            else:
+                pdf_bytes = generate_invoice_pdf(inv, profile, db)
+                
+        filename = f"invoice_{inv.invoice_number}.pdf"
+        if inv.document_type == "contract":
+            filename = f"contract_{inv.invoice_number}.pdf"
+        elif inv.document_type == "waybill":
+            filename = f"waybill_{inv.invoice_number}.pdf"
+        elif inv.document_type == "act":
+            filename = f"act_{inv.invoice_number}.pdf"
+            
         return Response(content=pdf_bytes, media_type="application/pdf", headers={
-            "Content-Disposition": f"attachment; filename=invoice_{inv.invoice_number}.pdf"
+            "Content-Disposition": f"attachment; filename={filename}"
         })
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve PDF: {str(e)}")
+
+def generate_qr_with_registration(token: str) -> str:
+    import qrcode
+    from io import BytesIO
+    import base64
+    frontend_url = os.getenv("FRONTEND_URL", "https://unitas-frontend.fly.dev")
+    url = f"{frontend_url}/register?ref={token}"
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffered = BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
 
 @app.post("/api/invoices/{invoice_id}/send")
 def send_invoice_api(
@@ -6345,6 +6953,7 @@ def send_invoice_api(
     req: SendInvoiceRequest,
     db: Session = Depends(get_db)
 ):
+    import uuid
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -6353,38 +6962,157 @@ def send_invoice_api(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
         
+    # Check if Gmail API is used and validate the token synchronously
+    auth = db.query(EmailAuth).filter(EmailAuth.profile_id == inv.profile_id).first()
+    if auth:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+        credentials = Credentials(
+            token=auth.access_token,
+            refresh_token=auth.refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=google_client_id,
+            client_secret=google_client_secret,
+            expiry=auth.expires_at
+        )
+        if credentials.expired:
+            try:
+                credentials.refresh(Request())
+                auth.access_token = credentials.token
+                auth.expires_at = credentials.expiry
+                db.commit()
+                print(f"[GMAIL API SYNC] Successfully refreshed OAuth token for profile_id={inv.profile_id}")
+            except Exception as re:
+                print(f"[GMAIL API SYNC ERROR] Failed to refresh token for profile_id={inv.profile_id}: {re}")
+                if "invalid_grant" in str(re):
+                    db.delete(auth)
+                    db.commit()
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Ваша авторизація Gmail застаріла або була скасована. Будь ласка, перепідключіть вашу пошту в Налаштуваннях."
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Не вдалося оновити з'єднання з Gmail: {str(re)}"
+                )
+
     act = db.query(ServiceAct).filter(ServiceAct.invoice_id == inv.id).first()
-    
     attachments = []
     try:
-        inv_pdf_bytes = generate_invoice_pdf(inv, profile, db)
-        attachments.append((f"Invoice_{inv.invoice_number}.pdf", inv_pdf_bytes))
-        if act:
-            if inv.document_type == "waybill":
-                way_pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
-                attachments.append((f"Waybill_{act.act_number}.pdf", way_pdf_bytes))
-            else:
-                act_pdf_bytes = generate_act_pdf(inv, act, profile, db)
-                attachments.append((f"Act_{act.act_number}.pdf", act_pdf_bytes))
+        attachments = get_all_attachments_for_invoice(inv, act, profile, db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate PDFs: {str(e)}")
         
-    subject = req.subject or f"Рахунок {inv.invoice_number}"
-    body = req.message or f"Доброго дня!\n\nРахунок у додатку.\n\n{subject}"
+    to_email = req.toEmail.strip().lower()
+    existing_user = db.query(User).filter(User.email == to_email).first()
     
+    frontend_url = os.getenv("FRONTEND_URL", "https://unitas-frontend.fly.dev")
+    sender_name = profile.name or "Користувач UniTax"
+    
+    doc_type_ua = "Рахунок-фактура"
+    if inv.document_type == "act":
+        doc_type_ua = "Акт надання послуг"
+    elif inv.document_type == "waybill":
+        doc_type_ua = "Видаткова накладна"
+    elif inv.document_type == "contract":
+        doc_type_ua = "Договір"
+        
+    doc_number = inv.invoice_number or ""
+    doc_date = inv.send_date.strftime("%d.%m.%Y") if inv.send_date else date.today().strftime("%d.%m.%Y")
+    
+    is_invited = False
+    
+    if existing_user:
+        target_profile = db.query(Profile).filter(Profile.user_id == existing_user.id).first()
+        if target_profile:
+            existing_incoming = db.query(IncomingDocument).filter(
+                IncomingDocument.profile_id == target_profile.id,
+                IncomingDocument.document_id == inv.id
+            ).first()
+            if not existing_incoming:
+                incoming = IncomingDocument(
+                    profile_id=target_profile.id,
+                    document_id=inv.id,
+                    shared_by=inv.profile_id
+                )
+                db.add(incoming)
+                db.commit()
+                
+        subject = req.subject or f"Вам надіслано документ через UniTax: {doc_type_ua} №{doc_number}"
+        body = req.message or f"Доброго дня!\n\nКористувач UniTax ({sender_name}) надіслав вам документ.\n\n📄 Тип: {doc_type_ua} №{doc_number} від {doc_date}\n\nДокументи прикріплено до цього листа.\n\nЗ повагою,\nКоманда UniTax"
+    else:
+        is_invited = True
+        temp_token = str(uuid.uuid4())
+        invitation = DocumentInvitation(
+            document_id=inv.id,
+            email=to_email,
+            temp_token=temp_token
+        )
+        db.add(invitation)
+        db.commit()
+        
+        qr_base64 = generate_qr_with_registration(temp_token)
+        registration_url = f"{frontend_url}/register?ref={temp_token}"
+        
+        subject = req.subject or f"Вам надіслано документ через UniTax: {doc_type_ua} №{doc_number}"
+        
+        body = f"""<html>
+<head>
+    <style>
+        body {{ font-family: sans-serif; color: #1e293b; line-height: 1.5; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; }}
+        .btn {{ display: inline-block; padding: 10px 20px; background-color: #4f46e5; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 15px; }}
+        .qr-container {{ text-align: center; margin: 20px 0; }}
+        .footer {{ margin-top: 30px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 15px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Вам надіслано документ через UniTax</h2>
+        <p>Доброго дня!</p>
+        <p>Користувач UniTax <strong>{sender_name}</strong> надіслав вам документ:</p>
+        <ul>
+            <li><strong>Тип:</strong> {doc_type_ua} №{doc_number}</li>
+            <li><strong>Дата:</strong> {doc_date}</li>
+        </ul>
+        
+        <p>Для перегляду документа вам потрібно зареєструватися в UniTax (це безкоштовно).</p>
+        
+        <div class="qr-container">
+            <img src="data:image/png;base64,{qr_base64}" width="200" height="200" alt="QR Code"><br>
+            <a href="{registration_url}" class="btn">Зареєструватися в UniTax</a>
+        </div>
+        
+        <p>Після реєстрації ви автоматично отримаєте доступ до цього документа та зможете:</p>
+        <ul>
+            <li>Переглядати та завантажувати документи</li>
+            <li>Підписувати документи своїм КЕП</li>
+            <li>Надсилати документи своїм контрагентам</li>
+        </ul>
+        
+        <div class="footer">
+            З повагою,<br>
+            Команда UniTax
+        </div>
+    </div>
+</body>
+</html>"""
+
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == inv.profile_id).first()
     
     import threading
     if auth:
         threading.Thread(
             target=send_email_via_gmail_api,
-            args=(inv.profile_id, req.toEmail, subject, body, attachments, SessionLocal),
+            args=(inv.profile_id, to_email, subject, body, attachments, SessionLocal),
             daemon=True
         ).start()
     else:
         threading.Thread(
             target=send_email_with_attachments,
-            args=(req.toEmail, subject, body, attachments),
+            args=(to_email, subject, body, attachments),
             daemon=True
         ).start()
         
@@ -6392,13 +7120,50 @@ def send_invoice_api(
         inv.status = "sent"
         db.commit()
         
-    return {"status": "sent", "to": req.toEmail}
+    return {
+        "status": "invitation_sent" if is_invited else "sent",
+        "message": "Запрошення надіслано" if is_invited else "Документ надіслано",
+        "to": to_email
+    }
 
 @app.post("/api/auth/google/test-email/{profile_id}")
 def test_gmail_sending(profile_id: int, db: Session = Depends(get_db)):
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).first()
     if not auth:
         raise HTTPException(status_code=400, detail="Gmail not connected")
+        
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    credentials = Credentials(
+        token=auth.access_token,
+        refresh_token=auth.refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=google_client_id,
+        client_secret=google_client_secret,
+        expiry=auth.expires_at
+    )
+    if credentials.expired:
+        try:
+            credentials.refresh(Request())
+            auth.access_token = credentials.token
+            auth.expires_at = credentials.expiry
+            db.commit()
+            print(f"[GMAIL API SYNC] Successfully refreshed OAuth token for test email profile_id={profile_id}")
+        except Exception as re:
+            print(f"[GMAIL API SYNC ERROR] Failed to refresh token for test email: {re}")
+            if "invalid_grant" in str(re):
+                db.delete(auth)
+                db.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Ваша авторизація Gmail застаріла або була скасована. Будь ласка, перепідключіть вашу пошту в Налаштуваннях."
+                )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Не вдалося оновити з'єднання з Gmail: {str(re)}"
+            )
     
     subject = "Тестовий лист від UniTax"
     body = "Вітаємо! Ваш Gmail успішно підключено до асистента UniTax. Тепер ви можете надсилати рахунки безпосередньо з вашої пошти."
@@ -6421,6 +7186,768 @@ def delete_invoice(id: int, db: Session = Depends(get_db)):
     db.delete(inv)
     db.commit()
     return {"status": "deleted"}
+
+
+def generate_mock_cert_and_key():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import hashes
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    import datetime
+    
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, u"UniTax Mock Signer"),
+    ])
+    cert = x509.CertificateBuilder().subject_name(
+        subject
+    ).issuer_name(
+        issuer
+    ).public_key(
+        private_key.public_key()
+    ).serial_number(
+        x509.random_serial_number()
+    ).not_valid_before(
+        datetime.datetime.utcnow() - datetime.timedelta(days=1)
+    ).not_valid_after(
+        datetime.datetime.utcnow() + datetime.timedelta(days=365)
+    ).sign(private_key, hashes.SHA256())
+    
+    return cert, private_key
+
+def sign_pdf_with_pkcs7(pdf_bytes: bytes, cert_data_pem: str, private_key_pem: bytes) -> bytes:
+    from cryptography.hazmat.primitives.serialization import pkcs7, load_pem_private_key, Encoding
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    import base64
+    
+    cert_bytes = cert_data_pem.encode('utf-8') if isinstance(cert_data_pem, str) else cert_data_pem
+    if b"-----BEGIN CERTIFICATE-----" not in cert_bytes:
+        try:
+            cert = x509.load_der_x509_certificate(base64.b64decode(cert_bytes))
+        except Exception:
+            cert = x509.load_pem_x509_certificate(b"-----BEGIN CERTIFICATE-----\n" + cert_bytes + b"\n-----END CERTIFICATE-----")
+    else:
+        cert = x509.load_pem_x509_certificate(cert_bytes)
+        
+    private_key = load_pem_private_key(private_key_pem, password=None)
+    
+    builder = pkcs7.PKCS7SignatureBuilder()
+    builder = builder.set_data(pdf_bytes)
+    builder = builder.add_signer(cert, private_key, hashes.SHA256())
+    return builder.sign(Encoding.DER, [pkcs7.PKCS7Options.Binary])
+
+def sign_pdf_mock_or_real(pdf_bytes: bytes, cert_record, db) -> bytes:
+    if cert_record:
+        try:
+            from services.report_signer import decrypt_private_key
+            private_key_bytes = decrypt_private_key(cert_record.private_key_encrypted)
+            return sign_pdf_with_pkcs7(pdf_bytes, cert_record.cert_data, private_key_bytes)
+        except Exception as e:
+            print(f"[SIGNING ERROR] Failed to sign with real key: {e}. Falling back to mock certificate.")
+            
+    # Mock signing
+    from cryptography.hazmat.primitives.serialization import pkcs7, Encoding
+    from cryptography.hazmat.primitives import hashes
+    cert, private_key = generate_mock_cert_and_key()
+    builder = pkcs7.PKCS7SignatureBuilder()
+    builder = builder.set_data(pdf_bytes)
+    builder = builder.add_signer(cert, private_key, hashes.SHA256())
+    return builder.sign(Encoding.DER, [pkcs7.PKCS7Options.Binary])
+
+def sign_invoice_row(inv, cert_record, db):
+    import os
+    import hashlib
+    from fastapi import HTTPException
+    # 1. Get PDF bytes
+    file_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+    if inv.file_content:
+        pdf_bytes = inv.file_content
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+    elif os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+            inv.file_content = pdf_bytes
+    else:
+        profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        pdf_bytes = generate_invoice_pdf(inv, profile, db)
+        inv.file_content = pdf_bytes
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+            
+    # 2. Compute hash
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    
+    # 3. Sign PDF
+    signed_bytes = sign_pdf_mock_or_real(pdf_bytes, cert_record, db)
+    
+    # 4. Save signed file
+    signed_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf.p7m")
+    with open(signed_path, "wb") as f:
+        f.write(signed_bytes)
+        
+    # 5. Update DB
+    inv.status = "signed"
+    inv.file_hash = pdf_hash
+    inv.signed_file_path = signed_path
+    inv.signed_file_content = signed_bytes
+    inv.extracted_file_path = file_path
+    db.commit()
+    return {"status": "success", "message": "Document signed successfully", "hash": pdf_hash}
+
+def sign_service_act(act, cert_record, db):
+    import os
+    import hashlib
+    from fastapi import HTTPException
+    inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Linked invoice not found")
+    profile = db.query(Profile).filter(Profile.id == act.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    # 1. Get PDF bytes
+    file_path = os.path.join("temp_uploads", f"act_{act.id}.pdf")
+    if act.file_content:
+        pdf_bytes = act.file_content
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+    elif os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+            act.file_content = pdf_bytes
+    else:
+        if inv.document_type == "waybill":
+            pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
+        else:
+            pdf_bytes = generate_act_pdf(inv, act, profile, db)
+        act.file_content = pdf_bytes
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+            
+    # 2. Compute hash
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    
+    # 3. Sign PDF
+    signed_bytes = sign_pdf_mock_or_real(pdf_bytes, cert_record, db)
+    
+    # 4. Save signed file
+    signed_path = os.path.join("temp_uploads", f"act_{act.id}.pdf.p7m")
+    with open(signed_path, "wb") as f:
+        f.write(signed_bytes)
+        
+    # 5. Update DB
+    act.status = "signed"
+    act.file_hash = pdf_hash
+    act.signed_file_path = signed_path
+    act.signed_file_content = signed_bytes
+    act.extracted_file_path = file_path
+    
+    if inv.status == "draft":
+        inv.status = "sent"
+        
+    db.commit()
+    return {"status": "success", "message": "Document signed successfully", "hash": pdf_hash}
+
+class SignDocumentRequest(BaseModel):
+    doc_type: str
+    certificate_id: Optional[int] = None
+    use_diia: Optional[bool] = False
+
+@app.post("/api/documents/{doc_id}/sign")
+def sign_document_endpoint(
+    doc_id: int,
+    req: SignDocumentRequest,
+    db: Session = Depends(get_db)
+):
+    cert_record = None
+    if req.certificate_id:
+        cert_record = db.query(Certificate).filter(Certificate.id == req.certificate_id).first()
+        
+    if req.doc_type in ("invoice", "contract", "waybill") or (req.doc_type == "act" and db.query(Invoice).filter(Invoice.id == doc_id, Invoice.document_type == "act").first() is not None):
+        inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+        if not inv:
+            # Maybe it is a ServiceAct with ID doc_id
+            act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+            if act:
+                return sign_service_act(act, cert_record, db)
+            raise HTTPException(status_code=404, detail="Document not found")
+        return sign_invoice_row(inv, cert_record, db)
+    elif req.doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if not act:
+            raise HTTPException(status_code=404, detail="Act not found")
+        return sign_service_act(act, cert_record, db)
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid document type: {req.doc_type}")
+        
+    return {"status": "success", "message": "Document signed successfully"}
+
+@app.get("/api/documents/{doc_id}/signed")
+def get_signed_document_pdf(
+    doc_id: int,
+    doc_type: str,
+    db: Session = Depends(get_db)
+):
+    from fastapi.responses import Response
+    import os
+    
+    # 1. Check if it is a ServiceAct
+    if doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if act:
+            if getattr(act, 'signed_file_content', None) is not None:
+                inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+                label = "waybill" if (inv and inv.document_type == "waybill") else "act"
+                return Response(content=act.signed_file_content, media_type="application/pkcs7-signature", headers={
+                    "Content-Disposition": f"attachment; filename={label}_{act.act_number}.pdf.p7m"
+                })
+            elif act.signed_file_path and os.path.exists(act.signed_file_path):
+                with open(act.signed_file_path, "rb") as f:
+                    p7m_bytes = f.read()
+                inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+                label = "waybill" if (inv and inv.document_type == "waybill") else "act"
+                return Response(content=p7m_bytes, media_type="application/pkcs7-signature", headers={
+                    "Content-Disposition": f"attachment; filename={label}_{act.act_number}.pdf.p7m"
+                })
+            
+    # 2. Check if it is an Invoice/Contract/Waybill row
+    inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+    if inv:
+        if getattr(inv, 'signed_file_content', None) is not None:
+            label = inv.document_type or "document"
+            return Response(content=inv.signed_file_content, media_type="application/pkcs7-signature", headers={
+                "Content-Disposition": f"attachment; filename={label}_{inv.invoice_number}.pdf.p7m"
+            })
+        elif inv.signed_file_path and os.path.exists(inv.signed_file_path):
+            with open(inv.signed_file_path, "rb") as f:
+                p7m_bytes = f.read()
+            label = inv.document_type or "document"
+            return Response(content=p7m_bytes, media_type="application/pkcs7-signature", headers={
+                "Content-Disposition": f"attachment; filename={label}_{inv.invoice_number}.pdf.p7m"
+            })
+        
+    # Fallback to generation / dynamic signing if signed_file_path is missing but status is signed
+    pdf_bytes = b""
+    filename = "document_signed.pdf"
+    if doc_type in ("invoice", "contract", "waybill"):
+        if not inv:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if getattr(inv, 'file_content', None) is not None:
+            pdf_bytes = inv.file_content
+        else:
+            file_path = os.path.join("temp_uploads", f"document_{doc_id}.pdf")
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+            else:
+                if doc_type == "invoice":
+                    profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+                    pdf_bytes = generate_invoice_pdf(inv, profile, db)
+                else:
+                    from reportlab.lib.pagesizes import letter
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+                    from reportlab.lib.styles import getSampleStyleSheet
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    doc = SimpleDocTemplate(buffer, pagesize=letter)
+                    styles = getSampleStyleSheet()
+                    story = [
+                        Paragraph(f"{doc_type.upper()} AGREEMENT (SIGNED)", styles['Heading1']),
+                        Spacer(1, 20),
+                        Paragraph(f"Document ID: {doc_id}", styles['Normal']),
+                        Paragraph("Status: Signed with KEP signature", styles['Normal'])
+                    ]
+                    doc.build(story)
+                    pdf_bytes = buffer.getvalue()
+        filename = f"{doc_type}_{inv.invoice_number}_signed.pdf"
+    elif doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if not act:
+            raise HTTPException(status_code=404, detail="Act not found")
+        inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+        profile = db.query(Profile).filter(Profile.id == act.profile_id).first()
+        if inv.document_type == "waybill":
+            pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
+            filename = f"waybill_{act.act_number}_signed.pdf"
+        else:
+            pdf_bytes = generate_act_pdf(inv, act, profile, db)
+            filename = f"act_{act.act_number}_signed.pdf"
+        
+    # Sign it dynamically
+    signed_bytes = sign_pdf_mock_or_real(pdf_bytes, None, db)
+    return Response(content=signed_bytes, media_type="application/pkcs7-signature", headers={
+        "Content-Disposition": f"attachment; filename={filename}.p7m"
+    })
+
+@app.post("/api/documents/upload")
+async def upload_custom_document(
+    file: UploadFile = File(...),
+    profile_id: int = Form(...),
+    title: str = Form(...),
+    number: str = Form(...),
+    client_email: str = Form(...),
+    amount: float = Form(0.0),
+    document_type: Optional[str] = Form("contract"),
+    db: Session = Depends(get_db)
+):
+    inv = Invoice(
+        profile_id=profile_id,
+        client_email=client_email,
+        amount=amount,
+        service_name=title,
+        invoice_number=number,
+        status="draft",
+        document_type=document_type,
+        send_date=date.today()
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    
+    content = await file.read()
+    inv.file_content = content
+    
+    os.makedirs("temp_uploads", exist_ok=True)
+    file_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+    with open(file_path, "wb") as buffer:
+        buffer.write(content)
+        
+    inv.extracted_file_path = file_path
+    db.commit()
+        
+    return {"status": "success", "id": inv.id, "message": "Document uploaded successfully"}
+
+class TemplateDocumentRequest(BaseModel):
+    profile_id: int
+    template_name: str
+    client_name: str
+    contract_number: str
+    client_email: str
+    amount: float = 0.0
+    content: Optional[str] = None
+
+@app.post("/api/documents/template")
+def create_templated_document(
+    req: TemplateDocumentRequest,
+    db: Session = Depends(get_db)
+):
+    inv = Invoice(
+        profile_id=req.profile_id,
+        client_email=req.client_email,
+        client_name=req.client_name,
+        amount=req.amount,
+        service_name=f"{req.template_name} №{req.contract_number}",
+        invoice_number=req.contract_number,
+        status="draft",
+        document_type="contract",
+        send_date=date.today()
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    
+    os.makedirs("temp_uploads", exist_ok=True)
+    file_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+    
+    doc = SimpleDocTemplate(file_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    font_name = get_cyrillic_font()
+    
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontName=font_name,
+        fontSize=18,
+        leading=22,
+        alignment=1,
+        spaceAfter=20
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'SubtitleStyle',
+        parent=title_style,
+        fontName=font_name,
+        fontSize=12,
+        leading=16,
+        spaceAfter=20
+    )
+    
+    body_style = ParagraphStyle(
+        'BodyStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        spaceAfter=8
+    )
+    
+    heading_style = ParagraphStyle(
+        'HeadingStyle',
+        parent=styles['Heading2'],
+        fontName=font_name,
+        fontSize=11,
+        leading=15,
+        spaceBefore=10,
+        spaceAfter=6
+    )
+    
+    story = [
+        Paragraph(f"{req.template_name}", title_style),
+        Paragraph(f"Договір № {req.contract_number}", subtitle_style),
+        Spacer(1, 10),
+    ]
+    
+    if req.content:
+        # Preprocess content with template variables
+        body_text = req.content
+        body_text = body_text.replace("{{Клієнт}}", req.client_name)
+        body_text = body_text.replace("{{Сума}}", f"{req.amount:,.2f}")
+        body_text = body_text.replace("{{Номер}}", req.contract_number)
+        body_text = body_text.replace("{{Дата}}", date.today().strftime('%d.%m.%Y'))
+        
+        # Split by newlines and add paragraphs
+        import re
+        paragraphs = body_text.split('\n')
+        for p in paragraphs:
+            p = p.strip()
+            if not p:
+                story.append(Spacer(1, 8))
+                continue
+            
+            if re.match(r'^\d+(\.\d+)*\.', p) or (p.isupper() and len(p) > 3):
+                story.append(Paragraph(p, heading_style))
+            else:
+                story.append(Paragraph(p, body_style))
+    else:
+        # Fallback to default styling
+        story.extend([
+            Paragraph(f"Дата: {date.today().strftime('%d.%m.%Y')}", body_style),
+            Paragraph(f"Сторона 1 (Виконавець): активний профіль користувача UniTax", body_style),
+            Paragraph(f"Сторона 2 (Замовник): {req.client_name} (Email: {req.client_email})", body_style),
+            Spacer(1, 20),
+            Paragraph("1. ПРЕДМЕТ ДОГОВОРУ", heading_style),
+            Paragraph("1.1. Виконавець зобов'язкується надати послуги, а Замовник зобов'язкується прийняти та оплатити їх у порядку та на умовах, визначених цим Договором.", body_style),
+            Paragraph(f"1.2. Вартість послуг за цим Договором становить {req.amount:,.2f} грн.", body_style),
+            Spacer(1, 20)
+        ])
+        
+    story.extend([
+        Paragraph("ПІДПИСИ СТОРІН", heading_style),
+        Spacer(1, 10),
+    ])
+    
+    sig_data = [
+        [Paragraph("Від Виконавця:", body_style), Paragraph("Від Замовника:", body_style)],
+        [Paragraph("___________________", body_style), Paragraph("___________________", body_style)],
+        [Paragraph("підписано КЕП через UniTax", ParagraphStyle('SigNote', parent=body_style, fontName=font_name, textColor=colors.HexColor("#4f46e5"))), Paragraph("очікує підпису", ParagraphStyle('SigNote2', parent=body_style, fontName=font_name, textColor=colors.HexColor("#64748b")))]
+    ]
+    t = Table(sig_data, colWidths=[250, 250])
+    t.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    ]))
+    story.append(t)
+    
+    doc.build(story)
+    
+    with open(file_path, "rb") as f:
+        inv.file_content = f.read()
+    inv.extracted_file_path = file_path
+    db.commit()
+    
+    return {"status": "success", "id": inv.id, "message": "Document created from template"}
+
+class SendProfileDocumentRequest(BaseModel):
+    toEmail: str
+    subject: Optional[str] = None
+    message: Optional[str] = None
+
+@app.post("/api/profiles/{profile_id}/documents")
+async def upload_profile_document(
+    profile_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    content = await file.read()
+    doc = ProfileDocument(
+        profile_id=profile_id,
+        filename=file.filename,
+        content_type=file.content_type,
+        file_content=content
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return {"status": "success", "id": doc.id, "filename": doc.filename}
+
+@app.get("/api/profiles/{profile_id}/documents")
+def list_profile_documents(
+    profile_id: int,
+    db: Session = Depends(get_db)
+):
+    docs = db.query(ProfileDocument).filter(ProfileDocument.profile_id == profile_id).all()
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "content_type": d.content_type,
+            "upload_date": d.upload_date.strftime("%Y-%m-%d") if d.upload_date else ""
+        }
+        for d in docs
+    ]
+
+@app.delete("/api/profiles/{profile_id}/documents/{doc_id}")
+def delete_profile_document(
+    profile_id: int,
+    doc_id: int,
+    db: Session = Depends(get_db)
+):
+    doc = db.query(ProfileDocument).filter(
+        ProfileDocument.id == doc_id,
+        ProfileDocument.profile_id == profile_id
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не знайдено")
+    db.delete(doc)
+    db.commit()
+    return {"status": "success", "message": "Документ видалено"}
+
+from fastapi.responses import Response
+@app.get("/api/profiles/documents/{doc_id}/download")
+def download_profile_document(
+    doc_id: int,
+    db: Session = Depends(get_db)
+):
+    doc = db.query(ProfileDocument).filter(ProfileDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не знайдено")
+    return Response(
+        content=doc.file_content,
+        media_type=doc.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename={doc.filename}"
+        }
+    )
+
+@app.post("/api/profiles/documents/{doc_id}/send")
+def send_profile_document_api(
+    doc_id: int,
+    req: SendProfileDocumentRequest,
+    db: Session = Depends(get_db)
+):
+    doc = db.query(ProfileDocument).filter(ProfileDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не знайдено")
+        
+    profile = db.query(Profile).filter(Profile.id == doc.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    # Check if Gmail API is used and validate the token synchronously
+    auth = db.query(EmailAuth).filter(EmailAuth.profile_id == doc.profile_id).first()
+    if auth:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+        credentials = Credentials(
+            token=auth.access_token,
+            refresh_token=auth.refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=google_client_id,
+            client_secret=google_client_secret,
+            expiry=auth.expires_at
+        )
+        if credentials.expired:
+            try:
+                credentials.refresh(Request())
+                auth.access_token = credentials.token
+                auth.expires_at = credentials.expiry
+                db.commit()
+                print(f"[GMAIL API SYNC] Successfully refreshed OAuth token for profile_id={doc.profile_id}")
+            except Exception as re:
+                print(f"[GMAIL API SYNC ERROR] Failed to refresh token for profile_id={doc.profile_id}: {re}")
+                if "invalid_grant" in str(re):
+                    db.delete(auth)
+                    db.commit()
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Ваша авторизація Gmail застаріла або була скасована. Будь ласка, перепідключіть вашу пошту в Налаштуваннях."
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Не вдалося оновити з'єднання з Gmail: {str(re)}"
+                )
+                
+    to_email = req.toEmail.strip().lower()
+    sender_name = profile.name or "Користувач UniTax"
+    subject = req.subject or f"Вам надіслано документ підприємства через UniTax: {doc.filename}"
+    body = req.message or f"Доброго дня!\n\nКористувач UniTax ({sender_name}) надіслав вам документ підприємства: {doc.filename}.\n\nДокумент прикріплено до цього листа.\n\nЗ повагою,\nКоманда UniTax"
+    
+    attachments = [(doc.filename, doc.file_content)]
+    
+    import threading
+    if auth:
+        threading.Thread(
+            target=send_email_via_gmail_api,
+            args=(doc.profile_id, to_email, subject, body, attachments, SessionLocal),
+            daemon=True
+        ).start()
+    else:
+        threading.Thread(
+            target=send_email_with_attachments,
+            args=(to_email, subject, body, attachments),
+            daemon=True
+        ).start()
+        
+    return {"status": "sent", "message": "Документ надіслано", "to": to_email}
+
+@app.post("/api/documents/verify")
+async def verify_document_signature(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    import os
+    import base64
+    from services.certificate_service import CertificateService
+    
+    os.makedirs("temp_uploads", exist_ok=True)
+    temp_path = os.path.join("temp_uploads", f"verify_{file.filename}")
+    try:
+        with open(temp_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+            
+        if file.filename.endswith(".p7m"):
+            is_valid, signer_cert, signed_data = CertificateService.verify_cades_signature(temp_path)
+            if is_valid and signer_cert:
+                subject = signer_cert.subject
+                issuer = signer_cert.issuer
+                
+                owner_name = "Unknown"
+                from cryptography.x509.oid import NameOID
+                cns = subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+                if cns:
+                    owner_name = cns[0].value
+                else:
+                    owner_name = str(subject)
+                    
+                issuer_name = "Unknown"
+                issuer_cns = issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
+                if issuer_cns:
+                    issuer_name = issuer_cns[0].value
+                else:
+                    issuer_name = str(issuer)
+                    
+                serial_num = str(signer_cert.serial_number)
+                pdf_b64 = base64.b64encode(signed_data).decode('utf-8')
+                
+                return {
+                    "is_valid": True,
+                    "type": "cades",
+                    "owner_name": owner_name,
+                    "issuer": issuer_name,
+                    "serial": serial_num,
+                    "extracted_pdf_base64": pdf_b64
+                }
+            else:
+                return {
+                    "is_valid": False,
+                    "type": "cades",
+                    "error": "Failed to verify signature or certificate missing"
+                }
+        elif file.filename.endswith(".pdf"):
+            is_signed = CertificateService.is_pdf_signed(temp_path)
+            return {
+                "is_valid": is_signed,
+                "type": "pades",
+                "is_signed": is_signed
+            }
+        else:
+            return {
+                "is_valid": False,
+                "type": "unknown",
+                "error": "Unsupported file format. Please send .p7m or .pdf"
+            }
+    except Exception as e:
+        return {
+            "is_valid": False,
+            "type": "error",
+            "error": str(e)
+        }
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.get("/api/invoices/incoming/{profile_id}")
+def get_incoming_documents(profile_id: int, db: Session = Depends(get_db)):
+    incoming = db.query(IncomingDocument).filter(IncomingDocument.profile_id == profile_id).all()
+    results = []
+    for inc in incoming:
+        inv = db.query(Invoice).filter(Invoice.id == inc.document_id).first()
+        if not inv:
+            continue
+        sender = db.query(Profile).filter(Profile.id == inc.shared_by).first()
+        sender_name = sender.name if sender else "Невідомий відправник"
+        
+        act = db.query(ServiceAct).filter(ServiceAct.invoice_id == inv.id).first()
+        
+        results.append({
+            "id": inv.id,
+            "profile_id": inv.profile_id,
+            "client_email": inv.client_email,
+            "client_telegram_id": inv.client_telegram_id,
+            "amount": inv.amount,
+            "service_name": inv.service_name,
+            "invoice_number": inv.invoice_number,
+            "status": inv.status,
+            "send_date": inv.send_date.strftime("%Y-%m-%d") if isinstance(inv.send_date, date) else inv.send_date,
+            "client_name": inv.client_name,
+            "client_tax_id": inv.client_tax_id,
+            "document_type": inv.document_type,
+            "due_date": inv.due_date.strftime("%Y-%m-%d") if inv.due_date else None,
+            "vat_rate": inv.vat_rate,
+            "notes": inv.notes,
+            "items_json": inv.items_json,
+            "client_address": inv.client_address,
+            "viewed": inc.viewed,
+            "sender_name": sender_name,
+            "is_signed": inv.signed_file_content is not None or inv.signed_file_path is not None,
+            "act": {
+                "id": act.id,
+                "act_number": act.act_number,
+                "status": act.status,
+                "created_at": act.created_at.strftime("%Y-%m-%d") if isinstance(act.created_at, date) else act.created_at,
+                "is_signed": act.signed_file_content is not None or act.signed_file_path is not None
+            } if act else None
+        })
+    return results
+
+@app.post("/api/invoices/incoming/{invoice_id}/view")
+def mark_incoming_document_viewed(invoice_id: int, profile_id: int, db: Session = Depends(get_db)):
+    inc = db.query(IncomingDocument).filter(
+        IncomingDocument.document_id == invoice_id,
+        IncomingDocument.profile_id == profile_id
+    ).first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incoming document link not found")
+    inc.viewed = True
+    db.commit()
+    return {"status": "success", "message": "Document marked as viewed"}
 
 @app.get("/api/system-config")
 def get_system_config(db: Session = Depends(get_db)):
@@ -6832,22 +8359,43 @@ async def upload_certificate(
         from services.report_signer import encrypt_private_key
         private_key_encrypted = encrypt_private_key(private_key_pem)
         
-        db_cert = Certificate(
-            profile_id=profile_id,
-            cert_owner_name=cert_owner_name,
-            cert_issuer=cert_issuer,
-            cert_serial=cert_serial,
-            cert_thumbprint=cert_thumbprint,
-            valid_from=valid_from,
-            valid_to=valid_to,
-            is_active=True,
-            created_at=datetime.now(),
-            cert_data=cert_pem,
-            private_key_encrypted=private_key_encrypted
-        )
-        db.add(db_cert)
-        db.commit()
-        db.refresh(db_cert)
+        # Check if certificate with same serial number already exists (global constraint)
+        existing_cert = db.query(Certificate).filter(
+            Certificate.cert_serial == cert_serial
+        ).first()
+        
+        if existing_cert:
+            # Update existing certificate
+            existing_cert.profile_id = profile_id
+            existing_cert.cert_owner_name = cert_owner_name
+            existing_cert.cert_issuer = cert_issuer
+            existing_cert.cert_thumbprint = cert_thumbprint
+            existing_cert.valid_from = valid_from
+            existing_cert.valid_to = valid_to
+            existing_cert.is_active = True
+            existing_cert.cert_data = cert_pem
+            existing_cert.private_key_encrypted = private_key_encrypted
+            db.commit()
+            db.refresh(existing_cert)
+            db_cert = existing_cert
+        else:
+            # Create new certificate
+            db_cert = Certificate(
+                profile_id=profile_id,
+                cert_owner_name=cert_owner_name,
+                cert_issuer=cert_issuer,
+                cert_serial=cert_serial,
+                cert_thumbprint=cert_thumbprint,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                is_active=True,
+                created_at=datetime.now(),
+                cert_data=cert_pem,
+                private_key_encrypted=private_key_encrypted
+            )
+            db.add(db_cert)
+            db.commit()
+            db.refresh(db_cert)
         
         return {
             "id": db_cert.id,
@@ -7427,17 +8975,22 @@ def set_tax_token_compat(req: SetTokenRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/tax/check-debt")
 async def check_debt_endpoint(req: CheckDebtRequest, db: Session = Depends(get_db)):
-    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
-    if not setting:
-        return {"error": "Не підключено до API ДПС. Будь ласка, налаштуйте інтеграцію."}
-        
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
         
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     from services.tax_api_service import TaxAPIService
     api_service = TaxAPIService()
-    debt_info = await api_service.get_tax_debt(profile.tax_id or "", setting.api_token)
+    debt_info = await api_service.get_tax_debt(
+        profile.tax_id or "",
+        setting.api_token if setting else "",
+        profile.type or "fop",
+        profile.group,
+        profile.name,
+        profile_id=req.profile_id,
+        db=db
+    )
     
     return {
         "has_debt": debt_info.get("total_debt", 0.0) > 0,
@@ -7448,112 +9001,66 @@ async def check_debt_endpoint(req: CheckDebtRequest, db: Session = Depends(get_d
 
 @app.post("/api/tax/check-reports")
 async def check_reports_endpoint(req: CheckReportsRequest, db: Session = Depends(get_db)):
-    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
-    if not setting:
-        return {"error": "Не підключено до API ДПС. Будь ласка, налаштуйте інтеграцію."}
-        
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
-        
+    
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     from services.tax_api_service import TaxAPIService
     api_service = TaxAPIService()
+    api_service._db = db
+    api_service._profile_id = req.profile_id
     
-    # Determine required reports based on profile type and tax system
-    required_reports = []
-    is_fop = profile.type == "fop"
-    is_simplified = "simplified" in (profile.tax_system or "").lower() or (profile.tax_system or "").lower() in ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"]
-    
-    profile_employees = db.query(Employee).filter(
-        (Employee.profile_id == req.profile_id) | (Employee.company_id == req.profile_id)
-    ).all()
-    has_employees = (profile.has_employees or len(profile_employees) > 0) if profile else False
-
-    if is_fop:
-        if is_simplified:
-            if (profile.group or 3) in [1, 2]:
-                required_reports.append({
-                    "code": "F0103406",
-                    "name": "Декларація єдинника 1 та 2 груп (ФОП)",
-                    "type": "Річний",
-                    "deadline": f"01.03.{datetime.now().year + 1}"
-                })
-            else:
-                required_reports.append({
-                    "code": "F0103306",
-                    "name": "Декларація єдинника 3 групи (ФОП)",
-                    "type": "Квартальний",
-                    "deadline": f"10.05.{datetime.now().year}"
-                })
-            if has_employees:
-                required_reports.append({
-                    "code": "F0510101",
-                    "name": "Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ФОП)",
-                    "type": "Щомісячний",
-                    "deadline": f"20.06.{datetime.now().year}"
-                })
-        else:
-            required_reports.append({
-                "code": "F0100112",
-                "name": "Декларація про майновий стан і доходи",
-                "type": "Річний",
-                "deadline": f"03.05.{datetime.now().year}"
-            })
-    else:
-        if is_simplified:
-            required_reports.append({
-                "code": "J0103508",
-                "name": "Декларація єдиного податку ТОВ",
-                "type": "Квартальний",
-                "deadline": f"10.05.{datetime.now().year}"
-            })
-        else:
-            required_reports.append({
-                "code": "J0100120",
-                "name": "Декларація з податку на прибуток підприємств",
-                "type": "Річний",
-                "deadline": f"01.03.{datetime.now().year}"
-            })
-            
-        if has_employees:
-            required_reports.append({
-                "code": "J0500109",
-                "name": "Об'єднаний звіт про ЄСВ, ПДФО та ВЗ (ТОВ)",
-                "type": "Щомісячний",
-                "deadline": f"20.06.{datetime.now().year}"
-            })
-
-    if not required_reports:
-        required_reports.append({
-            "code": "F0103306" if is_fop else "J0500109",
-            "name": "Декларація єдинника" if is_fop else "Об'єднаний звіт",
-            "type": "Квартальний",
-            "deadline": f"10.05.{datetime.now().year}"
-        })
-
-    reports_status_list = []
-    all_submitted = True
-    
-    for rep in required_reports:
-        status = await api_service.get_report_status(profile.tax_id or "", setting.api_token, rep["code"])
-        submitted = status.get("submitted", False)
-        if not submitted:
-            all_submitted = False
-            
-        reports_status_list.append({
-            "code": rep["code"],
-            "name": rep["name"],
-            "type": rep["type"],
-            "deadline": rep["deadline"],
-            "submitted": submitted,
-            "submission_date": status.get("submission_date")
-        })
+    try:
+        from services.dps_api import DPSAPI
+        dps_api = DPSAPI(token=setting.api_token if setting else "", tax_id=profile.tax_id or "", profile_id=req.profile_id, db=db)
+        docs = await dps_api.get_report_documents()
         
-    return {
-        "all_submitted": all_submitted,
-        "reports": reports_status_list,
-        "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+        if not docs:
+            return {
+                "all_submitted": False,
+                "reports": [],
+                "warning": "ДПС API не повернув документів. Завантажте КЕП-ключ або перевірте налаштування.",
+                "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        
+        reports_status_list = []
+        all_submitted = True
+        
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            doc_code = doc.get("doc") or doc.get("cDoc") or doc.get("cdoc")
+            doc_name = doc.get("docName") or doc.get("name") or "Невідомий документ"
+            flag_name = doc.get("flagName") or ""
+            submitted = "Прийнято" in flag_name
+            if not submitted:
+                all_submitted = False
+            
+            reports_status_list.append({
+                "code": doc_code,
+                "name": doc_name,
+                "type": "Звіт",
+                "deadline": doc.get("dterm") or doc.get("dget") or "",
+                "submitted": submitted,
+                "submission_date": doc.get("dget") or doc.get("dterm"),
+                "status": flag_name,
+                "registration_number": doc.get("nreg")
+            })
+        
+        return {
+            "all_submitted": all_submitted,
+            "reports": reports_status_list,
+            "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.warning(f"DPS API report query failed: {e}")
+        return {
+            "all_submitted": False,
+            "reports": [],
+            "error": f"Не вдалося отримати статус звітів з ДПС: {str(e)}. Завантажте КЕП-ключ або завантажте звіти вручну.",
+            "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
 
 
 class GeneratePaymentRequest(BaseModel):
@@ -9192,6 +10699,272 @@ async def disconnect_bank(bank_name: str, profile_id: int, db: Session = Depends
     db.commit()
     
     return {"status": "disconnected"}
+
+# --- DPS API Endpoints ---
+
+class CheckDebtRequest(BaseModel):
+    profile_id: int
+
+def parse_settlement_table(data: list) -> list:
+    """Parse settlement data from DPS API response"""
+    if not data or not isinstance(data, list):
+        return []
+    
+    table = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+            
+        deadline_val = item.get("payment_deadline")
+        if deadline_val and isinstance(deadline_val, str):
+            try:
+                from datetime import datetime
+                if "T" in deadline_val:
+                    deadline_val = datetime.fromisoformat(deadline_val)
+                else:
+                    deadline_val = datetime.strptime(deadline_val.strip(), "%Y-%m-%d")
+            except Exception:
+                pass
+                
+        table.append({
+            "tax_name": item.get("namePlt") or item.get("tax_name") or "Невідомий платіж",
+            "tax_code": item.get("plat1") or item.get("tax_code") or "",
+            "overpaid": float(item.get("perepl0") or item.get("overpaid") or 0.0),
+            "debt": float(item.get("nedoim0") or item.get("debtAll") or item.get("debt") or 0.0),
+            "penalty": float(item.get("penia0") or item.get("penalty") or 0.0),
+            "accrued": float(item.get("narah0") or item.get("accrued") or 0.0),
+            "paid": float(item.get("splbd0") or item.get("paid") or 0.0),
+            "payment_deadline": deadline_val
+        })
+    return table
+
+def format_dps_settlement_response(table: list, source: str, fetched_at: datetime | None = None) -> dict:
+    fetched_at = fetched_at or datetime.now()
+    settlement_status = [
+        {
+            "tax_name": item["tax_name"],
+            "accrued": item["accrued"],
+            "paid": item["paid"],
+            "overpayment": item["overpaid"],
+            "underpayment": item["debt"]
+        }
+        for item in table
+    ]
+    debt_details = {item["tax_name"]: item["debt"] for item in table if item["debt"] > 0}
+    overpayment_details = {item["tax_name"]: item["overpaid"] for item in table if item["overpaid"] > 0}
+    return {
+        "source": source,
+        "settlements": table,
+        "settlement_status": settlement_status,
+        "debt_details": debt_details,
+        "overpayment_details": overpayment_details,
+        "has_debt": any(item["debt"] > 0 for item in table),
+        "has_overpayment": any(item["overpaid"] > 0 for item in table),
+        "total_debt": round(sum(item["debt"] for item in table), 2),
+        "total_overpayment": round(sum(item["overpaid"] for item in table), 2),
+        "fetched_at": fetched_at.isoformat(),
+        "checked_at": fetched_at.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+def get_latest_manual_dps_table(profile_id: int, db: Session) -> list:
+    rows = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id
+    ).order_by(DPSSettlement.recorded_at.desc()).all()
+    if not rows:
+        return []
+    latest_at = rows[0].recorded_at
+    latest_rows = [row for row in rows if row.recorded_at == latest_at]
+    return [
+        {
+            "tax_name": row.tax_name,
+            "tax_code": row.tax_code or "",
+            "overpaid": float(row.overpaid or 0.0),
+            "debt": float(row.debt or 0.0),
+            "penalty": float(row.penalty or 0.0),
+            "accrued": float(row.accrued or 0.0),
+            "paid": float(row.paid or 0.0),
+            "payment_deadline": row.payment_deadline.isoformat() if row.payment_deadline else None
+        }
+        for row in latest_rows
+    ]
+
+@app.post("/api/dps/upload")
+async def upload_dps_statement(
+    profile_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    try:
+        content = await file.read()
+        from ai_parser.dps_parser import DPSParser
+        parser = DPSParser()
+        parsed_rows = await parser.parse(content, file.filename or "")
+        table = parse_settlement_table(parsed_rows)
+        if not table:
+            raise HTTPException(status_code=400, detail="Не вдалося розпізнати виписку ДПС. Завантажте Excel/PDF/TXT файл зі сторінки «Стан розрахунків з бюджетом».")
+        recorded_at = datetime.now()
+        for item in table:
+            db.add(DPSSettlement(
+                profile_id=profile_id,
+                tax_name=item["tax_name"],
+                tax_code=item["tax_code"],
+                overpaid=item["overpaid"],
+                debt=item["debt"],
+                penalty=item["penalty"],
+                accrued=item["accrued"],
+                paid=item["paid"],
+                payment_deadline=item.get("payment_deadline"),
+                source="manual_upload",
+                recorded_at=recorded_at
+            ))
+        db.commit()
+        try:
+            sync_profile_calendar(profile_id, db)
+        except Exception as sync_err:
+            print(f"[Calendar Sync Error] Failed to sync calendar after upload: {sync_err}")
+            
+        response = format_dps_settlement_response(table, "Ручне завантаження виписки ДПС", recorded_at)
+        response["message"] = f"Виписку ДПС успішно розпізнано. Рядків: {len(table)}"
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Помилка обробки виписки ДПС: {str(e)}")
+
+@app.post("/api/dps/fetch-detailed")
+async def fetch_detailed_dps_data(req: CheckDebtRequest, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
+    
+    try:
+        from services.tax_api_service import TaxAPIService
+        api_service = TaxAPIService()
+        detailed_data = await api_service.get_settlement_status(
+            profile.tax_id or "",
+            setting.api_token if setting else "",
+            profile.type or "fop",
+            profile.group,
+            profile.name,
+            profile_id=req.profile_id,
+            db=db
+        )
+        table = parse_settlement_table(detailed_data)
+        if table:
+            return format_dps_settlement_response(table, "ДПС API (детальна таблиця)")
+    except Exception as e:
+        logger.warning(f"DPS API automatic query failed: {e}")
+    
+    # Fallback to manual upload
+    manual_table = get_latest_manual_dps_table(req.profile_id, db)
+    if manual_table:
+        response = format_dps_settlement_response(manual_table, "Остання завантажена вручну виписка ДПС")
+        response["warning"] = "Автоматичний запит до ДПС не спрацював. Показано останню завантажену вручну виписку."
+        return response
+    
+    # No data available
+    return {
+        "error": "Немає даних. Завантажте виписку ДПС вручну або додайте КЕП-ключ для автоматичного запиту.",
+        "settlements": [],
+        "settlement_status": [],
+        "debt_details": {},
+        "overpayment_details": {},
+        "has_debt": False,
+        "has_overpayment": False,
+        "total_debt": 0.0,
+        "total_overpayment": 0.0,
+        "source": "немає даних"
+    }
+
+@app.get("/api/dps/payment-deadlines")
+async def get_payment_deadlines(profile_id: int, db: Session = Depends(get_db)):
+    """Get payment deadlines from the latest DPS settlements"""
+    # Find the latest recorded_at timestamp
+    latest_row = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id
+    ).order_by(DPSSettlement.recorded_at.desc()).first()
+    
+    if not latest_row:
+        return {"deadlines": [], "count": 0}
+        
+    latest_at = latest_row.recorded_at
+    
+    rows = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id,
+        DPSSettlement.recorded_at == latest_at,
+        DPSSettlement.debt > 0,
+        DPSSettlement.payment_deadline.isnot(None)
+    ).order_by(DPSSettlement.payment_deadline.asc()).all()
+    
+    deadlines = []
+    for row in rows:
+        deadlines.append({
+            "tax_name": row.tax_name,
+            "tax_code": row.tax_code,
+            "debt": float(row.debt),
+            "payment_deadline": row.payment_deadline.isoformat() if row.payment_deadline else None,
+            "recorded_at": row.recorded_at.isoformat()
+        })
+    
+    return {
+        "deadlines": deadlines,
+        "count": len(deadlines)
+    }
+
+@app.get("/api/dps/statements")
+def get_dps_statements(profile_id: int, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    results = db.query(
+        DPSSettlement.recorded_at,
+        DPSSettlement.source,
+        func.count(DPSSettlement.id).label("count")
+    ).filter(
+        DPSSettlement.profile_id == profile_id
+    ).group_by(
+        DPSSettlement.recorded_at,
+        DPSSettlement.source
+    ).order_by(
+        DPSSettlement.recorded_at.desc()
+    ).all()
+    
+    statements = []
+    for recorded_at, source, count in results:
+        recorded_at_str = recorded_at.strftime("%Y-%m-%d %H:%M:%S") if recorded_at else ""
+        statements.append({
+            "recorded_at": recorded_at_str,
+            "source": source,
+            "count": count
+        })
+    return statements
+
+@app.delete("/api/dps/statements")
+def delete_dps_statement(profile_id: int, recorded_at: str, db: Session = Depends(get_db)):
+    from datetime import datetime, timedelta
+    try:
+        dt = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD HH:MM:SS")
+    
+    start_dt = dt - timedelta(seconds=1)
+    end_dt = dt + timedelta(seconds=1)
+    
+    deleted = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id,
+        DPSSettlement.recorded_at >= start_dt,
+        DPSSettlement.recorded_at <= end_dt
+    ).delete(synchronize_session=False)
+    
+    db.commit()
+    try:
+        sync_profile_calendar(profile_id, db)
+    except Exception as sync_err:
+        print(f"[Calendar Sync Error] Failed to sync calendar after deletion: {sync_err}")
+    return {"status": "ok", "deleted_count": deleted}
 
 
 

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useApp } from "@/context/AppContext";
 import { paymentsApi, api } from "@/lib/api";
 import { QRCodeSVG } from "qrcode.react";
+import axios from "axios";
 import { 
   CreditCard, 
   CheckCircle2, 
@@ -15,7 +16,8 @@ import {
   Wallet,
   Building,
   Info,
-  Download
+  Download,
+  Calendar
 } from "lucide-react";
 
 export default function TaxesPage() {
@@ -569,6 +571,14 @@ export default function TaxesPage() {
             
             {loading ? (
               <div className="p-8 text-center text-slate-400">Завантаження...</div>
+            ) : errorMsg ? (
+              <div className="p-12 text-center bg-rose-500/5 border border-rose-500/10 rounded-2xl">
+                <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+                <h4 className="text-lg font-bold text-slate-800 dark:text-slate-200">Помилка завантаження</h4>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  Не вдалося завантажити поточні податкові зобов'язання через помилку сервера.
+                </p>
+              </div>
             ) : liabilities.length === 0 ? (
               <div className="p-12 text-center bg-emerald-500/5 border border-emerald-500/10 rounded-2xl">
                 <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
@@ -593,13 +603,26 @@ export default function TaxesPage() {
                         }`}>
                           {item.status === "paid" ? "Сплачено" : "Очікує сплати"}
                         </span>
-                        <span className="text-xs text-slate-400 dark:text-slate-500">
-                          Період: {item.period}
-                        </span>
+                        {item.period && (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">
+                            Період: {item.period}
+                          </span>
+                        )}
+                        {item.due_date && (
+                          <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5" />
+                            Термін сплати: {new Date(item.due_date).toLocaleDateString("uk-UA")}
+                          </span>
+                        )}
                       </div>
                       <h4 className="font-bold text-slate-800 dark:text-slate-200 mt-2">
                         {getTaxTypeLabel(item.tax_type)}
                       </h4>
+                      {item.description && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                          {item.description}
+                        </p>
+                      )}
                       <p className="text-2xl font-semibold text-slate-900 dark:text-white mt-1">
                         {item.amount.toLocaleString("uk-UA", { minimumFractionDigits: 2 })} грн
                       </p>

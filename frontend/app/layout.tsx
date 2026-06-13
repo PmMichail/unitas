@@ -28,7 +28,8 @@ import {
   Shield,
   AlertCircle,
   Cpu,
-  Bot
+  Bot,
+  Inbox
 } from "lucide-react";
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
@@ -82,7 +83,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
           },
         ]
       : []),
-    { name: "Рахунки (Сформувати та відправити)", href: "/invoices", icon: FileText },
+    { name: "Відправити контрагенту", href: "/invoices", icon: FileText },
+    { name: "Вхідні документи", href: "/incoming", icon: Inbox },
     { name: "Пошта", href: "/settings/email", icon: Mail },
     { name: "КЕП (Підписи)", href: "/settings/certificates", icon: Shield },
     { name: "API ДПС", href: "/settings/tax-api", icon: Cpu },

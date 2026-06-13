@@ -4,6 +4,21 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.
 
 const client = axios.create({
   baseURL: API_BASE_URL,
+  headers: {
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+  },
+});
+
+// Log all requests for debugging
+client.interceptors.request.use((config) => {
+  console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`, config.data);
+  return config;
+});
+
+client.interceptors.response.use((response) => {
+  console.log(`[API Response] ${response.config.url}`, response.data);
+  return response;
 });
 
 // Helper to convert object to FormData for FastAPI Form(...) endpoints
@@ -89,6 +104,11 @@ export const api = {
       custom_iban_esv?: string;
       custom_iban_pdfo?: string;
       custom_iban_vz?: string;
+      calculation_start_date?: string;
+      starting_debt_edp?: number;
+      starting_debt_esv?: number;
+      starting_debt_vz?: number;
+      starting_debt_pdfo?: number;
     }
   ) => {
     const formData = toFormData(data);
@@ -446,6 +466,17 @@ export const api = {
     const formData = toFormData(data);
     const response = await client.post("/api/auth/register", formData);
     return response.data;
+  },
+  forgotPassword: async (email: string) => {
+    const formData = new FormData();
+    formData.append("email", email);
+    const response = await client.post("/api/auth/forgot-password", formData);
+    return response.data;
+  },
+  resetPassword: async (data: Record<string, any>) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/auth/reset-password", formData);
+    return response.data;
   }
 };
 
@@ -526,6 +557,76 @@ export const invoicesApi = {
     const response = await client.delete(`/api/invoices/${invoiceId}`);
     return response.data;
   },
+  uploadCustomDocument: async (
+    file: File,
+    profileId: number,
+    title: string,
+    number: string,
+    clientEmail: string,
+    amount: number,
+    documentType?: string
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("profile_id", String(profileId));
+    formData.append("title", title);
+    formData.append("number", number);
+    formData.append("client_email", clientEmail);
+    formData.append("amount", String(amount));
+    if (documentType) {
+      formData.append("document_type", documentType);
+    }
+    const response = await client.post("/api/documents/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" }
+    });
+    return response.data;
+  },
+  createTemplatedDocument: async (data: {
+    profile_id: number;
+    template_name: string;
+    client_name: string;
+    contract_number: string;
+    client_email: string;
+    amount: number;
+    content?: string;
+  }) => {
+    const response = await client.post("/api/documents/template", data);
+    return response.data;
+  },
+  getIncoming: async (profileId: number) => {
+    const response = await client.get(`/api/invoices/incoming/${profileId}`);
+    return response.data;
+  },
+  markIncomingViewed: async (invoiceId: number, profileId: number) => {
+    const response = await client.post(`/api/invoices/incoming/${invoiceId}/view`, null, {
+      params: { profile_id: profileId }
+    });
+    return response.data;
+  },
+  getProfileDocuments: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/documents`);
+    return response.data;
+  },
+  uploadProfileDocument: async (profileId: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await client.post(`/api/profiles/${profileId}/documents`, formData, {
+      headers: { "Content-Type": "multipart/form-data" }
+    });
+    return response.data;
+  },
+  deleteProfileDocument: async (profileId: number, docId: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/documents/${docId}`);
+    return response.data;
+  },
+  getProfileDocumentPdf: async (docId: number) => {
+    const response = await client.get(`/api/profiles/documents/${docId}/download`, { responseType: 'blob' });
+    return response.data;
+  },
+  sendProfileDocument: async (docId: number, data: { toEmail: string; subject?: string; message?: string }) => {
+    const response = await client.post(`/api/profiles/documents/${docId}/send`, data);
+    return response.data;
+  },
 };
 
 export const paymentsApi = {
@@ -570,6 +671,10 @@ export const certificatesApi = {
     const response = await client.get(`/api/certificates/${profileId}`);
     return response.data;
   },
+  delete: async (certId: number) => {
+    const response = await client.delete(`/api/certificates/${certId}`);
+    return response.data;
+  },
   signDocument: async (docId: number, docType: string, certificateId?: number, useDiia?: boolean) => {
     const response = await client.post(`/api/documents/${docId}/sign`, {
       doc_type: docType,
@@ -606,6 +711,41 @@ export const taxCabinetApi = {
   },
   checkReports: async (profileId: number) => {
     const response = await client.post("/api/tax/check-reports", { profile_id: profileId });
+    return response.data;
+  },
+  uploadDpsStatement: async (profileId: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("profile_id", String(profileId));
+    const response = await client.post("/api/dps/upload", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+  recalculateDpsDebt: async (profileId: number) => {
+    const response = await client.post(`/api/dps/recalculate?profile_id=${profileId}`);
+    return response.data;
+  },
+  fetchDpsData: async (profileId: number) => {
+    const response = await client.post("/api/dps/fetch", { profile_id: profileId });
+    return response.data;
+  },
+  fetchRealDpsData: async (profileId: number) => {
+    const response = await client.post("/api/dps/fetch-real", { profile_id: profileId });
+    return response.data;
+  },
+  fetchDetailedDpsData: async (profileId: number) => {
+    const response = await client.post("/api/dps/fetch-detailed", { profile_id: profileId, _t: Date.now() });
+    return response.data;
+  },
+  getDpsStatements: async (profileId: number) => {
+    const response = await client.get(`/api/dps/statements?profile_id=${profileId}`);
+    return response.data;
+  },
+  deleteDpsStatement: async (profileId: number, recordedAt: string) => {
+    const response = await client.delete(`/api/dps/statements?profile_id=${profileId}&recorded_at=${encodeURIComponent(recordedAt)}`);
     return response.data;
   }
 };

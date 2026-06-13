@@ -1,10 +1,11 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
-import { LogIn, KeyRound, Sparkles, AlertCircle, ShieldCheck, ChevronLeft, Mail, UserPlus, Building2, Phone, Users, Check } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { LogIn, KeyRound, Sparkles, AlertCircle, ShieldCheck, ChevronLeft, Mail, UserPlus, Building2, Phone, Users, Check, Loader2 } from "lucide-react";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const { setTelegramId } = useApp();
   const [loginMode, setLoginMode] = useState<"email" | "telegram">("email");
   const [step, setStep] = useState<"id" | "code">("id");
@@ -16,6 +17,13 @@ export default function LoginPage() {
   const [codeValue, setCodeValue] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  // Password Recovery States
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotStep, setForgotStep] = useState<"request" | "reset">("request");
+  const [resetCode, setResetCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   // Registration States
   const [isRegister, setIsRegister] = useState(false);
@@ -29,6 +37,16 @@ export default function LoginPage() {
   const [regRate, setRegRate] = useState<number>(5);
   const [regHasEmployees, setRegHasEmployees] = useState(false);
   const [regIsVatPayer, setRegIsVatPayer] = useState(false);
+
+  const searchParams = useSearchParams();
+  const refParam = searchParams.get("ref") || "";
+  const registerParam = searchParams.get("register") === "true";
+
+  useEffect(() => {
+    if (registerParam) {
+      setIsRegister(true);
+    }
+  }, [registerParam]);
 
   const handleTelegramLogin = async (id: string) => {
     const trimmedId = id.trim();
@@ -136,6 +154,75 @@ export default function LoginPage() {
     }
   };
 
+  const handleForgotPasswordRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedEmail = emailValue.trim();
+    if (!trimmedEmail) {
+      setError("Будь ласка, введіть ваш Email.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      await api.forgotPassword(trimmedEmail);
+      alert("Код відновлення надіслано на вашу пошту!");
+      setForgotStep("reset");
+    } catch (err: any) {
+      const errMsg = err.response?.data?.detail || "Не вдалося надіслати код. Перевірте правильність Email.";
+      setError(errMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedEmail = emailValue.trim();
+    const trimmedCode = resetCode.trim();
+    const trimmedNewPassword = newPassword.trim();
+    const trimmedConfirmPassword = confirmPassword.trim();
+
+    if (!trimmedEmail || !trimmedCode || !trimmedNewPassword || !trimmedConfirmPassword) {
+      setError("Будь ласка, заповніть всі поля.");
+      return;
+    }
+
+    if (trimmedNewPassword !== trimmedConfirmPassword) {
+      setError("Паролі не збігаються.");
+      return;
+    }
+
+    if (trimmedNewPassword.length < 6) {
+      setError("Пароль має містити не менше 6 символів.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      await api.resetPassword({
+        email: trimmedEmail,
+        code: trimmedCode,
+        new_password: trimmedNewPassword
+      });
+      alert("Пароль успішно змінено! Тепер ви можете увійти з новим паролем.");
+      setIsForgotPassword(false);
+      setForgotStep("request");
+      setPasswordValue(trimmedNewPassword);
+      setResetCode("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      const errMsg = err.response?.data?.detail || "Не вдалося змінити пароль. Перевірте код підтвердження.";
+      setError(errMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regEmail.trim() || !regPassword.trim() || !regCompanyName.trim() || !regTaxId.trim()) {
@@ -158,6 +245,7 @@ export default function LoginPage() {
         rate: regTaxSystem.includes("ep") ? (regTaxSystem.startsWith("fop") && (regGroup === 1 || regGroup === 2) ? 0 : regRate) : undefined,
         has_employees: regHasEmployees,
         is_vat_payer: regIsVatPayer,
+        ref: refParam || undefined,
       });
 
       alert("Реєстрація пройшла успішно! Тепер ви можете увійти зі своїм Email.");
@@ -191,10 +279,10 @@ export default function LoginPage() {
           </div>
         </div>
         <h2 className="mt-6 text-center text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
-          {isRegister ? "Реєстрація в UniTax" : "Вхід до UniTax"}
+          {isRegister ? "Реєстрація в UniTax" : isForgotPassword ? "Відновлення пароля" : "Вхід до UniTax"}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-400">
-          {isRegister ? "Створіть кабінет та автоматизуйте податки" : "Ваш автоматизований податковий та інвойсинг асистент"}
+          {isRegister ? "Створіть кабінет та автоматизуйте податки" : isForgotPassword ? "Встановіть новий пароль для вашого акаунту" : "Ваш автоматизований податковий та інвойсинг асистент"}
         </p>
       </div>
 
@@ -424,6 +512,215 @@ export default function LoginPage() {
                 </button>
               </div>
             </form>
+          ) : isForgotPassword ? (
+            forgotStep === "request" ? (
+              <form onSubmit={handleForgotPasswordRequest} className="space-y-6">
+                <div>
+                  <label htmlFor="recovery_email" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Email для відновлення
+                  </label>
+                  <div className="relative rounded-2xl shadow-sm">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <Mail className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                    </div>
+                    <input
+                      type="email"
+                      name="recovery_email"
+                      id="recovery_email"
+                      value={emailValue}
+                      onChange={(e) => {
+                        setEmailValue(e.target.value);
+                        if (error) setError("");
+                      }}
+                      className="block w-full pl-11 pr-4 py-3 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 placeholder-slate-600 text-sm transition-all"
+                      placeholder="user@example.com"
+                      disabled={isLoading}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="rounded-2xl bg-rose-500/10 border border-rose-500/20 p-4">
+                    <div className="flex items-center space-x-3">
+                      <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" />
+                      <p className="text-xs font-semibold text-rose-200">{error}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full flex justify-center items-center py-3.5 px-4 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-sm font-bold rounded-2xl shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all gap-2 disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <Mail className="h-4 w-4" />
+                        <span>Надіслати код</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsForgotPassword(false);
+                      setError("");
+                    }}
+                    className="w-full flex justify-center items-center py-3.5 px-4 bg-slate-950/60 hover:bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200 active:scale-[0.98] text-xs font-bold rounded-2xl transition-all gap-2"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    <span>Назад до входу</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleResetPassword} className="space-y-4">
+                <div>
+                  <label htmlFor="reset_email" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Email
+                  </label>
+                  <div className="relative rounded-2xl shadow-sm">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <Mail className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                    </div>
+                    <input
+                      type="email"
+                      name="reset_email"
+                      id="reset_email"
+                      value={emailValue}
+                      onChange={(e) => {
+                        setEmailValue(e.target.value);
+                        if (error) setError("");
+                      }}
+                      className="block w-full pl-11 pr-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 text-sm"
+                      placeholder="user@example.com"
+                      disabled={isLoading}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="reset_code" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Код підтвердження
+                  </label>
+                  <div className="relative rounded-2xl shadow-sm">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <ShieldCheck className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                    </div>
+                    <input
+                      type="text"
+                      name="reset_code"
+                      id="reset_code"
+                      value={resetCode}
+                      onChange={(e) => {
+                        setResetCode(e.target.value);
+                        if (error) setError("");
+                      }}
+                      className="block w-full pl-11 pr-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 text-sm"
+                      placeholder="6-значний код"
+                      maxLength={6}
+                      disabled={isLoading}
+                      required
+                    />
+                  </div>
+                  <div className="text-[10px] text-slate-500 italic mt-1">
+                    Для тестування підійде код: <span className="font-bold text-indigo-400">123456</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="new_password" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Новий пароль
+                  </label>
+                  <div className="relative rounded-2xl shadow-sm">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <KeyRound className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                    </div>
+                    <input
+                      type="password"
+                      name="new_password"
+                      id="new_password"
+                      value={newPassword}
+                      onChange={(e) => {
+                        setNewPassword(e.target.value);
+                        if (error) setError("");
+                      }}
+                      className="block w-full pl-11 pr-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 text-sm"
+                      placeholder="Не менше 6 символів"
+                      disabled={isLoading}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="confirm_password" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Підтвердіть новий пароль
+                  </label>
+                  <div className="relative rounded-2xl shadow-sm">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <KeyRound className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                    </div>
+                    <input
+                      type="password"
+                      name="confirm_password"
+                      id="confirm_password"
+                      value={confirmPassword}
+                      onChange={(e) => {
+                        setConfirmPassword(e.target.value);
+                        if (error) setError("");
+                      }}
+                      className="block w-full pl-11 pr-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 text-sm"
+                      placeholder="••••••••"
+                      disabled={isLoading}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="rounded-2xl bg-rose-500/10 border border-rose-500/20 p-3">
+                    <p className="text-xs font-semibold text-rose-200">{error}</p>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full flex justify-center items-center py-3.5 px-4 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-sm font-bold rounded-2xl shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all gap-2 disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        <span>Змінити пароль</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsForgotPassword(false);
+                      setForgotStep("request");
+                      setError("");
+                    }}
+                    className="w-full flex justify-center items-center py-3.5 px-4 bg-slate-950/60 hover:bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200 active:scale-[0.98] text-xs font-bold rounded-2xl transition-all gap-2"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    <span>Повернутися до входу</span>
+                  </button>
+                </div>
+              </form>
+            )
           ) : (
             <>
               {step === "id" && (
@@ -579,7 +876,19 @@ export default function LoginPage() {
                         className="text-indigo-400 hover:text-indigo-300 font-semibold underline"
                         disabled={isLoading}
                       >
-                        Отримати тимчасовий код у Telegram
+                        Тимчасовий код у Telegram
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setForgotStep("request");
+                          setError("");
+                        }}
+                        className="text-indigo-400 hover:text-indigo-300 font-semibold underline"
+                        disabled={isLoading}
+                      >
+                        Забули пароль?
                       </button>
                     </div>
 
@@ -726,5 +1035,17 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+      </div>
+    }>
+      <LoginPageContent />
+    </Suspense>
   );
 }

@@ -44,8 +44,44 @@ class TaxCalculator:
         if config_rates:
             self.rates.update(config_rates)
     
-    def get_rate(self, key: str) -> float:
-        """Отримати ставку за ключем"""
+    def get_rate(self, key: str, year: Optional[int] = None) -> float:
+        """Отримати ставку за ключем (з урахуванням історичних значений для минулих років)"""
+        if year is not None:
+            # Historical Ukrainian tax rates
+            historical = {
+                2025: {
+                    "min_salary": 8000.0,
+                    "esv_fop_monthly": 1760.0,  # 22% of 8000
+                    "military_tax_fop_rate": 1.0,
+                    "military_tax_employee_rate": 5.0,
+                    "pit_employee_rate": 18.0,
+                    "esv_employee_rate": 22.0,
+                    "unified_tax_rate_group_3": 5.0,
+                    "profit_tax_rate": 18.0,
+                },
+                2024: {
+                    "min_salary": 8000.0,
+                    "esv_fop_monthly": 1760.0,
+                    "military_tax_fop_rate": 1.0,
+                    "military_tax_employee_rate": 1.5,
+                    "pit_employee_rate": 18.0,
+                    "esv_employee_rate": 22.0,
+                    "unified_tax_rate_group_3": 5.0,
+                    "profit_tax_rate": 18.0,
+                },
+                2023: {
+                    "min_salary": 6700.0,
+                    "esv_fop_monthly": 1474.0,  # 22% of 6700
+                    "military_tax_fop_rate": 0.0,
+                    "military_tax_employee_rate": 1.5,
+                    "pit_employee_rate": 18.0,
+                    "esv_employee_rate": 22.0,
+                    "unified_tax_rate_group_3": 5.0,
+                    "profit_tax_rate": 18.0,
+                }
+            }
+            if year in historical and key in historical[year]:
+                return historical[year][key]
         return self.rates.get(key, 0.0)
     
     def calculate_military_tax_fop(self, taxable_income: float, group: int, num_months: int = 1) -> float:
@@ -285,11 +321,21 @@ class TaxCalculator:
         if not profile:
             return {}
             
-        # Get all parsed payments (all time)
-        payments = db.query(ParsedPayment).filter(
+        # Get all parsed payments (filtered by calculation_start_date if configured)
+        query_payments = db.query(ParsedPayment).filter(
             (ParsedPayment.profile_id == profile_id) |
             (ParsedPayment.statement.has(BankStatement.profile_id == profile_id))
-        ).all()
+        )
+        start_date_filter = getattr(profile, "calculation_start_date", None)
+        if start_date_filter and isinstance(start_date_filter, str):
+            try:
+                from datetime import datetime
+                start_date_filter = datetime.strptime(start_date_filter.split("T")[0], "%Y-%m-%d").date()
+            except Exception:
+                pass
+        if start_date_filter:
+            query_payments = query_payments.filter(ParsedPayment.date >= start_date_filter)
+        payments = query_payments.all()
         
         # Prepare transactions for calculate_profile_taxes
         transactions = []
@@ -340,24 +386,58 @@ class TaxCalculator:
         )
         
         # Get all paid taxes using the helper
-        tax_paid_dict = get_paid_taxes_by_type(db, profile_id, start_dt=None, end_dt=None)
+        tax_paid_dict = get_paid_taxes_by_type(db, profile_id, start_dt=start_date_filter, end_dt=None)
         
-        # Mapping to required structure
-        accrued_edp = taxes["tax_due"]
+        # Mapping to required structure (with starting debts added)
+        accrued_edp = taxes["tax_due"] + float(getattr(profile, "starting_debt_edp", 0.0) or 0.0)
         paid_edp = tax_paid_dict.get("unified_tax", 0.0)
         debt_edp = max(0.0, accrued_edp - paid_edp)
         
-        accrued_esv = taxes["esv_due"] + taxes["employee_esv_due"]
+        accrued_esv = taxes["esv_due"] + taxes["employee_esv_due"] + float(getattr(profile, "starting_debt_esv", 0.0) or 0.0)
         paid_esv = tax_paid_dict.get("esv", 0.0)
         debt_esv = max(0.0, accrued_esv - paid_esv)
         
-        accrued_pdfo = taxes["employee_pit_due"]
+        accrued_pdfo = taxes["employee_pit_due"] + float(getattr(profile, "starting_debt_pdfo", 0.0) or 0.0)
         paid_pdfo = tax_paid_dict.get("pit", 0.0)
         debt_pdfo = max(0.0, accrued_pdfo - paid_pdfo)
         
-        accrued_mil = taxes["military_tax_due"] + taxes["employee_mil_due"]
+        accrued_mil = taxes["military_tax_due"] + taxes["employee_mil_due"] + float(getattr(profile, "starting_debt_vz", 0.0) or 0.0)
         paid_mil = tax_paid_dict.get("military_tax", 0.0)
         debt_mil = max(0.0, accrued_mil - paid_mil)
+
+        # Override with official DPSSettlement if it exists
+        from api.main import DPSSettlement
+        try:
+            latest_row = db.query(DPSSettlement).filter(DPSSettlement.profile_id == profile_id).order_by(DPSSettlement.recorded_at.desc()).first()
+            if latest_row:
+                latest_at = latest_row.recorded_at
+                settlements = db.query(DPSSettlement).filter(
+                    DPSSettlement.profile_id == profile_id,
+                    DPSSettlement.recorded_at == latest_at
+                ).all()
+                # Fetch new payments since latest_at to reconcile the cabinet debt
+                new_payments = get_new_payments_after(db, profile_id, latest_at)
+                
+                for s in settlements:
+                    name_lower = s.tax_name.lower()
+                    code_str = s.tax_code or ""
+                    debt_val = float(s.debt or 0.0)
+                    overpaid_val = float(s.overpaid or 0.0)
+                    
+                    if "єдиний податок" in name_lower or "єп" in name_lower or "18050400" in code_str or "18050400" in name_lower:
+                        debt_edp = max(0.0, debt_val - new_payments.get("unified_tax", 0.0))
+                        paid_edp = max(0.0, accrued_edp - debt_edp + overpaid_val)
+                    elif "соціальний" in name_lower or "єсв" in name_lower or "71040000" in code_str or "71010000" in code_str or "71040000" in name_lower or "71010000" in name_lower:
+                        debt_esv = max(0.0, debt_val - new_payments.get("esv", 0.0))
+                        paid_esv = max(0.0, accrued_esv - debt_esv + overpaid_val)
+                    elif "військовий" in name_lower or "вз" in name_lower or "11011700" in code_str or "11011000" in code_str or "11011001" in code_str or "11011700" in name_lower or "11011000" in name_lower or "11011001" in name_lower:
+                        debt_mil = max(0.0, debt_val - new_payments.get("military_tax", 0.0))
+                        paid_mil = max(0.0, accrued_mil - debt_mil + overpaid_val)
+                    elif "пдфо" in name_lower or "доходи фізичних" in name_lower or "11010100" in code_str or "11010500" in code_str or "11010100" in name_lower or "11010500" in name_lower:
+                        debt_pdfo = max(0.0, debt_val - new_payments.get("pit", 0.0))
+                        paid_pdfo = max(0.0, accrued_pdfo - debt_pdfo + overpaid_val)
+        except Exception as e:
+            print(f"[TaxCalculator] Failed to apply DPS settlement override: {e}")
         
         total_debt = round(debt_edp + debt_esv + debt_pdfo + debt_mil, 2)
         
@@ -419,34 +499,34 @@ class TaxCalculator:
                 if local_is_fop(profile) and profile.group == 1:
                     m_tax_due = 332.80
                 elif local_is_fop(profile) and profile.group == 2:
-                    m_tax_due = self.get_rate("min_salary") * 0.20
+                    m_tax_due = self.get_rate("min_salary", year=y) * 0.20
                 else:
-                    m_tax_due = m_taxable_income * ((profile.rate or self.get_rate("unified_tax_rate_group_3")) / 100.0)
+                    m_tax_due = m_taxable_income * ((profile.rate or self.get_rate("unified_tax_rate_group_3", year=y)) / 100.0)
             elif local_is_general(profile.tax_system):
                 m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
                 m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
-                m_tax_due = m_net_profit * (self.get_rate("pit_employee_rate") / 100.0)
+                m_tax_due = m_net_profit * (self.get_rate("pit_employee_rate", year=y) / 100.0)
                 
             # Military tax due
             m_mil_due = 0.0
             if local_is_fop(profile):
                 if local_is_simplified(profile.tax_system):
                     if profile.group in (1, 2):
-                        m_mil_due = self.get_rate("min_salary") * 0.10
+                        m_mil_due = self.get_rate("min_salary", year=y) * 0.10
                     else:
-                        m_mil_due = m_taxable_income * (self.get_rate("military_tax_fop_rate") / 100.0)
+                        m_mil_due = m_taxable_income * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
                 elif local_is_general(profile.tax_system):
                     m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
                     m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
-                    m_mil_due = m_net_profit * (self.get_rate("military_tax_fop_rate") / 100.0)
+                    m_mil_due = m_net_profit * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
             elif local_is_simplified(profile.tax_system) and not local_is_fop(profile):
                 # ТОВ на спрощеній системі - 1% від доходу
-                m_mil_due = m_taxable_income * (self.get_rate("military_tax_fop_rate") / 100.0)
+                m_mil_due = m_taxable_income * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
                     
             # ESV due
             m_esv_due = 0.0
             if local_is_fop(profile) and not getattr(profile, 'esv_paid_by_employer', False):
-                m_esv_due = self.get_rate("esv_fop_monthly")
+                m_esv_due = self.get_rate("esv_fop_monthly", year=y)
                 
             # Employee taxes
             m_emp_esv = 0.0
@@ -457,10 +537,10 @@ class TaxCalculator:
                     is_main = getattr(emp, 'is_main_job', True)
                     if is_main is None:
                         is_main = True
-                    esv_base = max(emp.salary, self.get_rate("min_salary")) if is_main else emp.salary
-                    m_emp_esv += esv_base * (self.get_rate("esv_employee_rate") / 100.0)
-                    m_emp_pit += emp.salary * (self.get_rate("pit_employee_rate") / 100.0)
-                    m_emp_mil += emp.salary * (self.get_rate("military_tax_employee_rate") / 100.0)
+                    esv_base = max(emp.salary, self.get_rate("min_salary", year=y)) if is_main else emp.salary
+                    m_emp_esv += esv_base * (self.get_rate("esv_employee_rate", year=y) / 100.0)
+                    m_emp_pit += emp.salary * (self.get_rate("pit_employee_rate", year=y) / 100.0)
+                    m_emp_mil += emp.salary * (self.get_rate("military_tax_employee_rate", year=y) / 100.0)
                     
             period_key = f"{y}-{m:02d}"
             by_month[period_key] = {
@@ -503,9 +583,45 @@ class TaxCalculator:
             "vz": "Військовий збір"
         }
         
+        # Look up the latest statement's payment deadlines to attach to standard liabilities
+        from api.main import DPSSettlement
+        deadlines_map = {}
+        try:
+            latest_row = db.query(DPSSettlement).filter(DPSSettlement.profile_id == profile_id).order_by(DPSSettlement.recorded_at.desc()).first()
+            if latest_row:
+                latest_at = latest_row.recorded_at
+                settlements = db.query(DPSSettlement).filter(
+                    DPSSettlement.profile_id == profile_id,
+                    DPSSettlement.recorded_at == latest_at
+                ).all()
+                for s in settlements:
+                    if s.payment_deadline:
+                        name_lower = s.tax_name.lower()
+                        code_str = s.tax_code or ""
+                        
+                        target_type = None
+                        if "єдиний податок" in name_lower or "єп" in name_lower or "18050400" in code_str or "18050400" in name_lower:
+                            target_type = "edp"
+                        elif "соціальний" in name_lower or "єсв" in name_lower or "71040000" in code_str or "71010000" in code_str or "71040000" in name_lower or "71010000" in name_lower:
+                            target_type = "esv"
+                        elif "військовий" in name_lower or "вз" in name_lower or "11011700" in code_str or "11011000" in code_str or "11011001" in code_str or "11011700" in name_lower or "11011000" in name_lower or "11011001" in name_lower:
+                            target_type = "vz"
+                        elif "пдфо" in name_lower or "доходи фізичних" in name_lower or "11010100" in code_str or "11010500" in code_str or "11010100" in name_lower or "11010500" in name_lower:
+                            target_type = "pdfo"
+                            
+                        if target_type:
+                            due_str = s.payment_deadline.strftime("%Y-%m-%d") if hasattr(s.payment_deadline, "strftime") else str(s.payment_deadline).split("T")[0]
+                            desc_date = s.payment_deadline.strftime("%d.%m.%Y") if hasattr(s.payment_deadline, "strftime") else str(s.payment_deadline).split("T")[0]
+                            deadlines_map[target_type] = {
+                                "due_date": due_str,
+                                "description": f"Податковий борг з кабінету ДПС. Оплатити до {desc_date}"
+                            }
+        except Exception as e:
+            print(f"[TaxCalculator] Failed to map deadlines in get_liabilities: {e}")
+        
         # EDP (Single Tax)
         if summary["edp"]["debt"] > 0:
-            liabilities.append({
+            item = {
                 "id": 1,
                 "profile_id": profile_id,
                 "tax_type": "edp",
@@ -513,11 +629,14 @@ class TaxCalculator:
                 "amount": summary["edp"]["debt"],
                 "period": "Всього",
                 "status": "pending"
-            })
+            }
+            if "edp" in deadlines_map:
+                item.update(deadlines_map["edp"])
+            liabilities.append(item)
             
         # ESV
         if summary["esv"]["debt"] > 0:
-            liabilities.append({
+            item = {
                 "id": 2,
                 "profile_id": profile_id,
                 "tax_type": "esv",
@@ -525,11 +644,14 @@ class TaxCalculator:
                 "amount": summary["esv"]["debt"],
                 "period": "Всього",
                 "status": "pending"
-            })
+            }
+            if "esv" in deadlines_map:
+                item.update(deadlines_map["esv"])
+            liabilities.append(item)
             
         # Military
         if summary["military"]["debt"] > 0:
-            liabilities.append({
+            item = {
                 "id": 3,
                 "profile_id": profile_id,
                 "tax_type": "vz",
@@ -537,11 +659,14 @@ class TaxCalculator:
                 "amount": summary["military"]["debt"],
                 "period": "Всього",
                 "status": "pending"
-            })
+            }
+            if "vz" in deadlines_map:
+                item.update(deadlines_map["vz"])
+            liabilities.append(item)
             
         # PDFO
         if summary["pdfo"]["debt"] > 0:
-            liabilities.append({
+            item = {
                 "id": 4,
                 "profile_id": profile_id,
                 "tax_type": "pdfo",
@@ -549,11 +674,100 @@ class TaxCalculator:
                 "amount": summary["pdfo"]["debt"],
                 "period": "Всього",
                 "status": "pending"
-            })
+            }
+            if "pdfo" in deadlines_map:
+                item.update(deadlines_map["pdfo"])
+            liabilities.append(item)
             
         return liabilities
 
 
 # Глобальний екземпляр калькулятора
 tax_calculator = TaxCalculator()
+
+
+def get_new_payments_after(db, profile_id: int, latest_at) -> dict:
+    """
+    Повертає суму платежів з моменту останнього оновлення кабінету ДПС
+    для коригування офіційного боргу у реальному часі.
+    """
+    from datetime import date, timedelta
+    from api.main import Payment, ParsedPayment, map_tax_type
+    
+    # 1. Завантажуємо банківські виписки після дати кабінету
+    latest_date = latest_at.date() if hasattr(latest_at, 'date') else latest_at
+    query_parsed = db.query(ParsedPayment).filter(
+        ParsedPayment.profile_id == profile_id,
+        (ParsedPayment.type == "tax_payment") | (ParsedPayment.tax_type != None),
+        ParsedPayment.date >= latest_date
+    )
+    parsed_payments = query_parsed.all()
+    
+    # 2. Завантажуємо ручні підтвердження оплат
+    query_manual = db.query(Payment).filter(
+        Payment.profile_id == profile_id,
+        Payment.status == "paid",
+        Payment.paid_at >= latest_at
+    )
+    manual_payments = query_manual.all()
+    
+    merged = []
+    seen_keys = set()
+    
+    for p in parsed_payments:
+        if p.tax_type:
+            db_tax_name = map_tax_type(p.tax_type)
+        else:
+            purpose_lower = (p.purpose or "").lower()
+            if "єдиний" in purpose_lower or "едп" in purpose_lower or "єп" in purpose_lower:
+                db_tax_name = "unified_tax"
+            elif "єсв" in purpose_lower or "есв" in purpose_lower:
+                db_tax_name = "esv"
+            elif "військовий" in purpose_lower or "вз" in purpose_lower:
+                db_tax_name = "military_tax"
+            elif "пдфо" in purpose_lower or "податок на доходи" in purpose_lower:
+                db_tax_name = "pit"
+            else:
+                db_tax_name = "unified_tax"
+                
+        p_date = p.date
+        p_amount = round(float(p.amount), 2)
+        key = (p_date, p_amount, db_tax_name)
+        seen_keys.add(key)
+        merged.append({
+            "tax_name": db_tax_name,
+            "amount": p_amount
+        })
+        
+    for p in manual_payments:
+        db_tax_name = map_tax_type(p.tax_type) if p.tax_type else "unified_tax"
+        p_date = p.paid_at.date() if p.paid_at else None
+        p_amount = round(float(p.amount), 2)
+        
+        if p_date:
+            key = (p_date, p_amount, db_tax_name)
+            if key in seen_keys:
+                continue
+                
+            duplicate_found = False
+            for offset in [-1, 1]:
+                check_key = (p_date + timedelta(days=offset), p_amount, db_tax_name)
+                if check_key in seen_keys:
+                    duplicate_found = True
+                    break
+            if duplicate_found:
+                continue
+                
+            seen_keys.add(key)
+            merged.append({
+                "tax_name": db_tax_name,
+                "amount": p_amount
+            })
+            
+    sums = {"unified_tax": 0.0, "esv": 0.0, "military_tax": 0.0, "pit": 0.0}
+    for item in merged:
+        t = item["tax_name"]
+        if t in sums:
+            sums[t] += item["amount"]
+    return sums
 

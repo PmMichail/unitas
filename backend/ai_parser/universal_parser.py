@@ -35,6 +35,58 @@ class UniversalParser:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Файл не знайдено: {file_path}")
 
+        # Check if the file contains tax cabinet keywords
+        is_tax_cabinet = False
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            text_preview = ""
+            if ext == ".pdf":
+                with open(file_path, "rb") as f:
+                    reader = pypdf.PdfReader(f)
+                    for page in reader.pages[:2]: # check first 2 pages
+                        text_preview += (page.extract_text() or "") + "\n"
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    text_preview = f.read(10000)
+            
+            text_preview = self._normalize_ukrainian_i(text_preview)
+            
+            if any(keyword in text_preview for keyword in ["Назва платежу", "Податковий борг", "сальдо розрахунків", "Код платежу", "Надміру сплачені"]):
+                is_tax_cabinet = True
+        except Exception:
+            pass
+
+        if is_tax_cabinet:
+            self.bank_name = "ДПС Кабінет"
+            text_full = ""
+            try:
+                if ext == ".pdf":
+                    with open(file_path, "rb") as f:
+                        reader = pypdf.PdfReader(f)
+                        for page in reader.pages:
+                            text_full += (page.extract_text() or "") + "\n"
+                else:
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text_full = f.read()
+                
+                text_full = self._normalize_ukrainian_i(text_full)
+                self.parsed_tax_cabinet_settlements = self._parse_tax_cabinet_extract(text_full)
+                if self.parsed_tax_cabinet_settlements:
+                    self.period_start = datetime.now().date()
+                    self.period_end = self.period_start
+                    return [{
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "amount": 0.0,
+                        "direction": "in",
+                        "purpose": "Імпорт виписки ДПС",
+                        "contragent": "ДПС",
+                        "type": "tax_cabinet_import",
+                        "taxable": False,
+                        "bank_name": "ДПС Кабінет"
+                    }]
+            except Exception as e:
+                print(f"[Parser Error] Failed to parse tax cabinet extract: {e}")
+
         ext = os.path.splitext(file_path)[1].lower()
         
         if ext == ".csv":
@@ -593,6 +645,93 @@ class UniversalParser:
                 unique_txs.append(tx)
         
         return unique_txs
+
+    def _parse_tax_cabinet_extract(self, text: str) -> list:
+        """
+        Розпарсити витяг/виписку з кабінету платника податків про стан взаєморозрахунків з бюджетом.
+        """
+        results = []
+        lines = text.split("\n")
+        
+        # Mappings of tax codes to internal tax types
+        code_mapping = {
+            "18050400": ("unified_tax", "Єдиний податок з фізичних осіб"),
+            "11011700": ("military_tax", "Військовий збір"),
+            "11011000": ("military_tax", "Військовий збір"),
+            "11011001": ("military_tax", "Військовий збір"),
+            "71040000": ("esv", "Єдиний соціальний внесок (ЄСВ)"),
+            "71010000": ("esv", "Єдиний соціальний внесок (ЄСВ)"),
+            "11010100": ("pit", "ПДФО (Податок на доходи фізичних осіб)"),
+            "11010500": ("pit", "ПДФО (Податок на доходи фізичних осіб)"),
+        }
+        
+        for line in lines:
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+                
+            # Find if any tax code matches
+            matched_code = None
+            for code in code_mapping:
+                if code in line_clean:
+                    matched_code = code
+                    break
+                    
+            if not matched_code:
+                continue
+                
+            tax_type, tax_name = code_mapping[matched_code]
+            
+            # Find numbers in the line that come after the tax code
+            parts = line_clean.split(matched_code)
+            if len(parts) < 2:
+                continue
+            right_side = parts[1]
+            
+            # Remove territory code if it exists (e.g. UA12020010000033698)
+            right_side = re.sub(r"UA\d{15,20}", "", right_side, flags=re.IGNORECASE)
+            
+            # Find all numbers like "0,00", "1 729,40", "5 707,02", etc.
+            numbers = re.findall(r"(-?\d+(?:\s+\d+)*(?:[.,]\d+)?)", right_side)
+            
+            # Filter and convert to float
+            float_numbers = []
+            for num_str in numbers:
+                try:
+                    # Clean spaces and convert comma to dot
+                    clean_num = num_str.replace(" ", "").replace(",", ".")
+                    float_numbers.append(float(clean_num))
+                except ValueError:
+                    continue
+            
+            # We expect at least three numbers: [overpayment, underpayment, penalty]
+            if len(float_numbers) >= 3:
+                overpayment = float_numbers[0]
+                underpayment = float_numbers[1]
+                penalty = float_numbers[2]
+            elif len(float_numbers) == 2:
+                overpayment = float_numbers[0]
+                underpayment = float_numbers[1]
+                penalty = 0.0
+            elif len(float_numbers) == 1:
+                overpayment = float_numbers[0] if float_numbers[0] > 0 else 0.0
+                underpayment = abs(float_numbers[0]) if float_numbers[0] < 0 else 0.0
+                penalty = 0.0
+            else:
+                overpayment = 0.0
+                underpayment = 0.0
+                penalty = 0.0
+                
+            results.append({
+                "tax_type": tax_type,
+                "tax_name": tax_name,
+                "tax_code": matched_code,
+                "overpayment": overpayment,
+                "underpayment": underpayment,
+                "penalty": penalty
+            })
+            
+        return results
 
     def _extract_details_from_lines(self, tx_lines):
         purpose_parts = []

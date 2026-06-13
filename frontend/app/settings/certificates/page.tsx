@@ -15,7 +15,8 @@ import {
   User,
   Plus,
   RefreshCw,
-  Building
+  Building,
+  Trash2
 } from "lucide-react";
 
 export default function CertificatesPage() {
@@ -89,6 +90,23 @@ export default function CertificatesPage() {
       setErrorMsg(err.response?.data?.detail || "Помилка завантаження. Перевірте правильність паролю та файлу.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDelete = async (certId: number) => {
+    if (!window.confirm("Ви впевнені, що хочете видалити цей сертифікат КЕП?")) return;
+    setLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      await certificatesApi.delete(certId);
+      setSuccessMsg("Сертифікат КЕП успішно видалено!");
+      setTimeout(() => setSuccessMsg(""), 4000);
+      fetchCertificates();
+    } catch (err: any) {
+      console.error("Delete failed:", err);
+      setErrorMsg("Не вдалося видалити сертифікат.");
+      setLoading(false);
     }
   };
 
@@ -232,9 +250,18 @@ export default function CertificatesPage() {
                         <span className="px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                           АКТИВНИЙ КЕП
                         </span>
-                        <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
-                          SN: {cert.cert_serial.slice(0, 16)}...
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                            SN: {cert.cert_serial.slice(0, 16)}...
+                          </span>
+                          <button
+                            onClick={() => handleDelete(cert.id)}
+                            className="p-1 rounded hover:bg-rose-500/10 text-rose-400 transition-colors"
+                            title="Видалити КЕП"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                       
                       <h4 className="font-bold text-slate-800 dark:text-slate-200 mt-3 flex items-center gap-1.5">

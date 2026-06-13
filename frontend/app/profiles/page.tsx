@@ -508,6 +508,11 @@ export default function Profiles() {
   const [formBankName, setFormBankName] = useState("");
   const [formMfo, setFormMfo] = useState("");
   const [formIban, setFormIban] = useState("");
+  const [formCalculationStartDate, setFormCalculationStartDate] = useState("");
+  const [formStartingDebtEdp, setFormStartingDebtEdp] = useState("");
+  const [formStartingDebtEsv, setFormStartingDebtEsv] = useState("");
+  const [formStartingDebtVz, setFormStartingDebtVz] = useState("");
+  const [formStartingDebtPdfo, setFormStartingDebtPdfo] = useState("");
 
   // Open modal for creation
   const handleOpenCreate = () => {
@@ -528,6 +533,11 @@ export default function Profiles() {
     setFormBankName("");
     setFormMfo("");
     setFormIban("");
+    setFormCalculationStartDate("");
+    setFormStartingDebtEdp("");
+    setFormStartingDebtEsv("");
+    setFormStartingDebtVz("");
+    setFormStartingDebtPdfo("");
     setError(null);
     setModalStep("details");
     setCreatedProfileId(null);
@@ -555,6 +565,11 @@ export default function Profiles() {
     setFormBankName(profile.bank_name || "");
     setFormMfo(profile.mfo || "");
     setFormIban(profile.iban || "");
+    setFormCalculationStartDate(profile.calculation_start_date ? profile.calculation_start_date.split("T")[0] : "");
+    setFormStartingDebtEdp(profile.starting_debt_edp !== undefined && profile.starting_debt_edp !== null ? String(profile.starting_debt_edp) : "");
+    setFormStartingDebtEsv(profile.starting_debt_esv !== undefined && profile.starting_debt_esv !== null ? String(profile.starting_debt_esv) : "");
+    setFormStartingDebtVz(profile.starting_debt_vz !== undefined && profile.starting_debt_vz !== null ? String(profile.starting_debt_vz) : "");
+    setFormStartingDebtPdfo(profile.starting_debt_pdfo !== undefined && profile.starting_debt_pdfo !== null ? String(profile.starting_debt_pdfo) : "");
     setError(null);
     setModalStep("details");
     setCreatedProfileId(null);
@@ -594,7 +609,12 @@ export default function Profiles() {
       phone: formPhone || undefined,
       bank_name: formBankName || undefined,
       mfo: formMfo || undefined,
-      iban: formIban || undefined
+      iban: formIban || undefined,
+      calculation_start_date: formCalculationStartDate || undefined,
+      starting_debt_edp: formStartingDebtEdp ? parseFloat(formStartingDebtEdp) : 0,
+      starting_debt_esv: formStartingDebtEsv ? parseFloat(formStartingDebtEsv) : 0,
+      starting_debt_vz: formStartingDebtVz ? parseFloat(formStartingDebtVz) : 0,
+      starting_debt_pdfo: formStartingDebtPdfo ? parseFloat(formStartingDebtPdfo) : 0
     };
 
     try {
@@ -1293,6 +1313,86 @@ export default function Profiles() {
                           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">ЄСВ сплачує роботодавець (за основним місцем роботи)</span>
                         </label>
                       )}
+                    </div>
+
+                    {/* Calculation Start and Starting Debt Section */}
+                    <div className="border-t border-slate-100 dark:border-slate-800/60 pt-4 space-y-4">
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                        Початковий баланс та дата розрахунків
+                      </h4>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                        Встановіть дату, з якої почнуться автоматичні розрахунки податків, та введіть існуючі борги на цю дату.
+                      </p>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                          Початкова дата розрахунків
+                        </label>
+                        <input
+                          type="date"
+                          value={formCalculationStartDate}
+                          onChange={(e) => setFormCalculationStartDate(e.target.value)}
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Початковий борг ЄП (грн)
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="0.00"
+                            value={formStartingDebtEdp}
+                            onChange={(e) => setFormStartingDebtEdp(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Початковий борг ЄСВ (грн)
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="0.00"
+                            value={formStartingDebtEsv}
+                            onChange={(e) => setFormStartingDebtEsv(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Початковий борг ВЗ (грн)
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="0.00"
+                            value={formStartingDebtVz}
+                            onChange={(e) => setFormStartingDebtVz(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Початковий борг ПДФО (грн)
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="0.00"
+                            value={formStartingDebtPdfo}
+                            onChange={(e) => setFormStartingDebtPdfo(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
 
