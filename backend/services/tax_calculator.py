@@ -620,64 +620,60 @@ class TaxCalculator:
             print(f"[TaxCalculator] Failed to map deadlines in get_liabilities: {e}")
         
         # EDP (Single Tax)
-        if summary["edp"]["debt"] > 0:
-            item = {
-                "id": 1,
-                "profile_id": profile_id,
-                "tax_type": "edp",
-                "tax_type_name": tax_labels["edp"],
-                "amount": summary["edp"]["debt"],
-                "period": "Всього",
-                "status": "pending"
-            }
-            if "edp" in deadlines_map:
-                item.update(deadlines_map["edp"])
-            liabilities.append(item)
+        item = {
+            "id": 1,
+            "profile_id": profile_id,
+            "tax_type": "edp",
+            "tax_type_name": tax_labels["edp"],
+            "amount": summary["edp"]["debt"],
+            "period": "Всього",
+            "status": "pending"
+        }
+        if "edp" in deadlines_map:
+            item.update(deadlines_map["edp"])
+        liabilities.append(item)
             
         # ESV
-        if summary["esv"]["debt"] > 0:
-            item = {
-                "id": 2,
-                "profile_id": profile_id,
-                "tax_type": "esv",
-                "tax_type_name": tax_labels["esv"],
-                "amount": summary["esv"]["debt"],
-                "period": "Всього",
-                "status": "pending"
-            }
-            if "esv" in deadlines_map:
-                item.update(deadlines_map["esv"])
-            liabilities.append(item)
+        item = {
+            "id": 2,
+            "profile_id": profile_id,
+            "tax_type": "esv",
+            "tax_type_name": tax_labels["esv"],
+            "amount": summary["esv"]["debt"],
+            "period": "Всього",
+            "status": "pending"
+        }
+        if "esv" in deadlines_map:
+            item.update(deadlines_map["esv"])
+        liabilities.append(item)
             
         # Military
-        if summary["military"]["debt"] > 0:
-            item = {
-                "id": 3,
-                "profile_id": profile_id,
-                "tax_type": "vz",
-                "tax_type_name": tax_labels["vz"],
-                "amount": summary["military"]["debt"],
-                "period": "Всього",
-                "status": "pending"
-            }
-            if "vz" in deadlines_map:
-                item.update(deadlines_map["vz"])
-            liabilities.append(item)
+        item = {
+            "id": 3,
+            "profile_id": profile_id,
+            "tax_type": "vz",
+            "tax_type_name": tax_labels["vz"],
+            "amount": summary["military"]["debt"],
+            "period": "Всього",
+            "status": "pending"
+        }
+        if "vz" in deadlines_map:
+            item.update(deadlines_map["vz"])
+        liabilities.append(item)
             
         # PDFO
-        if summary["pdfo"]["debt"] > 0:
-            item = {
-                "id": 4,
-                "profile_id": profile_id,
-                "tax_type": "pdfo",
-                "tax_type_name": tax_labels["pdfo"],
-                "amount": summary["pdfo"]["debt"],
-                "period": "Всього",
-                "status": "pending"
-            }
-            if "pdfo" in deadlines_map:
-                item.update(deadlines_map["pdfo"])
-            liabilities.append(item)
+        item = {
+            "id": 4,
+            "profile_id": profile_id,
+            "tax_type": "pdfo",
+            "tax_type_name": tax_labels["pdfo"],
+            "amount": summary["pdfo"]["debt"],
+            "period": "Всього",
+            "status": "pending"
+        }
+        if "pdfo" in deadlines_map:
+            item.update(deadlines_map["pdfo"])
+        liabilities.append(item)
             
         return liabilities
 
@@ -689,25 +685,30 @@ tax_calculator = TaxCalculator()
 def get_new_payments_after(db, profile_id: int, latest_at) -> dict:
     """
     Повертає суму платежів з моменту останнього оновлення кабінету ДПС
-    для коригування офіційного боргу у реальному часі.
+    для коригування офіційного боргу у реальному часі з урахуванням затримки оновлення кабінету (до 10 днів).
     """
-    from datetime import date, timedelta
+    from datetime import date, datetime, timedelta
     from api.main import Payment, ParsedPayment, map_tax_type
     
-    # 1. Завантажуємо банківські виписки після дати кабінету
+    # Шукаємо платежі, зроблені в межах 10 днів до дати кабінету і пізніше,
+    # щоб врахувати платежі, які ще не оновлені/опрацьовані податковою.
     latest_date = latest_at.date() if hasattr(latest_at, 'date') else latest_at
+    search_start_date = latest_date - timedelta(days=10)
+    
+    # 1. Завантажуємо банківські виписки після дати пошуку
     query_parsed = db.query(ParsedPayment).filter(
         ParsedPayment.profile_id == profile_id,
         (ParsedPayment.type == "tax_payment") | (ParsedPayment.tax_type != None),
-        ParsedPayment.date >= latest_date
+        ParsedPayment.date >= search_start_date
     )
     parsed_payments = query_parsed.all()
     
     # 2. Завантажуємо ручні підтвердження оплат
+    search_start_datetime = latest_at - timedelta(days=10) if isinstance(latest_at, datetime) else datetime.combine(search_start_date, datetime.min.time())
     query_manual = db.query(Payment).filter(
         Payment.profile_id == profile_id,
         Payment.status == "paid",
-        Payment.paid_at >= latest_at
+        Payment.paid_at >= search_start_datetime
     )
     manual_payments = query_manual.all()
     

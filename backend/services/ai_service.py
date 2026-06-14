@@ -5,6 +5,7 @@ import json
 import google.generativeai as genai
 from typing import Optional, Dict, List
 from datetime import datetime
+from services.rag_service import rag_service
 
 class AIService:
     def __init__(self):
@@ -17,7 +18,17 @@ class AIService:
         
         if gemini_key:
             genai.configure(api_key=gemini_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            # Configure generation settings for complete responses
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.7,
+                top_p=0.9,
+                top_k=40,
+                max_output_tokens=8192,  # Increased for longer responses
+            )
+            self.model = genai.GenerativeModel(
+                'gemini-2.5-flash',
+                generation_config=generation_config
+            )
             self.use_gemini = True
             print("✅ Gemini API налаштовано")
         elif openai_key:
@@ -48,36 +59,63 @@ class AIService:
         """Аналіз транзакції: тип, категорія, чи є податком"""
         
         if not self.use_gemini and not self.use_openai:
-            return self._fallback_analysis(purpose, amount)
+            return self._enhanced_fallback_analysis(purpose, amount)
         
+        # Enhanced prompt with more tax categories
         prompt = f"""
-        Проаналізуй банківську транзакцію:
+        Проаналізуй банківську транзакцію українською мовою:
         Сума: {amount} грн
         Призначення: {purpose}
         
         Визнач у форматі JSON:
         {{
             "type": "income або expense",
-            "category": "tax/salary/goods/services/other",
-            "tax_type": "edp/esv/pdfo/vz/null",
+            "category": "tax/salary/goods/services/rent/utilities/marketing/other",
+            "tax_type": "edp/esv/pdfo/vz/rent_tax/land_tax/null",
             "confidence": 0.0-1.0,
-            "explanation": "коротке пояснення українською"
+            "explanation": "коротке пояснення українською",
+            "is_tax_payment": true/false,
+            "is_salary": true/false
         }}
+        
+        Податкові типи:
+        - edp: єдиний податок
+        - esv: єдиний соціальний внесок
+        - pdfo: податок на доходи фізичних осіб
+        - vz: військовий збір
+        - rent_tax: податок на нерухомість
+        - land_tax: податок на землю
         """
         
         if self.use_gemini:
             try:
-                response = self.model.generate_content(prompt)
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.3,  # Lower temperature for more consistent classification
+                        top_p=0.8,
+                        top_k=30,
+                        max_output_tokens=1024,
+                    )
+                )
                 parsed = self._clean_and_parse_json(response.text)
                 if parsed:
                     return parsed
             except Exception as e:
                 print(f"Error calling Gemini in analyze_transaction: {e}")
-            return self._fallback_analysis(purpose, amount)
-        return self._fallback_analysis(purpose, amount)
+            return self._enhanced_fallback_analysis(purpose, amount)
+        return self._enhanced_fallback_analysis(purpose, amount)
     
     async def chat_assistant(self, question: str, profile: Dict) -> str:
-        """Чат-асистент для податкових питань"""
+        """Чат-асистент для податкових питань з RAG"""
+        
+        # Спробуємо використати RAG якщо доступний
+        if rag_service.use_gemini:
+            try:
+                rag_response = await rag_service.generate_rag_response(question, profile)
+                return rag_response
+            except Exception as e:
+                print(f"RAG Error: {e}")
         
         if not self.use_gemini and not self.use_openai:
             return self._fallback_chat(question, profile)
@@ -89,7 +127,8 @@ class AIService:
         - Ставка податку: {profile.get('tax_rate', '5')}%
         - Працівники: {profile.get('has_employees', 'ні')}
         
-        Відповідай коротко, по суті, українською мовою.
+        Відповідай повно та по суті, українською мовою.
+        Завжди завершуй думки до кінця, не обривай речення посередині.
         Якщо не знаєш точної відповіді — скажи, що потрібно звернутися до ДПС.
         """
         
@@ -97,7 +136,15 @@ class AIService:
         
         if self.use_gemini:
             try:
-                response = self.model.generate_content(full_prompt)
+                response = self.model.generate_content(
+                    full_prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        top_p=0.9,
+                        top_k=40,
+                        max_output_tokens=8192,
+                    )
+                )
                 return response.text
             except Exception as e:
                 print(f"Gemini API Error: {e}")
@@ -136,14 +183,28 @@ class AIService:
         
         return changes[:3] if changes else []
     
-    def _fallback_analysis(self, purpose: str, amount: float) -> Dict:
-        """Аналіз без ШІ"""
+    def _enhanced_fallback_analysis(self, purpose: str, amount: float) -> Dict:
+        """Покращений аналіз без ШІ з більш детальною класифікацією"""
         purpose_lower = purpose.lower()
+        
+        # Extended tax keywords
         tax_keywords = {
-            "edp": ["єдиний податок", "єп"],
-            "esv": ["єсв", "есв"],
-            "pdfo": ["пдфо", "ндфл"],
-            "vz": ["військовий збір", "вз"]
+            "edp": ["єдиний податок", "єп", "edp", "single tax"],
+            "esv": ["єсв", "есв", "esv", "соціальний внесок"],
+            "pdfo": ["пдфо", "ндфл", "pdfo", "податок на доходи"],
+            "vz": ["військовий збір", "вз", "vz", "військовий"],
+            "rent_tax": ["податок на нерухомість", "оренда", "rent"],
+            "land_tax": ["податок на землю", "land", "земля"]
+        }
+        
+        # Category keywords
+        category_keywords = {
+            "salary": ["зарплата", "зп", "salary", "оклад", "винагорода"],
+            "rent": ["оренда", "rent", "квартира", "офіс"],
+            "utilities": ["комунальні", "світло", "вода", "газ", "utilities"],
+            "marketing": ["реклама", "маркетинг", "marketing", "піар"],
+            "goods": ["товари", "goods", "матеріали", "сировина"],
+            "services": ["послуги", "services", "консультації"]
         }
         
         tax_type = None
@@ -152,12 +213,26 @@ class AIService:
                 tax_type = t
                 break
         
+        category = "other"
+        for cat, keywords in category_keywords.items():
+            if any(k in purpose_lower for k in keywords):
+                category = cat
+                break
+        
+        if tax_type:
+            category = "tax"
+        
+        is_tax_payment = tax_type is not None
+        is_salary = category == "salary"
+        
         return {
             "type": "income" if amount > 0 else "expense",
-            "category": "tax" if tax_type else "other",
+            "category": category,
             "tax_type": tax_type,
-            "confidence": 0.7 if tax_type else 0.5,
-            "explanation": "Визначено за ключовими словами"
+            "confidence": 0.8 if tax_type else 0.6,
+            "explanation": "Визначено за ключовими словами",
+            "is_tax_payment": is_tax_payment,
+            "is_salary": is_salary
         }
     
     def _fallback_chat(self, question: str, profile: Dict) -> str:

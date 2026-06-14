@@ -31,6 +31,8 @@ class LiqPayService:
         """Створення форми для CNB (Checkout Native Button)"""
         data["public_key"] = self.public_key
         data["version"] = "3"
+        if self.public_key and self.public_key.startswith("sandbox_"):
+            data["sandbox"] = "1"
         signature = self._sign(data)
         
         return {
@@ -82,7 +84,10 @@ class LiqPayService:
             "language": "uk"
         }
         
-        return self._cnb_form(data)
+        form = self._cnb_form(data)
+        form["order_id"] = order_id
+        form["amount"] = amount
+        return form
     
     def create_subscription_payment(
         self, 

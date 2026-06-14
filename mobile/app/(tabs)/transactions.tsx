@@ -25,7 +25,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { api, ProfileData } from '../../services/api';
 import { haptics } from '../../services/haptics';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   ArrowUpRight,
@@ -40,6 +40,7 @@ import {
   Plus,
   Calendar as CalendarIcon,
   Trash2,
+  AlertCircle,
 } from 'lucide-react-native';
 const { ArrowLeft, ArrowRight } = require('lucide-react-native');
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -402,6 +403,33 @@ export default function TransactionsScreen() {
 
     return true;
   });
+
+  if (selectedProfile?.is_blocked) {
+    return (
+      <View style={[styles.center, { backgroundColor: colors.background, padding: 24 }]}>
+        <AlertCircle size={64} color={colors.error} style={{ marginBottom: 20 }} />
+        <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 12, textAlign: 'center' }}>
+          Профіль заблоковано
+        </Text>
+        <Text style={{ fontSize: 14, color: colors.textMuted, textAlign: 'center', lineHeight: 20, marginBottom: 24, paddingHorizontal: 16 }}>
+          {selectedProfile.block_reason || "Ваш профіль тимчасово заблоковано адміністратором. Будь ласка, зверніться до служби підтримки для вирішення питання."}
+        </Text>
+        <Button
+          title="Служба підтримки"
+          onPress={() => {
+            router.push('/profiles');
+          }}
+          style={{ width: '100%', marginBottom: 12 }}
+        />
+        <Button
+          title="Перевірити знову"
+          onPress={onRefresh}
+          variant="outline"
+          style={{ width: '100%' }}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>

@@ -3,7 +3,9 @@ import React, { useState, useEffect, Suspense } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { LogIn, KeyRound, Sparkles, AlertCircle, ShieldCheck, ChevronLeft, Mail, UserPlus, Building2, Phone, Users, Check, Loader2 } from "lucide-react";
+import { LiqPayFooter } from "@/components/LiqPayFooter";
 
 function LoginPageContent() {
   const { setTelegramId } = useApp();
@@ -171,6 +173,30 @@ function LoginPageContent() {
       setForgotStep("reset");
     } catch (err: any) {
       const errMsg = err.response?.data?.detail || "Не вдалося надіслати код. Перевірте правильність Email.";
+      setError(errMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSendNewPasswordToEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedEmail = emailValue.trim();
+    if (!trimmedEmail) {
+      setError("Будь ласка, введіть ваш Email.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      await api.sendPasswordToEmail(trimmedEmail);
+      alert("Новий пароль успішно згенеровано та надіслано на вашу пошту!");
+      setIsForgotPassword(false);
+      setError("");
+    } catch (err: any) {
+      const errMsg = err.response?.data?.detail || "Не вдалося надіслати новий пароль. Перевірте правильність Email.";
       setError(errMsg);
     } finally {
       setIsLoading(false);
@@ -560,7 +586,23 @@ function LoginPageContent() {
                     ) : (
                       <>
                         <Mail className="h-4 w-4" />
-                        <span>Надіслати код</span>
+                        <span>Надіслати код відновлення</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSendNewPasswordToEmail}
+                    disabled={isLoading}
+                    className="w-full flex justify-center items-center py-3.5 px-4 bg-emerald-650 hover:bg-emerald-600 active:scale-[0.98] text-white text-sm font-bold rounded-2xl shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-all gap-2 disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <Mail className="h-4 w-4" />
+                        <span>Надіслати новий пароль на пошту</span>
                       </>
                     )}
                   </button>
@@ -1034,9 +1076,12 @@ function LoginPageContent() {
           )}
         </div>
       </div>
+      <LiqPayFooter />
     </div>
   );
 }
+
+
 
 export default function LoginPage() {
   return (

@@ -55,6 +55,27 @@ export default function DashboardScreen() {
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [activeMobileModal, setActiveMobileModal] = useState<'income' | 'tax_due' | 'tax_paid' | 'debt' | 'pay_taxes' | null>(null);
 
+  // States for tax calendar events
+  const [isAllEventsModalVisible, setIsAllEventsModalVisible] = useState(false);
+  const [allCalendarEvents, setAllCalendarEvents] = useState<any[]>([]);
+  const [loadingAllEvents, setLoadingAllEvents] = useState(false);
+  const [calendarFilterType, setCalendarFilterType] = useState<'all' | 'report' | 'tax'>('all');
+  const [calendarSearchQuery, setCalendarSearchQuery] = useState('');
+
+  const fetchAllCalendarEvents = async () => {
+    if (!selectedProfile) return;
+    setLoadingAllEvents(true);
+    try {
+      const data = await api.getCalendar(selectedProfile.id);
+      setAllCalendarEvents(data);
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Помилка', 'Не вдалося завантажити повний календар подій');
+    } finally {
+      setLoadingAllEvents(false);
+    }
+  };
+
   // States for tax payment flow
   const [liabilities, setLiabilities] = useState<any[]>([]);
   const [loadingLiabilities, setLoadingLiabilities] = useState(false);
@@ -63,6 +84,7 @@ export default function DashboardScreen() {
   const [selectedLiability, setSelectedLiability] = useState<any | null>(null);
   const [generatedPayment, setGeneratedPayment] = useState<any | null>(null);
   const [generatingPayment, setGeneratingPayment] = useState(false);
+  const [paymentAmounts, setPaymentAmounts] = useState<{[key: string]: string}>({});
 
   const loadLiabilities = async () => {
     if (!selectedProfile) return;
@@ -70,6 +92,11 @@ export default function DashboardScreen() {
     try {
       const data = await api.getTaxLiabilities(selectedProfile.id);
       setLiabilities(data);
+      const initialAmounts: {[key: string]: string} = {};
+      data.forEach((l: any) => {
+        initialAmounts[l.tax_type] = String(l.amount || 0);
+      });
+      setPaymentAmounts(initialAmounts);
     } catch (err) {
       console.error(err);
       Alert.alert('Помилка', 'Не вдалося завантажити податкові зобов\'язання');
@@ -89,11 +116,13 @@ export default function DashboardScreen() {
   const handleGeneratePayment = async (liability: any) => {
     if (!selectedProfile) return;
     setGeneratingPayment(true);
+    const amtStr = paymentAmounts[liability.tax_type] ?? String(liability.amount || 0);
+    const amtVal = parseFloat(amtStr) || liability.amount || 0;
     try {
       const res = await api.generatePayment({
         profile_id: selectedProfile.id,
         tax_type: liability.tax_type,
-        amount: liability.amount,
+        amount: amtVal,
         period: liability.period,
         bank_code: selectedBank,
         region: selectedRegion
@@ -328,6 +357,7 @@ export default function DashboardScreen() {
               Alert.alert('Успіх', 'Подію позначено як сплачену');
               if (selectedProfile) {
                 fetchDashboard(selectedProfile.id);
+                fetchAllCalendarEvents();
               }
             } catch (e) {
               console.error(e);
@@ -386,6 +416,88 @@ export default function DashboardScreen() {
           onPress={() => router.push('/profiles')}
           style={styles.emptyBtn}
         />
+      </View>
+    );
+  }
+  if (selectedProfile?.is_blocked) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+        {isDark ? (
+          <LinearGradient
+            colors={['#090d16', '#090d16', '#141527']}
+            style={StyleSheet.absoluteFillObject}
+          />
+        ) : null}
+        <AlertCircle size={64} color={colors.error} style={{ marginBottom: 20 }} />
+        <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 12, textAlign: 'center' }}>
+          Профіль заблоковано
+        </Text>
+        <Text style={{ fontSize: 14, color: colors.textMuted, textAlign: 'center', lineHeight: 20, marginBottom: 24, paddingHorizontal: 16 }}>
+          {selectedProfile.block_reason || "Ваш профіль тимчасово заблоковано адміністратором. Будь ласка, зверніться до служби підтримки для вирішення питання."}
+        </Text>
+        <Button
+          title="Служба підтримки"
+          onPress={() => {
+            router.push('/profiles');
+          }}
+          style={{ width: '100%', marginBottom: 12 }}
+        />
+        <Button
+          title="Змінити профіль"
+          onPress={() => setProfileModalVisible(true)}
+          variant="outline"
+          style={{ width: '100%', marginBottom: 12 }}
+        />
+        <Button
+          title="Перевірити знову"
+          onPress={onRefresh}
+          variant="outline"
+          style={{ width: '100%' }}
+        />
+
+        <Modal
+          animationType="fade"
+          transparent={true}
+          visible={profileModalVisible}
+          onRequestClose={() => setProfileModalVisible(false)}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setProfileModalVisible(false)}>
+            <View
+              style={[
+                styles.modalContent,
+                { backgroundColor: colors.background, borderColor: colors.cardBorder },
+              ]}
+            >
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Оберіть податковий профіль</Text>
+              <FlatList
+                data={profiles}
+                keyExtractor={(item) => item.id.toString()}
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={[
+                      styles.profileItem,
+                      selectedProfile?.id === item.id && { backgroundColor: colors.primaryMuted },
+                      { borderBottomColor: colors.border },
+                    ]}
+                    onPress={() => handleSelectProfile(item)}
+                  >
+                    <Briefcase
+                      size={20}
+                      color={selectedProfile?.id === item.id ? colors.primary : colors.textMuted}
+                      style={styles.profileItemIcon}
+                    />
+                    <View>
+                      <Text style={[styles.profileItemName, { color: colors.text }]}>{item.name}</Text>
+                      <Text style={[styles.profileItemCode, { color: colors.textMuted }]}>
+                        Код: {item.tax_id} • {item.type === 'fop' ? 'ФОП' : 'Юр. особа'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
+              />
+            </View>
+          </Pressable>
+        </Modal>
       </View>
     );
   }
@@ -460,7 +572,15 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
       >
-        <Text style={[styles.calendarTitleText, { color: colors.text }]}>Податковий календар</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8, paddingHorizontal: 4 }}>
+          <Text style={[styles.calendarTitleText, { color: colors.text, marginTop: 0, marginBottom: 0 }]}>Податковий календар</Text>
+          <TouchableOpacity onPress={() => {
+            setIsAllEventsModalVisible(true);
+            fetchAllCalendarEvents();
+          }}>
+            <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '700' }}>Дивитися всі</Text>
+          </TouchableOpacity>
+        </View>
 
         {(!dashboardData?.upcoming_events || dashboardData.upcoming_events.length === 0) ? (
           <Card style={styles.emptyCalendar}>
@@ -565,7 +685,7 @@ export default function DashboardScreen() {
                           if (isReport) {
                             router.push('/invoices');
                           } else {
-                            handleMarkEventPaid(event.id, event.title);
+                            setActiveMobileModal('pay_taxes');
                           }
                         }}
                       >
@@ -1444,6 +1564,17 @@ export default function DashboardScreen() {
                       </View>
                     )}
                   </View>
+                  <Button
+                    title="Сплатити заборгованість"
+                    onPress={() => {
+                      setActiveMobileModal(null);
+                      setTimeout(() => {
+                        setActiveMobileModal('pay_taxes');
+                      }, 300);
+                    }}
+                    variant="primary"
+                    style={{ marginTop: 16 }}
+                  />
                 </View>
               )}
             </ScrollView>
@@ -1538,7 +1669,7 @@ export default function DashboardScreen() {
                   key={liab.id}
                   style={{
                     padding: 16,
-                    marginBottom: 10,
+                    marginBottom: 12,
                     backgroundColor: colors.card,
                     borderColor: selectedLiability?.id === liab.id ? colors.primary : colors.cardBorder,
                     borderWidth: 1
@@ -1546,17 +1677,112 @@ export default function DashboardScreen() {
                 >
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View style={{ flex: 1, marginRight: 8 }}>
-                      <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>{liab.tax_type_name}</Text>
-                      <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>Період: {liab.period}</Text>
+                      <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>{liab.tax_type_name}</Text>
+                      {liab.description ? (
+                        <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>{liab.description}</Text>
+                      ) : (
+                        <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>Поточний розрахунок за період</Text>
+                      )}
                     </View>
-                    <Text style={{ color: colors.error, fontWeight: '700', fontSize: 15 }}>{liab.amount?.toLocaleString('uk-UA')} ₴</Text>
+                    <Text style={{ color: colors.error, fontWeight: '800', fontSize: 16 }}>{liab.amount?.toLocaleString('uk-UA')} ₴</Text>
                   </View>
 
+                  {/* 1. Tax breakdown explanation ("розшифровка") */}
+                  <View style={{ marginTop: 12, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', padding: 12, borderRadius: 12, borderLeftWidth: 3, borderLeftColor: colors.primary }}>
+                    <Text style={{ color: colors.text, fontWeight: '700', fontSize: 12, marginBottom: 6 }}>📊 Розшифровка розрахунку:</Text>
+                    {liab.tax_type === 'edp' && (
+                      <View style={{ gap: 2 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Оподатковуваний дохід: <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.taxable_income || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Ставка податку: <Text style={{ color: colors.text, fontWeight: '600' }}>{selectedProfile?.group === 1 ? '332.80 ₴/міс' : selectedProfile?.group === 2 ? '20% мін. зарплати' : `${selectedProfile?.rate || 5}%`}</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Нараховано: <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.tax_due || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Сплачено: <Text style={{ color: colors.success, fontWeight: '600' }}>{(dashboardData?.tax_breakdown?.unified_tax || dashboardData?.tax_paid || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                      </View>
+                    )}
+                    {liab.tax_type === 'esv' && (
+                      <View style={{ gap: 2 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Ставка ЄСВ за себе: <Text style={{ color: colors.text, fontWeight: '600' }}>22% від мін. зарплати</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Нараховано за себе: <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.esv_due || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Сплачено ЄСВ: <Text style={{ color: colors.success, fontWeight: '600' }}>{(dashboardData?.tax_breakdown?.esv || dashboardData?.esv_paid || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                      </View>
+                    )}
+                    {liab.tax_type === 'vz' && (
+                      <View style={{ gap: 2 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • За себе: <Text style={{ color: colors.text, fontWeight: '600' }}>{selectedProfile?.group === 3 ? '1% від доходу' : '10% від мін. зарплати'}</Text>
+                        </Text>
+                        {dashboardData?.employee_mil_due > 0 && (
+                          <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                            • За працівників (5%): <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.employee_mil_due || 0).toLocaleString('uk-UA')} ₴</Text>
+                          </Text>
+                        )}
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Всього нараховано: <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.military_tax_due || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Сплачено: <Text style={{ color: colors.success, fontWeight: '600' }}>{(dashboardData?.tax_breakdown?.military_tax || dashboardData?.mil_paid || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                      </View>
+                    )}
+                    {liab.tax_type === 'pdfo' && (
+                      <View style={{ gap: 2 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • За працівників (18%): <Text style={{ color: colors.text, fontWeight: '600' }}>{(dashboardData?.employee_pit_due || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                          • Сплачено ПДФО: <Text style={{ color: colors.success, fontWeight: '600' }}>{(dashboardData?.tax_breakdown?.pit || dashboardData?.pit_paid || 0).toLocaleString('uk-UA')} ₴</Text>
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* 2. Amount Input field for pre-payment/custom payment */}
+                  <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+                    <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>Сума сплати:</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginLeft: 16 }}>
+                      <TextInput
+                        value={paymentAmounts[liab.tax_type] ?? String(liab.amount || 0)}
+                        onChangeText={(val) => setPaymentAmounts(prev => ({ ...prev, [liab.tax_type]: val }))}
+                        keyboardType="numeric"
+                        placeholder="0.00"
+                        placeholderTextColor={colors.textMuted}
+                        style={{
+                          flex: 1,
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
+                          fontSize: 13,
+                          fontWeight: '700',
+                          textAlign: 'right',
+                        }}
+                      />
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700', marginLeft: 4 }}>₴</Text>
+                    </View>
+                  </View>
+
+                  {/* 3. Action button "Оплатити" */}
                   <Button
-                    title={selectedLiability?.id === liab.id ? "Обрано" : "Оплатити"}
+                    title={selectedLiability?.id === liab.id ? "Обрано для сплати" : "Сплатити"}
                     onPress={() => handleGeneratePayment(liab)}
                     variant={selectedLiability?.id === liab.id ? "secondary" : "primary"}
-                    style={{ marginTop: 12, minHeight: 36 }}
+                    style={{ marginTop: 12, minHeight: 38 }}
                   />
                 </Card>
               ))
@@ -1632,6 +1858,173 @@ export default function DashboardScreen() {
               </Card>
             )}
           </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Full Tax Calendar Modal */}
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isAllEventsModalVisible}
+        onRequestClose={() => setIsAllEventsModalVisible(false)}
+      >
+        <SafeAreaView style={[styles.chatModalContainer, { backgroundColor: colors.background }]}>
+          <View style={[styles.chatHeader, { borderBottomColor: colors.cardBorder }]}>
+            <View style={styles.chatHeaderLeft}>
+              <Calendar size={24} color={colors.primary} />
+              <View style={{ marginLeft: 8 }}>
+                <Text style={[styles.chatHeaderTitle, { color: colors.text }]}>
+                  Податковий календар
+                </Text>
+                <Text style={[styles.chatHeaderSubtitle, { color: colors.textMuted }]}>
+                  {selectedProfile ? selectedProfile.name : ''}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => setIsAllEventsModalVisible(false)}
+              style={styles.chatCloseBtn}
+            >
+              <Text style={{ color: colors.primary, fontSize: 16, fontWeight: '600' }}>Закрити</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Search bar and Filters */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 10 }}>
+            <TextInput
+              placeholder="Пошук подій за назвою..."
+              placeholderTextColor={colors.textMuted}
+              value={calendarSearchQuery}
+              onChangeText={setCalendarSearchQuery}
+              style={[
+                styles.chatInput,
+                {
+                  backgroundColor: colors.inputBg,
+                  color: colors.text,
+                  borderColor: colors.cardBorder,
+                  marginRight: 0,
+                  minHeight: 40,
+                  maxHeight: 40,
+                  borderRadius: 10,
+                },
+              ]}
+            />
+
+            <View style={{ flexDirection: 'row', gap: 6, marginVertical: 4 }}>
+              {[
+                { id: 'all', label: 'Всі' },
+                { id: 'report', label: 'Звіти' },
+                { id: 'tax', label: 'Податки/Борги' },
+              ].map((filter) => {
+                const active = calendarFilterType === filter.id;
+                return (
+                  <TouchableOpacity
+                    key={filter.id}
+                    onPress={() => setCalendarFilterType(filter.id as any)}
+                    style={[
+                      styles.subPeriodBtn,
+                      { flex: 1, borderWidth: 1, borderColor: active ? colors.primary : colors.cardBorder },
+                      active && { backgroundColor: colors.primaryMuted }
+                    ]}
+                  >
+                    <Text style={[styles.subPeriodBtnText, { color: colors.text, fontWeight: active ? '700' : '500' }]}>{filter.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {loadingAllEvents ? (
+            <View style={styles.center}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : (
+            <FlatList
+              data={allCalendarEvents.filter((event) => {
+                // Search filter
+                if (calendarSearchQuery.trim() && !event.title.toLowerCase().includes(calendarSearchQuery.toLowerCase())) {
+                  return false;
+                }
+                // Type filter
+                const isReport = event.type === 'report' || event.title.includes('Подання') || event.title.includes('Розрахунок');
+                if (calendarFilterType === 'report' && !isReport) return false;
+                if (calendarFilterType === 'tax' && isReport) return false;
+                return true;
+              })}
+              keyExtractor={(item) => item.id.toString()}
+              contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+              renderItem={({ item }) => {
+                const isReport = item.type === 'report' || item.title.includes('Подання') || item.title.includes('Розрахунок');
+                const isPaid = item.status === 'paid';
+                return (
+                  <Card
+                    style={{
+                      padding: 16,
+                      marginBottom: 10,
+                      backgroundColor: colors.card,
+                      borderColor: isPaid ? colors.cardBorder : isReport ? 'rgba(99, 102, 241, 0.4)' : 'rgba(16, 185, 129, 0.4)',
+                      borderWidth: 1,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          {isReport ? (
+                            <FileText size={14} color={colors.primary} />
+                          ) : (
+                            <Calendar size={14} color={colors.success} />
+                          )}
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: isReport ? colors.primary : colors.success, textTransform: 'uppercase' }}>
+                            {isReport ? 'Звітність' : 'Сплата'}
+                          </Text>
+                        </View>
+                        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14, lineHeight: 18 }}>
+                          {item.title}
+                        </Text>
+                        <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
+                          Термін: {item.due_date} • {getEventPeriod(item.title)}
+                        </Text>
+                      </View>
+                      
+                      {!isPaid ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (isReport) {
+                              setIsAllEventsModalVisible(false);
+                              router.push('/invoices');
+                            } else {
+                              setIsAllEventsModalVisible(false);
+                              setActiveMobileModal('pay_taxes');
+                            }
+                          }}
+                          style={{
+                            backgroundColor: isReport ? colors.primaryMuted : colors.successMuted,
+                            paddingVertical: 6,
+                            paddingHorizontal: 10,
+                            borderRadius: 8,
+                          }}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: isReport ? colors.primary : colors.success }}>
+                            {isReport ? 'Подати' : 'Сплатити'}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={[styles.paidBadge, { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8 }]}>
+                          <CheckCircle2 size={12} color="#ffffff" />
+                          <Text style={[styles.paidBadgeText, { fontSize: 10 }]}>Сплачено</Text>
+                        </View>
+                      )}
+                    </View>
+                  </Card>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={{ color: colors.textMuted, fontStyle: 'italic', textAlign: 'center', marginVertical: 20 }}>
+                  Подій не знайдено
+                </Text>
+              }
+            />
+          )}
         </SafeAreaView>
       </Modal>
     </View>

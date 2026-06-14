@@ -14,6 +14,10 @@ from io import BytesIO
 
 load_dotenv()
 
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("api.main")
+
 # Database Setup
 import os.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -397,6 +401,7 @@ class Subscription(Base):
     trial_ends_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     auto_renew = Column(Boolean, default=False)
+    demo_activated = Column(Boolean, default=False)
     # LiqPay fields
     liqpay_order_id = Column(String, nullable=True)
     # Stripe fields (legacy, kept for compatibility)
@@ -545,6 +550,14 @@ class ProfileDocument(Base):
     file_content = Column(LargeBinary, nullable=True)
     upload_date = Column(Date, default=date.today)
 
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    sender = Column(String, nullable=False)  # 'user' or 'admin'
+    message = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
 # Create tables
 Base.metadata.create_all(engine)
 
@@ -617,7 +630,9 @@ migrations = [
     "ALTER TABLE dps_settlements ADD COLUMN paid FLOAT DEFAULT 0.0",
     "ALTER TABLE dps_settlements ADD COLUMN payment_deadline TIMESTAMP DEFAULT NULL",
     "ALTER TABLE dps_settlements ADD COLUMN source VARCHAR DEFAULT 'manual_upload'",
-    "ALTER TABLE dps_settlements ADD COLUMN recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    "ALTER TABLE dps_settlements ADD COLUMN recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "ALTER TABLE users ADD COLUMN role VARCHAR DEFAULT 'user'",
+    "ALTER TABLE subscriptions ADD COLUMN demo_activated BOOLEAN DEFAULT FALSE"
 ]
 
 with engine.connect() as conn:
@@ -765,9 +780,19 @@ try:
                     conn.rollback()
                     conn.execute(text(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} BLOB"))
                     conn.commit()
-                print(f"Added column {col_def[0]} to service_acts table.")
             except Exception as e:
                 conn.rollback()
+
+        # 6. Reset PostgreSQL sequences if needed
+        if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+            for table_name in ["users", "companies", "pricing", "subscriptions", "employees", "tax_events", "support_messages", "payments"]:
+                try:
+                    conn.execute(text(f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table_name}"))
+                    conn.commit()
+                    print(f"Synchronized sequence for table {table_name}")
+                except Exception as seq_err:
+                    conn.rollback()
+                    print(f"Could not sync sequence for table {table_name}: {seq_err}")
 except Exception as migration_err:
     print(f"Table columns migration error: {migration_err}")
 
@@ -1375,6 +1400,16 @@ async def health_check():
     return {"status": "ok", "service": "unitas-backend"}
 
 
+
+
+def check_profile_blocked(profile_id: int, db: Session):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if profile and getattr(profile, "is_blocked", False):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Профіль заблоковано. Причина: {profile.block_reason or 'не вказана'}"
+        )
+
 # Dependency
 def get_db():
     db = SessionLocal()
@@ -1502,6 +1537,11 @@ def register_user(
         db.commit()
         db.refresh(user)
 
+    if tax_id and tax_id.strip():
+        existing_profile = db.query(Profile).filter(Profile.tax_id == tax_id.strip()).first()
+        if existing_profile:
+            raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
+
     reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date() if reg_date else date.today()
     
     # Якщо ФОП спрощена 1 або 2 групи, ставка завжди 0.0 (фіксований податок)
@@ -1591,9 +1631,19 @@ def get_user_companies(telegram_id: str, db: Session = Depends(get_db)):
 async def upload_statement(
     company_id: int = Form(...),
     file: UploadFile = File(...),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     # company_id is treated as profile_id
+    check_profile_blocked(company_id, db)
+    profile = db.query(Profile).filter(Profile.id == company_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     file_content = await file.read()
     
     # Декодуємо base64, якщо файл надіслано як Data URI
@@ -1735,7 +1785,15 @@ async def upload_statement(
     return {"message": f"Завантажено {inserted_count} нових транзакцій з {bank_name} для профілю '{profile.name}' (пропущено {len(parsed_txs) - inserted_count} дублікатів)", "statement_id": statement.id}
 
 @app.get("/api/profiles/{profile_id}/statements")
-def get_profile_statements(profile_id: int, db: Session = Depends(get_db)):
+def get_profile_statements(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     statements = db.query(BankStatement).filter(BankStatement.profile_id == profile_id).order_by(BankStatement.uploaded_at.desc()).all()
     res = []
     for stmt in statements:
@@ -1948,8 +2006,10 @@ def get_dashboard(
     db: Session = Depends(get_db),
     period_type: str = "all",
     year: Optional[int] = None,
-    period_value: Optional[int] = None
+    period_value: Optional[int] = None,
+    user_id: Optional[int] = None
 ):
+    check_profile_blocked(profile_id, db)
     import datetime as dt_module
     from services.tax_calculator import TaxCalculator, tax_calculator
     
@@ -1957,6 +2017,10 @@ def get_dashboard(
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
 
     tax_system = profile.tax_system
 
@@ -2574,12 +2638,17 @@ def sync_profile_calendar(profile_id: int, db: Session):
         db.rollback()
 
 @app.get("/api/calendar/{company_id}")
-def get_calendar(company_id: int, db: Session = Depends(get_db)):
+def get_calendar(company_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    check_profile_blocked(company_id, db)
     profile = db.query(Profile).filter(Profile.id == company_id).first()
     if not profile:
         company = db.query(Company).filter(Company.id == company_id).first()
         if company:
             profile = db.query(Profile).filter(Profile.user_id == company.user_id).first()
+    
+    # Authorization check
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
             
     events = db.query(TaxEvent).filter(
         (TaxEvent.company_id == company_id) | (TaxEvent.profile_id == company_id)
@@ -2599,8 +2668,77 @@ def mark_event_paid(event_id: int, db: Session = Depends(get_db)):
     if not event:
         raise HTTPException(status_code=404, detail="Подію не знайдено")
     event.status = "paid"
+    
+    # Створюємо відповідний запис у таблиці payments, щоб калькулятор податків побачив оплату
+    profile_id = event.profile_id or event.company_id
+    if profile_id:
+        tax_name_to_type = {
+            "unified_tax": "edp",
+            "esv": "esv",
+            "military_tax": "vz",
+            "pit": "pdfo"
+        }
+        if event.tax_name in tax_name_to_type:
+            pay_type = tax_name_to_type[event.tax_name]
+            
+            # Спробуємо отримати поточний борг для цього податку
+            amount = 0.0
+            try:
+                from services.tax_calculator import tax_calculator
+                summary = tax_calculator.get_summary(profile_id, db)
+                summary_key = {
+                    "unified_tax": "edp",
+                    "esv": "esv",
+                    "military_tax": "military",
+                    "pit": "pdfo"
+                }.get(event.tax_name)
+                if summary and summary_key in summary:
+                    amount = float(summary[summary_key].get("debt", 0.0))
+            except Exception as calc_err:
+                print(f"[MarkPaid] Error calculating summary debt: {calc_err}")
+                
+            # Якщо борг дорівнює 0, спробуємо розпарсити суму з опису події
+            if amount <= 0.0 and event.amount_desc:
+                import re
+                match = re.search(r'([\d\s]+(?:[.,]\d+)?)\s*(?:грн|uah)', event.amount_desc.lower())
+                if match:
+                    val_str = match.group(1).replace(" ", "").replace(",", ".")
+                    try:
+                        amount = float(val_str)
+                    except ValueError:
+                        pass
+                        
+            # Якщо все ще 0, задамо дефолтні значення
+            if amount <= 0.0:
+                if event.tax_name == "esv":
+                    amount = 1562.00
+                else:
+                    amount = 0.0
+                    
+            if amount > 0.0:
+                period_str = event.due_date.strftime("%Y-%m") if event.due_date else datetime.now().strftime("%Y-%m")
+                # Перевіримо, чи немає вже аналогічного платежу з таким типом і періодом
+                existing = db.query(Payment).filter(
+                    Payment.profile_id == profile_id,
+                    Payment.tax_type == pay_type,
+                    Payment.period == period_str,
+                    Payment.status == "paid"
+                ).first()
+                if not existing:
+                    new_payment = Payment(
+                        profile_id=profile_id,
+                        tax_type=pay_type,
+                        amount=amount,
+                        period=period_str,
+                        status="paid",
+                        paid_at=datetime.now(),
+                        payment_type="tax"
+                    )
+                    db.add(new_payment)
+                    print(f"[MarkPaid] Created manual payment of {amount} UAH for {pay_type} ({period_str})")
+                    
     db.commit()
-    return {"message": "Подія позначена як сплачена"}
+    return {"message": "Подія позначена як сплачена та платіж зафіксовано"}
 
 @app.post("/api/generate-report/{company_id}/{form_code}")
 def generate_report(
@@ -2610,16 +2748,25 @@ def generate_report(
     year: Optional[int] = None, 
     vat_in: Optional[float] = None,
     vat_out: Optional[float] = None,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     if year is None:
         from datetime import datetime
         year = datetime.now().year
         
+    check_profile_blocked(company_id, db)
     profile = db.query(Profile).filter(Profile.id == company_id).first()
     company = db.query(Company).filter(Company.id == company_id).first()
     if not profile and not company:
         raise HTTPException(status_code=404, detail="Профіль або компанію не знайдено")
+    
+    # Authorization check
+    if user_id is not None:
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+        if company and company.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: company does not belong to this user")
 
     template = db.query(ReportTemplate).filter(ReportTemplate.form_code == form_code).first()
     if not template:
@@ -2862,6 +3009,7 @@ def generate_report(
 
 @app.get("/api/reports/{company_id}")
 def get_reports(company_id: int, db: Session = Depends(get_db)):
+    check_profile_blocked(company_id, db)
     reports = db.query(GeneratedReport).filter(
         (GeneratedReport.company_id == company_id) |
         (GeneratedReport.profile_id == company_id)
@@ -2922,11 +3070,18 @@ def get_report_detail(report_id: int, db: Session = Depends(get_db)):
 def update_report_detail(
     report_id: int, 
     fields_update: dict, 
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    if user_id is not None:
+        profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
         
     fields_data = json.loads(report.data_json)
     
@@ -3008,10 +3163,16 @@ def update_report_detail(
     return {"message": "Звіт успішно оновлено", "report_id": report.id}
 
 @app.get("/api/reports/{report_id}/download/{file_format}")
-def download_report_file(report_id: int, file_format: str, db: Session = Depends(get_db)):
+def download_report_file(report_id: int, file_format: str, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    if user_id is not None:
+        profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
         
     from fastapi.responses import Response
     
@@ -3198,7 +3359,11 @@ def download_report_file(report_id: int, file_format: str, db: Session = Depends
         raise HTTPException(status_code=400, detail="Непідтримуваний формат файлу")
 
 @app.get("/api/statements/debug/{company_id}")
-def get_statement_debug(company_id: int, db: Session = Depends(get_db)):
+def get_statement_debug(company_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == company_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     statement = db.query(BankStatement).filter(
         (BankStatement.company_id == company_id) |
         (BankStatement.profile_id == company_id)
@@ -3242,8 +3407,16 @@ def add_employee(
     tax_id: str = Form(...),
     salary: float = Form(...),
     is_main_job: bool = Form(True),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     # Перевірка на дублювання за ІПН в межах цього профілю
     existing = db.query(Employee).filter(
         Employee.profile_id == profile_id,
@@ -3271,11 +3444,18 @@ def update_employee(
     tax_id: Optional[str] = Form(None),
     salary: Optional[float] = Form(None),
     is_main_job: Optional[bool] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee:
-        raise HTTPException(status_code=404, detail="Працівника не знайдено")
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    # Authorization check
+    if user_id is not None and employee.profile_id:
+        profile = db.query(Profile).filter(Profile.id == employee.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: employee does not belong to this user")
     
     if name is not None:
         employee.name = name
@@ -3305,16 +3485,31 @@ def update_employee(
     }}
 
 @app.delete("/api/employees/{employee_id}")
-def delete_employee(employee_id: int, db: Session = Depends(get_db)):
+def delete_employee(employee_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Працівника не знайдено")
+    
+    # Authorization check
+    if user_id is not None and employee.profile_id:
+        profile = db.query(Profile).filter(Profile.id == employee.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: employee does not belong to this user")
+    
     db.delete(employee)
     db.commit()
     return {"message": "Працівника успішно видалено"}
 
 @app.get("/api/employees/{profile_id}")
-def get_employees(profile_id: int, db: Session = Depends(get_db)):
+def get_employees(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     return db.query(Employee).filter(Employee.profile_id == profile_id).all()
 
 @app.get("/api/profiles/{telegram_id}")
@@ -3334,35 +3529,16 @@ def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: 
     return user.profiles
 
 @app.delete("/api/profiles/{profile_id}")
-def delete_profile_endpoint(profile_id: int, db: Session = Depends(get_db)):
+def delete_profile_endpoint(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
     
-    # Delete related elements
-    db.query(TaxEvent).filter(TaxEvent.profile_id == profile_id).delete()
-    db.query(Employee).filter(Employee.profile_id == profile_id).delete()
-    db.query(ParsedPayment).filter(ParsedPayment.profile_id == profile_id).delete()
-    db.query(GeneratedReport).filter(GeneratedReport.profile_id == profile_id).delete()
-    db.query(ReportSubmission).filter(ReportSubmission.profile_id == profile_id).delete()
-    db.query(Certificate).filter(Certificate.profile_id == profile_id).delete()
-    db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == profile_id).delete()
-    db.query(BankConnection).filter(BankConnection.profile_id == profile_id).delete()
-    db.query(StatementUsage).filter(StatementUsage.profile_id == profile_id).delete()
-    db.query(TaxRequisite).filter(TaxRequisite.profile_id == profile_id).delete()
-    db.query(PaymentHistory).filter(PaymentHistory.profile_id == profile_id).delete()
-    db.query(Payment).filter(Payment.profile_id == profile_id).delete()
-    db.query(Subscription).filter(Subscription.profile_id == profile_id).delete()
-
-    statements = db.query(BankStatement).filter(BankStatement.profile_id == profile_id).all()
-    for stmt in statements:
-        db.query(ParsedPayment).filter(ParsedPayment.statement_id == stmt.id).delete()
-        db.delete(stmt)
-        
-    company = db.query(Company).filter(Company.id == profile_id).first()
-    if company:
-        db.delete(company)
-        
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    delete_profile_data_helper(profile_id, db)
     db.delete(profile)
     db.commit()
     return {"message": "Профіль успішно видалено"}
@@ -3398,11 +3574,21 @@ def update_profile_endpoint(
     starting_debt_esv: Optional[float] = Form(None),
     starting_debt_vz: Optional[float] = Form(None),
     starting_debt_pdfo: Optional[float] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+
+    if tax_id is not None and tax_id.strip():
+        existing = db.query(Profile).filter(Profile.tax_id == tax_id.strip(), Profile.id != profile_id).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
         
     company = db.query(Company).filter(Company.id == profile_id).first()
     
@@ -3522,6 +3708,7 @@ def get_transactions_list(
     end_date: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    check_profile_blocked(profile_id, db)
     query = db.query(ParsedPayment).filter(
         (ParsedPayment.profile_id == profile_id) |
         (ParsedPayment.statement.has(BankStatement.profile_id == profile_id))
@@ -3580,11 +3767,18 @@ def edit_transaction(
     contragent: Optional[str] = Form(None),
     amount: Optional[float] = Form(None),
     direction: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     payment = db.query(ParsedPayment).filter(ParsedPayment.id == payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Транзакцію не знайдено")
+    
+    # Authorization check
+    if user_id is not None and payment.profile_id:
+        profile = db.query(Profile).filter(Profile.id == payment.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: transaction does not belong to this user")
     
     if taxable is not None:
         payment.taxable = taxable
@@ -3668,8 +3862,16 @@ def add_manual_transaction(
     contragent: Optional[str] = Form(None),
     transaction_type: str = Form("income"), # income, expense, own_funds, refund, loan
     taxable: bool = Form(True),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     try:
         tx_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
@@ -3742,6 +3944,11 @@ def add_profile_endpoint(
         db.add(user)
         db.commit()
         db.refresh(user)
+
+    if tax_id and tax_id.strip():
+        existing = db.query(Profile).filter(Profile.tax_id == tax_id.strip()).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
 
     reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date() if reg_date else date.today()
 
@@ -4109,6 +4316,11 @@ def auth_register(
     if existing:
         raise HTTPException(status_code=400, detail="Користувач з таким Email вже існує")
         
+    if tax_id and tax_id.strip():
+        existing_profile = db.query(Profile).filter(Profile.tax_id == tax_id.strip()).first()
+        if existing_profile:
+            raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
+            
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
     user = User(
         email=email_clean,
@@ -4490,6 +4702,7 @@ def create_checkout_session(
     plan: str,  # 'pro' or 'business'
     success_url: str,
     cancel_url: str,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     import stripe
@@ -4498,6 +4711,10 @@ def create_checkout_session(
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     user = db.query(User).filter(User.id == profile.user_id).first()
     email = user.email if (user and user.email) else f"user_{profile_id}@unitas.com"
@@ -4673,30 +4890,47 @@ def send_payment_notification(profile_id: int, plan: str):
         db.close()
 
 @app.get("/api/subscriptions/current/{profile_id}")
-def get_current_subscription(profile_id: int, db: Session = Depends(get_db)):
+def get_current_subscription(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     sub = db.query(Subscription).filter(
         Subscription.profile_id == profile_id,
-        Subscription.status == "active"
-    ).first()
+        Subscription.status.in_(["active", "pending"])
+    ).order_by(Subscription.id.desc()).first()
     
     if not sub:
-        return {"plan": "free", "status": "active", "expires_at": None, "features": PLANS.get("pro", {}).get("features", {})}
+        return {"plan": "free", "status": "active", "expires_at": None, "features": PLANS.get("pro", {}).get("features", {}), "auto_renew": False}
         
     from datetime import datetime
-    if sub.expires_at and sub.expires_at < datetime.utcnow():
+    if sub.expires_at and sub.expires_at < datetime.utcnow() and sub.status == "active":
         sub.status = "expired"
         db.commit()
-        return {"plan": "free", "status": "expired", "expires_at": sub.expires_at, "features": PLANS.get("pro", {}).get("features", {})}
+        return {"plan": "free", "status": "expired", "expires_at": sub.expires_at, "features": PLANS.get("pro", {}).get("features", {}), "auto_renew": getattr(sub, "auto_renew", False)}
         
     return {
         "plan": sub.plan,
         "status": sub.status,
         "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
-        "features": PLANS.get(sub.plan, {}).get('features', {})
+        "features": PLANS.get(sub.plan, {}).get('features', {}),
+        "auto_renew": getattr(sub, "auto_renew", False)
     }
 
 @app.post("/api/subscriptions/check-access/{profile_id}/{feature}")
-def check_feature_access(profile_id: int, feature: str, db: Session = Depends(get_db)):
+def check_feature_access(profile_id: int, feature: str, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     sub = get_current_subscription(profile_id, db)
     
     if sub['plan'] == 'free':
@@ -4768,18 +5002,23 @@ def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = 
     profiles = db.query(Profile).order_by(Profile.id.desc()).all()
     result = []
     for p in profiles:
-        sub = db.query(Subscription).filter(
-            Subscription.profile_id == p.id,
-            Subscription.status == "active"
-        ).first()
+        sub = db.query(Subscription).filter(Subscription.profile_id == p.id).first()
         plan = sub.plan if sub else "free"
+        status = sub.status if sub else "active"
+        expires_at = sub.expires_at.strftime("%Y-%m-%d") if (sub and sub.expires_at) else "Безлімітно"
         result.append({
             "id": p.id,
             "email": p.owner.email if p.owner else None,
             "name": p.name,
+            "tax_system": p.tax_system,
+            "tax_id": p.tax_id,
+            "reg_date": p.reg_date.strftime("%Y-%m-%d") if p.reg_date else None,
             "registration_source": getattr(p, "registration_source", "direct"),
-            "created_at": getattr(p, "reg_date", None),
-            "plan": plan
+            "plan": plan,
+            "status": status,
+            "is_blocked": p.is_blocked,
+            "block_reason": p.block_reason,
+            "expires_at": expires_at
         })
     return result
 
@@ -5125,19 +5364,7 @@ def delete_user_account(identifier: str, db: Session = Depends(get_db)):
     # Delete profiles
     profiles = db.query(Profile).filter(Profile.user_id == user.id).all()
     for profile in profiles:
-        db.query(TaxEvent).filter(TaxEvent.profile_id == profile.id).delete()
-        db.query(Employee).filter(Employee.profile_id == profile.id).delete()
-        db.query(ParsedPayment).filter(ParsedPayment.profile_id == profile.id).delete()
-        
-        statements = db.query(BankStatement).filter(BankStatement.profile_id == profile.id).all()
-        for stmt in statements:
-            db.query(ParsedPayment).filter(ParsedPayment.statement_id == stmt.id).delete()
-            db.delete(stmt)
-            
-        company = db.query(Company).filter(Company.id == profile.id).first()
-        if company:
-            db.delete(company)
-            
+        delete_profile_data_helper(profile.id, db)
         db.delete(profile)
         
     db.query(Company).filter(Company.user_id == user.id).delete()
@@ -5242,6 +5469,114 @@ class IncomingDocument(Base):
 # Create the invoice automation tables if they don't exist yet
 Base.metadata.create_all(engine)
 
+def delete_profile_data_helper(profile_id: int, db: Session):
+    # 1. Delete ServiceAct (linked to invoices of this profile or to this profile)
+    db.query(ServiceAct).filter(
+        (ServiceAct.profile_id == profile_id) | 
+        ServiceAct.invoice_id.in_(
+            db.query(Invoice.id).filter(Invoice.profile_id == profile_id)
+        )
+    ).delete(synchronize_session=False)
+
+    # 2. Delete IncomingDocument (linked to invoices of this profile or to this profile)
+    db.query(IncomingDocument).filter(
+        (IncomingDocument.profile_id == profile_id) | 
+        (IncomingDocument.shared_by == profile_id) | 
+        IncomingDocument.document_id.in_(
+            db.query(Invoice.id).filter(Invoice.profile_id == profile_id)
+        )
+    ).delete(synchronize_session=False)
+
+    # 3. Delete DocumentInvitation (linked to invoices of this profile or to this profile)
+    db.query(DocumentInvitation).filter(
+        (DocumentInvitation.registered_profile_id == profile_id) | 
+        DocumentInvitation.document_id.in_(
+            db.query(Invoice.id).filter(Invoice.profile_id == profile_id)
+        )
+    ).delete(synchronize_session=False)
+
+    # 4. Delete Invoice
+    db.query(Invoice).filter(Invoice.profile_id == profile_id).delete()
+
+    # 5. Delete RecurringInvoice
+    db.query(RecurringInvoice).filter(RecurringInvoice.profile_id == profile_id).delete()
+
+    # 6. Delete EmailAuth
+    db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).delete()
+
+    # 7. Delete DPSSettlement
+    db.query(DPSSettlement).filter(DPSSettlement.profile_id == profile_id).delete()
+
+    # 8. Delete LegislationSubscription
+    db.query(LegislationSubscription).filter(LegislationSubscription.profile_id == profile_id).delete()
+
+    # 9. Delete ProfileDocument
+    db.query(ProfileDocument).filter(ProfileDocument.profile_id == profile_id).delete()
+
+    # 10. Delete TaxEvent
+    db.query(TaxEvent).filter(
+        (TaxEvent.profile_id == profile_id) | (TaxEvent.company_id == profile_id)
+    ).delete(synchronize_session=False)
+
+    # 11. Delete Employee
+    db.query(Employee).filter(
+        (Employee.profile_id == profile_id) | (Employee.company_id == profile_id)
+    ).delete(synchronize_session=False)
+
+    # 12. Delete ParsedPayment
+    db.query(ParsedPayment).filter(ParsedPayment.profile_id == profile_id).delete()
+
+    # 13. Delete GeneratedReport
+    db.query(GeneratedReport).filter(
+        (GeneratedReport.profile_id == profile_id) | (GeneratedReport.company_id == profile_id)
+    ).delete(synchronize_session=False)
+
+    # 14. Delete ReportSubmission
+    db.query(ReportSubmission).filter(ReportSubmission.profile_id == profile_id).delete()
+
+    # 15. Delete Certificate
+    db.query(Certificate).filter(Certificate.profile_id == profile_id).delete()
+
+    # 16. Delete TaxApiSetting
+    db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == profile_id).delete()
+
+    # 17. Delete BankConnection
+    db.query(BankConnection).filter(BankConnection.profile_id == profile_id).delete()
+
+    # 18. Delete StatementUsage
+    db.query(StatementUsage).filter(StatementUsage.profile_id == profile_id).delete()
+
+    # 19. Delete TaxRequisite
+    db.query(TaxRequisite).filter(TaxRequisite.profile_id == profile_id).delete()
+
+    # 20. Delete PaymentHistory
+    db.query(PaymentHistory).filter(PaymentHistory.profile_id == profile_id).delete()
+
+    # 21. Delete Payment
+    db.query(Payment).filter(Payment.profile_id == profile_id).delete()
+
+    # 22. Delete Subscription
+    db.query(Subscription).filter(Subscription.profile_id == profile_id).delete()
+
+    # 23. Delete BankStatements & their ParsedPayments
+    statements = db.query(BankStatement).filter(
+        (BankStatement.profile_id == profile_id) | (BankStatement.company_id == profile_id)
+    ).all()
+    for stmt in statements:
+        db.query(ParsedPayment).filter(ParsedPayment.statement_id == stmt.id).delete(synchronize_session=False)
+        db.delete(stmt)
+
+    # 24. Delete OAuthState
+    db.query(OAuthState).filter(OAuthState.profile_id == profile_id).delete(synchronize_session=False)
+
+    # 25. Delete SupportMessage
+    db.query(SupportMessage).filter(SupportMessage.profile_id == profile_id).delete(synchronize_session=False)
+
+    # 26. Delete Company if matched
+    company = db.query(Company).filter(Company.id == profile_id).first()
+    if company:
+        db.delete(company)
+
 @app.post("/api/invoices/recurring")
 def create_recurring_invoice(
     profile_id: int = Form(...),
@@ -5256,8 +5591,15 @@ def create_recurring_invoice(
     client_tax_id: Optional[str] = Form(None),
     document_type: str = Form("act"),
     client_address: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     day = max(1, min(28, send_day))
     rec = RecurringInvoice(
         profile_id=profile_id,
@@ -5290,11 +5632,16 @@ def send_oneoff_invoice(
     client_tax_id: Optional[str] = Form(None),
     document_type: str = Form("act"),
     client_address: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     profile_name = profile.name if profile else "UniTax Provider"
     
     send_date = date.today()
@@ -5342,20 +5689,45 @@ def send_oneoff_invoice(
     }
 
 @app.get("/api/invoices/recurring/{profile_id}")
-def get_recurring_invoices(profile_id: int, db: Session = Depends(get_db)):
+def get_recurring_invoices(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    check_profile_blocked(profile_id, db)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     return db.query(RecurringInvoice).filter(RecurringInvoice.profile_id == profile_id).all()
 
 @app.delete("/api/invoices/recurring/{id}")
-def delete_recurring_invoice(id: int, db: Session = Depends(get_db)):
+def delete_recurring_invoice(id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     rec = db.query(RecurringInvoice).filter(RecurringInvoice.id == id).first()
     if not rec:
         raise HTTPException(status_code=404, detail="Шаблон не знайдено")
+    
+    # Authorization check
+    if user_id is not None and rec.profile_id:
+        profile = db.query(Profile).filter(Profile.id == rec.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: recurring invoice does not belong to this user")
+    
     db.delete(rec)
     db.commit()
     return {"message": "Шаблон успішно видалено"}
 
 @app.get("/api/invoices/{profile_id}")
-def get_invoices_history(profile_id: int, db: Session = Depends(get_db)):
+def get_invoices_history(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    check_profile_blocked(profile_id, db)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     invoices = db.query(Invoice).filter(Invoice.profile_id == profile_id).order_by(desc(Invoice.id)).all()
     result = []
     for inv in invoices:
@@ -6380,11 +6752,18 @@ def send_invoice_now(
     custom_day: Optional[int] = Form(None),
     custom_month: Optional[int] = Form(None),
     include_act: Optional[bool] = Form(None),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     rec = db.query(RecurringInvoice).filter(RecurringInvoice.id == id).first()
     if not rec:
         raise HTTPException(status_code=404, detail="Шаблон регулярного рахунку не знайдено")
+    
+    # Authorization check
+    if user_id is not None and rec.profile_id:
+        profile = db.query(Profile).filter(Profile.id == rec.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: recurring invoice does not belong to this user")
         
     profile = db.query(Profile).filter(Profile.id == rec.profile_id).first()
     profile_name = profile.name if profile else "UniTax Provider"
@@ -6512,10 +6891,17 @@ from pydantic import BaseModel
 auth_states = {}
 
 @app.get("/api/auth/google/url/{profile_id}")
-async def get_google_auth_url(profile_id: int, db: Session = Depends(get_db)):
+async def get_google_auth_url(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Повертає URL для перенаправлення клієнта на Google OAuth"""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=400, detail="Google Client ID or Client Secret is not configured on the server.")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     state = str(uuid.uuid4())
     db_state = OAuthState(state=state, profile_id=profile_id)
@@ -6601,14 +6987,28 @@ async def google_callback(code: str, state: str, db: Session = Depends(get_db)):
         return RedirectResponse(url=f"{FRONTEND_URL}/settings/email?error={str(e)}")
 
 @app.get("/api/auth/google/status/{profile_id}")
-def get_google_auth_status(profile_id: int, db: Session = Depends(get_db)):
+def get_google_auth_status(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).first()
     if auth:
         return {"connected": True, "email": auth.email}
     return {"connected": False}
 
 @app.delete("/api/auth/google/{profile_id}")
-def disconnect_google_auth(profile_id: int, db: Session = Depends(get_db)):
+def disconnect_google_auth(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).first()
     if auth:
         db.delete(auth)
@@ -6731,10 +7131,17 @@ def get_all_invoices(
     profile_id: Optional[int] = None,
     status: Optional[str] = None,
     client_name: Optional[str] = None,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     query = db.query(Invoice)
     if profile_id:
+        # Authorization check
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         query = query.filter(Invoice.profile_id == profile_id)
     if status:
         query = query.filter(Invoice.status == status)
@@ -6775,10 +7182,14 @@ def get_all_invoices(
     return result
 
 @app.post("/api/invoices")
-def create_detailed_invoice(req: CreateInvoiceRequest, db: Session = Depends(get_db)):
+def create_detailed_invoice(req: CreateInvoiceRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     base_amount = sum(item.total for item in req.items)
     vat_rate = req.vat_rate
@@ -6829,10 +7240,16 @@ class CreateDocumentRequest(BaseModel):
     document_type: str  # "act" or "waybill"
 
 @app.post("/api/invoices/{invoice_id}/document")
-def create_invoice_document(invoice_id: int, req: CreateDocumentRequest, db: Session = Depends(get_db)):
+def create_invoice_document(invoice_id: int, req: CreateDocumentRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Authorization check
+    if user_id is not None and inv.profile_id:
+        profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
     
     inv.document_type = req.document_type
     
@@ -6871,7 +7288,7 @@ def create_invoice_document(invoice_id: int, req: CreateDocumentRequest, db: Ses
     }
 
 @app.get("/api/invoices/{invoice_id}/document/pdf")
-def get_invoice_document_pdf(invoice_id: int, db: Session = Depends(get_db)):
+def get_invoice_document_pdf(invoice_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -6879,6 +7296,10 @@ def get_invoice_document_pdf(invoice_id: int, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
         
     act = db.query(ServiceAct).filter(ServiceAct.invoice_id == invoice_id).first()
     if not act:
@@ -6899,13 +7320,17 @@ def get_invoice_document_pdf(invoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
 
 @app.get("/api/invoices/{invoice_id}/pdf")
-def get_invoice_pdf_endpoint(invoice_id: int, db: Session = Depends(get_db)):
+def get_invoice_pdf_endpoint(invoice_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
         
     try:
         if getattr(inv, 'file_content', None) is not None:
@@ -6951,6 +7376,7 @@ def generate_qr_with_registration(token: str) -> str:
 def send_invoice_api(
     invoice_id: int,
     req: SendInvoiceRequest,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     import uuid
@@ -6961,6 +7387,10 @@ def send_invoice_api(
     profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
         
     # Check if Gmail API is used and validate the token synchronously
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == inv.profile_id).first()
@@ -7127,7 +7557,14 @@ def send_invoice_api(
     }
 
 @app.post("/api/auth/google/test-email/{profile_id}")
-def test_gmail_sending(profile_id: int, db: Session = Depends(get_db)):
+def test_gmail_sending(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).first()
     if not auth:
         raise HTTPException(status_code=400, detail="Gmail not connected")
@@ -7178,10 +7615,17 @@ def test_gmail_sending(profile_id: int, db: Session = Depends(get_db)):
     return {"status": "triggered", "to": auth.email}
 
 @app.delete("/api/invoices/{id}")
-def delete_invoice(id: int, db: Session = Depends(get_db)):
+def delete_invoice(id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     inv = db.query(Invoice).filter(Invoice.id == id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Authorization check
+    if user_id is not None and inv.profile_id:
+        profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
+    
     db.query(ServiceAct).filter(ServiceAct.invoice_id == id).delete()
     db.delete(inv)
     db.commit()
@@ -7365,11 +7809,39 @@ class SignDocumentRequest(BaseModel):
 def sign_document_endpoint(
     doc_id: int,
     req: SignDocumentRequest,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     cert_record = None
     if req.certificate_id:
         cert_record = db.query(Certificate).filter(Certificate.id == req.certificate_id).first()
+    
+    # Authorization check - verify profile ownership
+    profile_id = None
+    if req.doc_type in ("invoice", "contract", "waybill") or (req.doc_type == "act" and db.query(Invoice).filter(Invoice.id == doc_id, Invoice.document_type == "act").first() is not None):
+        inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+        if not inv:
+            # Maybe it is a ServiceAct with ID doc_id
+            act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+            if act:
+                profile_id = act.profile_id
+            else:
+                raise HTTPException(status_code=404, detail="Document not found")
+        else:
+            profile_id = inv.profile_id
+    elif req.doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if not act:
+            raise HTTPException(status_code=404, detail="Act not found")
+        profile_id = act.profile_id
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid document type: {req.doc_type}")
+    
+    # Perform authorization check if we have a profile_id
+    if user_id is not None and profile_id:
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: document does not belong to this user")
         
     if req.doc_type in ("invoice", "contract", "waybill") or (req.doc_type == "act" and db.query(Invoice).filter(Invoice.id == doc_id, Invoice.document_type == "act").first() is not None):
         inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
@@ -7385,8 +7857,6 @@ def sign_document_endpoint(
         if not act:
             raise HTTPException(status_code=404, detail="Act not found")
         return sign_service_act(act, cert_record, db)
-    else:
-        raise HTTPException(status_code=400, detail=f"Invalid document type: {req.doc_type}")
         
     return {"status": "success", "message": "Document signed successfully"}
 
@@ -7394,10 +7864,27 @@ def sign_document_endpoint(
 def get_signed_document_pdf(
     doc_id: int,
     doc_type: str,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     from fastapi.responses import Response
     import os
+    
+    # Authorization check - verify profile ownership
+    profile_id = None
+    if doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if act:
+            profile_id = act.profile_id
+    else:
+        inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+        if inv:
+            profile_id = inv.profile_id
+    
+    if user_id is not None and profile_id:
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: document does not belong to this user")
     
     # 1. Check if it is a ServiceAct
     if doc_type == "act":
@@ -7496,8 +7983,16 @@ async def upload_custom_document(
     client_email: str = Form(...),
     amount: float = Form(0.0),
     document_type: Optional[str] = Form("contract"),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     inv = Invoice(
         profile_id=profile_id,
         client_email=client_email,
@@ -7537,8 +8032,16 @@ class TemplateDocumentRequest(BaseModel):
 @app.post("/api/documents/template")
 def create_templated_document(
     req: TemplateDocumentRequest,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     inv = Invoice(
         profile_id=req.profile_id,
         client_email=req.client_email,
@@ -7680,8 +8183,16 @@ class SendProfileDocumentRequest(BaseModel):
 async def upload_profile_document(
     profile_id: int,
     file: UploadFile = File(...),
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     content = await file.read()
     doc = ProfileDocument(
         profile_id=profile_id,
@@ -7697,8 +8208,16 @@ async def upload_profile_document(
 @app.get("/api/profiles/{profile_id}/documents")
 def list_profile_documents(
     profile_id: int,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     docs = db.query(ProfileDocument).filter(ProfileDocument.profile_id == profile_id).all()
     return [
         {
@@ -7714,8 +8233,16 @@ def list_profile_documents(
 def delete_profile_document(
     profile_id: int,
     doc_id: int,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     doc = db.query(ProfileDocument).filter(
         ProfileDocument.id == doc_id,
         ProfileDocument.profile_id == profile_id
@@ -7730,11 +8257,18 @@ from fastapi.responses import Response
 @app.get("/api/profiles/documents/{doc_id}/download")
 def download_profile_document(
     doc_id: int,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     doc = db.query(ProfileDocument).filter(ProfileDocument.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == doc.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: document does not belong to this user")
+    
     return Response(
         content=doc.file_content,
         media_type=doc.content_type,
@@ -7747,6 +8281,7 @@ def download_profile_document(
 def send_profile_document_api(
     doc_id: int,
     req: SendProfileDocumentRequest,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     doc = db.query(ProfileDocument).filter(ProfileDocument.id == doc_id).first()
@@ -7756,6 +8291,10 @@ def send_profile_document_api(
     profile = db.query(Profile).filter(Profile.id == doc.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: document does not belong to this user")
         
     # Check if Gmail API is used and validate the token synchronously
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == doc.profile_id).first()
@@ -7894,7 +8433,14 @@ async def verify_document_signature(
             os.remove(temp_path)
 
 @app.get("/api/invoices/incoming/{profile_id}")
-def get_incoming_documents(profile_id: int, db: Session = Depends(get_db)):
+def get_incoming_documents(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     incoming = db.query(IncomingDocument).filter(IncomingDocument.profile_id == profile_id).all()
     results = []
     for inc in incoming:
@@ -7938,7 +8484,14 @@ def get_incoming_documents(profile_id: int, db: Session = Depends(get_db)):
     return results
 
 @app.post("/api/invoices/incoming/{invoice_id}/view")
-def mark_incoming_document_viewed(invoice_id: int, profile_id: int, db: Session = Depends(get_db)):
+def mark_incoming_document_viewed(invoice_id: int, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     inc = db.query(IncomingDocument).filter(
         IncomingDocument.document_id == invoice_id,
         IncomingDocument.profile_id == profile_id
@@ -7984,6 +8537,7 @@ class ChatRequest(BaseModel):
     profile_id: int
     message: str
     history: Optional[List[dict]] = None
+    user_id: Optional[int] = None  # For authorization
 
 def get_offline_response(user_message: str, profile, total_income: float, profile_employees: list, recent_payments: list, recent_invoices: list, upcoming_events: list, db: Session, history: Optional[List[dict]] = None) -> str:
     msg_lower = user_message.lower()
@@ -8121,6 +8675,11 @@ async def agent_chat(req: ChatRequest, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check: ensure user has access to this profile
+    if req.user_id is not None:
+        if profile.user_id != req.user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     # Get profile stats (copying logic from get_dashboard)
     payments = db.query(ParsedPayment).filter(ParsedPayment.profile_id == req.profile_id).all()
@@ -8289,6 +8848,7 @@ async def upload_certificate(
     profile_id: int = Form(...),
     cert_file: UploadFile = File(...),
     password: str = Form(...),
+    user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     try:
@@ -8298,6 +8858,10 @@ async def upload_certificate(
         profile = db.query(Profile).filter(Profile.id == profile_id).first()
         if not profile:
             raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+        # Authorization check
+        if user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
             
         # Load PKCS12
         from OpenSSL import crypto
@@ -8410,7 +8974,14 @@ async def upload_certificate(
         raise HTTPException(status_code=500, detail=f"Помилка обробки сертифіката: {str(e)}")
 
 @app.get("/api/certificates/{profile_id}")
-def get_certificates_by_profile(profile_id: int, db: Session = Depends(get_db)):
+def get_certificates_by_profile(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     certs = db.query(Certificate).filter(Certificate.profile_id == profile_id).all()
     return [{
         "id": c.id,
@@ -8421,9 +8992,9 @@ def get_certificates_by_profile(profile_id: int, db: Session = Depends(get_db)):
     } for c in certs]
 
 @app.get("/api/certificates")
-def get_certificates(profile_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_certificates(profile_id: Optional[int] = None, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     if profile_id:
-        return get_certificates_by_profile(profile_id, db)
+        return get_certificates_by_profile(profile_id, user_id, db)
     certs = db.query(Certificate).all()
     return [{
         "id": c.id,
@@ -8437,6 +9008,7 @@ def get_certificates(profile_id: Optional[int] = None, db: Session = Depends(get
 async def submit_report_to_tax(
     report_id: int,
     req: ReportSubmitRequest,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     # 1. Отримати звіт з БД
@@ -8448,6 +9020,10 @@ async def submit_report_to_tax(
     profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
         
     # 3. Підписати звіт КЕП
     signer = ReportSigner()
@@ -8502,7 +9078,14 @@ async def submit_report_to_tax(
     }
 
 @app.get("/api/reports/submissions/{profile_id}")
-def get_submissions_history(profile_id: int, db: Session = Depends(get_db), limit: int = 20):
+def get_submissions_history(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db), limit: int = 20):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     results = db.query(ReportSubmission).filter(
         ReportSubmission.profile_id == profile_id
     ).order_by(desc(ReportSubmission.submitted_at)).limit(limit).all()
@@ -8570,7 +9153,14 @@ async def get_submission_status(submission_id: int, db: Session = Depends(get_db
     return {"status": submission.submission_status}
 
 @app.post("/api/tax-api/setup")
-def setup_tax_api(req: TaxApiSetupRequest, db: Session = Depends(get_db)):
+def setup_tax_api(req: TaxApiSetupRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     expires_at = datetime.now() + timedelta(days=365)
     setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     if setting:
@@ -8589,8 +9179,15 @@ def setup_tax_api(req: TaxApiSetupRequest, db: Session = Depends(get_db)):
     return {"message": "API ДПС успішно налаштовано"}
 
 @app.get("/api/tax-api/status")
-def get_tax_api_status(profile_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_tax_api_status(profile_id: Optional[int] = None, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     if profile_id:
+        # Authorization check
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+        
         settings = db.query(TaxApiSetting).filter(
             TaxApiSetting.profile_id == profile_id
         ).first()
@@ -8628,8 +9225,15 @@ def get_tax_api_instructions():
     }
 
 @app.get("/api/reports")
-def list_reports(profile_id: int, db: Session = Depends(get_db)):
+def list_reports(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Отримати всі звіти для профілю"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     reports = db.query(GeneratedReport).filter(
         GeneratedReport.profile_id == profile_id
     ).all()
@@ -8649,7 +9253,14 @@ def list_reports(profile_id: int, db: Session = Depends(get_db)):
     return report_list
 
 @app.get("/api/reports/ready")
-def get_ready_reports(profile_id: int, db: Session = Depends(get_db)):
+def get_ready_reports(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     reports = db.query(GeneratedReport).filter(
         GeneratedReport.profile_id == profile_id,
         GeneratedReport.status == "draft"
@@ -8667,11 +9278,16 @@ def get_ready_reports(profile_id: int, db: Session = Depends(get_db)):
     return ready_list
 
 @app.get("/api/reports/{report_id}/xml")
-def get_report_xml(report_id: int, db: Session = Depends(get_db)):
+def get_report_xml(report_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Завантажити XML звіту"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     if not report.xml_content:
         raise HTTPException(status_code=400, detail="XML контент відсутній")
@@ -8687,11 +9303,16 @@ def get_report_xml(report_id: int, db: Session = Depends(get_db)):
     )
 
 @app.get("/api/reports/{report_id}/view")
-def view_report_html(report_id: int, db: Session = Depends(get_db)):
+def view_report_html(report_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Перегляд звіту в HTML форматі"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     template = db.query(ReportTemplate).filter(ReportTemplate.id == report.template_id).first()
     
@@ -8750,11 +9371,16 @@ def view_report_html(report_id: int, db: Session = Depends(get_db)):
     )
 
 @app.get("/api/reports/{report_id}/download")
-def download_report(report_id: int, format: str = "xml", db: Session = Depends(get_db)):
+def download_report(report_id: int, format: str = "xml", user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Завантажити звіт у вказаному форматі (xml, json, pdf)"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     from fastapi.responses import Response
     
@@ -8787,11 +9413,16 @@ def download_report(report_id: int, format: str = "xml", db: Session = Depends(g
         raise HTTPException(status_code=400, detail="Непідтримуваний формат")
 
 @app.get("/api/reports/{report_id}/data")
-def get_report_data(report_id: int, db: Session = Depends(get_db)):
+def get_report_data(report_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Отримати дані звіту (JSON) для перегляду/редагування"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     if not report.data_json:
         return {"data": {}}
@@ -8803,7 +9434,7 @@ def get_report_data(report_id: int, db: Session = Depends(get_db)):
         return {"data": {}}
 
 @app.post("/api/reports/{report_id}/generate-xml")
-def generate_report_xml(report_id: int, db: Session = Depends(get_db)):
+def generate_report_xml(report_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Згенерувати XML для звіту"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
@@ -8812,6 +9443,10 @@ def generate_report_xml(report_id: int, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     from services.xml_generator import xml_generator
     from services.tax_calculator import tax_calculator
@@ -8908,11 +9543,16 @@ def generate_report_xml(report_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/reports/{report_id}/validate")
-def validate_report_xml(report_id: int, db: Session = Depends(get_db)):
+def validate_report_xml(report_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Валідація XML звіту проти XSD схеми"""
     report = db.query(GeneratedReport).filter(GeneratedReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Звіт не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == report.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: report does not belong to this user")
     
     if not report.xml_content:
         raise HTTPException(status_code=400, detail="XML контент відсутній")
@@ -8938,11 +9578,15 @@ def validate_report_xml(report_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/tax-calendar/regenerate")
-def regenerate_tax_calendar(profile_id: int, db: Session = Depends(get_db)):
+def regenerate_tax_calendar(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Перегенерація податкового календаря для профілю (видалення старих подій та створення нових)"""
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     try:
         # Видалити існуючі не сплачені події календаря для цього профілю
@@ -8965,19 +9609,23 @@ def get_tax_token_instructions_compat():
     return get_tax_api_instructions()
 
 @app.get("/api/tax/token-status/{profile_id}")
-def get_tax_token_status_compat(profile_id: int, db: Session = Depends(get_db)):
-    return get_tax_api_status(profile_id, db)
+def get_tax_token_status_compat(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    return get_tax_api_status(profile_id, user_id, db)
 
 @app.post("/api/tax/set-token")
-def set_tax_token_compat(req: SetTokenRequest, db: Session = Depends(get_db)):
+def set_tax_token_compat(req: SetTokenRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     setup_req = TaxApiSetupRequest(profile_id=req.profile_id, api_token=req.token)
-    return setup_tax_api(setup_req, db)
+    return setup_tax_api(setup_req, user_id, db)
 
 @app.post("/api/tax/check-debt")
-async def check_debt_endpoint(req: CheckDebtRequest, db: Session = Depends(get_db)):
+async def check_debt_endpoint(req: CheckDebtRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     from services.tax_api_service import TaxAPIService
@@ -9000,10 +9648,14 @@ async def check_debt_endpoint(req: CheckDebtRequest, db: Session = Depends(get_d
     }
 
 @app.post("/api/tax/check-reports")
-async def check_reports_endpoint(req: CheckReportsRequest, db: Session = Depends(get_db)):
+async def check_reports_endpoint(req: CheckReportsRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     from services.tax_api_service import TaxAPIService
@@ -9079,6 +9731,7 @@ class GeneratePaymentRequest(BaseModel):
 def get_tax_liabilities(
     profile_id: Optional[int] = None, 
     telegram_id: Optional[str] = None, 
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     from services.tax_calculator import TaxCalculator
@@ -9090,17 +9743,36 @@ def get_tax_liabilities(
             
     if not profile_id:
         return []
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     calculator = get_tax_calculator(db)
     return calculator.get_liabilities(profile_id, db)
 
 @app.get("/api/tax/summary")
-def get_tax_summary(profile_id: int, db: Session = Depends(get_db)):
+def get_tax_summary(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     calculator = get_tax_calculator(db)
     return calculator.get_summary(profile_id, db)
 
 @app.get("/api/tax/liabilities")
-def get_tax_liabilities_endpoint(profile_id: int, db: Session = Depends(get_db)):
+def get_tax_liabilities_endpoint(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     calculator = get_tax_calculator(db)
     return calculator.get_liabilities(profile_id, db)
 
@@ -9116,8 +9788,15 @@ class TaxRequisiteRequest(BaseModel):
     bank_name: Optional[str] = None
 
 @app.get("/api/tax-requisites/{profile_id}")
-def get_tax_requisites(profile_id: int, db: Session = Depends(get_db)):
+def get_tax_requisites(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Отримати реквізити податкових для профілю"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     requisites = db.query(TaxRequisite).filter(TaxRequisite.profile_id == profile_id).all()
     return [{
         "id": r.id,
@@ -9131,8 +9810,15 @@ def get_tax_requisites(profile_id: int, db: Session = Depends(get_db)):
     } for r in requisites]
 
 @app.post("/api/tax-requisites")
-def create_tax_requisite(req: TaxRequisiteRequest, db: Session = Depends(get_db)):
+def create_tax_requisite(req: TaxRequisiteRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Створити або оновити реквізити податкових"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     # Check if requisite already exists for this tax_type
     existing = db.query(TaxRequisite).filter(
         TaxRequisite.profile_id == req.profile_id,
@@ -9163,11 +9849,16 @@ def create_tax_requisite(req: TaxRequisiteRequest, db: Session = Depends(get_db)
         return {"id": requisite.id, "message": "created"}
 
 @app.delete("/api/tax-requisites/{requisite_id}")
-def delete_tax_requisite(requisite_id: int, db: Session = Depends(get_db)):
+def delete_tax_requisite(requisite_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Видалити реквізити податкових"""
     requisite = db.query(TaxRequisite).filter(TaxRequisite.id == requisite_id).first()
     if not requisite:
         raise HTTPException(status_code=404, detail="Requisite not found")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == requisite.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: requisite does not belong to this user")
     db.delete(requisite)
     db.commit()
     return {"message": "deleted"}
@@ -9186,11 +9877,15 @@ class CreateSubscriptionRequest(BaseModel):
     period: str = "month"  # 'month', 'year'
 
 @app.post("/api/payments/create-tax-payment")
-def create_tax_payment_liqpay(req: CreateTaxPaymentRequest, db: Session = Depends(get_db)):
+def create_tax_payment_liqpay(req: CreateTaxPaymentRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Створити платіж для податку через LiqPay"""
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     # Create payment record
     order_id = f"tax_{req.profile_id}_{req.tax_type}_{req.period}_{int(datetime.now().timestamp())}"
@@ -9222,11 +9917,15 @@ def create_tax_payment_liqpay(req: CreateTaxPaymentRequest, db: Session = Depend
     }
 
 @app.post("/api/payments/create-subscription")
-def create_subscription_liqpay(req: CreateSubscriptionRequest, db: Session = Depends(get_db)):
+def create_subscription_liqpay(req: CreateSubscriptionRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Створити підписку через LiqPay"""
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     # Check if subscription already exists
     existing_sub = db.query(Subscription).filter(Subscription.profile_id == req.profile_id).first()
@@ -9286,8 +9985,15 @@ def create_subscription_liqpay(req: CreateSubscriptionRequest, db: Session = Dep
     }
 
 @app.post("/api/payments/cancel-subscription")
-def cancel_subscription(req: CreateSubscriptionRequest, db: Session = Depends(get_db)):
+def cancel_subscription(req: CreateSubscriptionRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Скасувати підписку"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     subscription = db.query(Subscription).filter(Subscription.profile_id == req.profile_id).first()
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -9300,44 +10006,56 @@ def cancel_subscription(req: CreateSubscriptionRequest, db: Session = Depends(ge
     return {"message": "Subscription cancelled"}
 
 @app.post("/api/liqpay/callback")
-def liqpay_callback(data: str = Form(...), signature: str = Form(...), db: Session = Depends(get_db)):
-    """Webhook callback від LiqPay"""
-    # Verify signature
-    if not liqpay_service.verify_callback(data, signature):
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    
+async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
+    """Webhook callback від LiqPay (Unified)"""
+    try:
+        form_data = await request.form()
+        data = form_data.get('data')
+        signature = form_data.get('signature')
+    except Exception as e:
+        logger.error(f"Error parsing form data: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid request form data")
+        
+    if not data or not signature:
+        raise HTTPException(status_code=400, detail="Missing data or signature")
+        
+    # Verify signature inside a try/except block to avoid 500 error on fly.io
+    try:
+        if not liqpay_service.verify_callback(data, signature):
+            raise HTTPException(status_code=403, detail="Invalid signature verification failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signature validation error: {str(e)}")
+        raise HTTPException(status_code=403, detail="Signature validation error")
+        
     # Decode data
-    callback_data = liqpay_service.decode_callback_data(data)
-    
+    try:
+        callback_data = liqpay_service.decode_callback_data(data)
+    except Exception as e:
+        logger.error(f"Error decoding callback data: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid encoded payload data")
+        
     order_id = callback_data.get("order_id", "")
     status = callback_data.get("status", "")
     amount = callback_data.get("amount", "0")
+    liqpay_payment_id = callback_data.get("payment_id")
     
     logger.info(f"LiqPay callback: order_id={order_id}, status={status}, amount={amount}")
     
     # Parse order_id to determine type
     if order_id.startswith("tax_"):
         # Tax payment
-        parts = order_id.split("_")
-        if len(parts) >= 4:
-            profile_id = int(parts[1])
-            tax_type = parts[2]
-            period = parts[3]
+        payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
+        if payment:
+            if status in ("success", "subscribed", "sandbox"):
+                payment.status = "paid"
+                payment.paid_at = datetime.utcnow()
+                payment.liqpay_payment_id = liqpay_payment_id
+            elif status in ("failed", "error"):
+                payment.status = "failed"
+            db.commit()
             
-            # Update payment record
-            payment = db.query(Payment).filter(
-                Payment.liqpay_order_id == order_id
-            ).first()
-            
-            if payment:
-                if status == "success" or status == "subscribed":
-                    payment.status = "paid"
-                    payment.paid_at = datetime.utcnow()
-                    payment.liqpay_payment_id = callback_data.get("payment_id")
-                elif status == "failed" or status == "error":
-                    payment.status = "failed"
-                db.commit()
-    
     elif order_id.startswith("sub_"):
         # Subscription payment
         parts = order_id.split("_")
@@ -9347,44 +10065,40 @@ def liqpay_callback(data: str = Form(...), signature: str = Form(...), db: Sessi
             period = parts[3] if len(parts) >= 4 else "month"
             
             # Update subscription
-            subscription = db.query(Subscription).filter(
-                Subscription.profile_id == profile_id
-            ).first()
-            
+            subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
             if subscription:
-                if status == "success" or status == "subscribed":
+                if status in ("success", "subscribed", "sandbox"):
                     subscription.status = "active"
                     subscription.plan = plan
                     subscription.plan_type = plan
-                    # Map period to days
+                    subscription.payment_period = "yearly" if period in ["year", "yearly"] else "monthly"
                     days = 365 if period in ["year", "yearly"] else 30
                     subscription.expires_at = datetime.utcnow() + timedelta(days=days)
                     subscription.last_payment_amount = int(float(amount) * 100)  # in kopecks
                     subscription.last_payment_date = datetime.utcnow()
-                    subscription.liqpay_order_id = callback_data.get("payment_id")
-                elif status == "failed" or status == "error":
+                    subscription.liqpay_order_id = liqpay_payment_id
+                    subscription.auto_renew = True # Real payment enables auto-renewal!
+                elif status in ("failed", "error"):
                     subscription.status = "failed"
                 db.commit()
                 
             # Update Payment record
-            payment = db.query(Payment).filter(
-                Payment.liqpay_order_id == order_id
-            ).first()
+            payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
             if payment:
-                if status == "success" or status == "subscribed":
+                if status in ("success", "subscribed", "sandbox"):
                     payment.status = "paid"
                     payment.paid_at = datetime.utcnow()
-                    payment.liqpay_payment_id = callback_data.get("payment_id")
-                elif status == "failed" or status == "error":
+                    payment.liqpay_payment_id = liqpay_payment_id
+                elif status in ("failed", "error"):
                     payment.status = "failed"
                 db.commit()
-    
+                
     return {"status": "ok"}
 
 @app.post("/api/liqpay/webhook")
-def liqpay_webhook(data: str = Form(...), signature: str = Form(...), db: Session = Depends(get_db)):
+async def liqpay_webhook(request: Request, db: Session = Depends(get_db)):
     """Webhook callback від LiqPay (Alternative Endpoint)"""
-    return liqpay_callback(data, signature, db)
+    return await liqpay_callback(request, db)
 
 # --- Feature Access Control ---
 
@@ -9407,8 +10121,15 @@ def check_feature_access(profile_id: int, feature: str, db: Session) -> bool:
     return feature in FEATURES.get(plan, [])
 
 @app.get("/api/subscription/{profile_id}")
-def get_subscription(profile_id: int, db: Session = Depends(get_db)):
+def get_subscription(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Отримати інформацію про підписку"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
     
     if not subscription:
@@ -9437,10 +10158,14 @@ def get_subscription(profile_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/payments/generate")
-def generate_payment(req: GeneratePaymentRequest, db: Session = Depends(get_db)):
+def generate_payment(req: GeneratePaymentRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     region = req.region
     if not region:
@@ -9608,10 +10333,15 @@ def generate_payment(req: GeneratePaymentRequest, db: Session = Depends(get_db))
     }
 
 @app.post("/api/payments/{payment_id}/confirm")
-def confirm_payment(payment_id: int, db: Session = Depends(get_db)):
+def confirm_payment(payment_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Платіж не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == payment.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: payment does not belong to this user")
     payment.status = "paid"
     payment.paid_at = datetime.now()
     
@@ -9635,9 +10365,17 @@ async def export_transactions(
     format: str = "csv",
     start_date: str = None,
     end_date: str = None,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     """Експорт транзакцій в CSV або Excel"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     try:
         import pandas as pd
     except ImportError:
@@ -9718,9 +10456,17 @@ async def export_transactions(
 async def export_reports_history(
     profile_id: int,
     format: str = "csv",
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     """Експорт історії звітів"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     try:
         import pandas as pd
     except ImportError:
@@ -9773,9 +10519,17 @@ async def export_taxes_calendar(
     profile_id: int,
     format: str = "csv",
     year: int = None,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     """Експорт податкового календаря"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     try:
         import pandas as pd
     except ImportError:
@@ -9838,12 +10592,17 @@ class AIAnalyzeTransactionRequest(BaseModel):
     transaction_id: int
 
 @app.post("/api/ai/analyze-transaction")
-async def ai_analyze_transaction(req: AIAnalyzeTransactionRequest, db: Session = Depends(get_db)):
+async def ai_analyze_transaction(req: AIAnalyzeTransactionRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """ШІ-аналіз транзакції"""
     try:
         tx = db.query(ParsedPayment).filter(ParsedPayment.id == req.transaction_id).first()
         if not tx:
             raise HTTPException(status_code=404, detail="Транзакцію не знайдено")
+        
+        # Authorization check
+        profile = db.query(Profile).filter(Profile.id == tx.profile_id).first()
+        if profile and user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: transaction does not belong to this user")
         
         result = await ai_service.analyze_transaction(tx.purpose or "", tx.amount or 0.0)
         return result
@@ -9855,11 +10614,15 @@ class AIChatRequest(BaseModel):
     question: str
 
 @app.post("/api/ai/chat")
-async def ai_chat(req: AIChatRequest, db: Session = Depends(get_db)):
+async def ai_chat(req: AIChatRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Чат-асистент для податкових питань"""
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     profile_dict = {
         "tax_system": profile.tax_system,
@@ -9872,11 +10635,15 @@ async def ai_chat(req: AIChatRequest, db: Session = Depends(get_db)):
     return {"answer": answer}
 
 @app.get("/api/ai/tax-news")
-async def ai_tax_news(profile_id: int, db: Session = Depends(get_db)):
+async def ai_tax_news(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Отримати останні зміни в законодавстві з ШІ-аналізом"""
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     profile_dict = {
         "tax_system": profile.tax_system,
@@ -9904,10 +10671,14 @@ async def ai_tax_news(profile_id: int, db: Session = Depends(get_db)):
     return relevant_changes
 
 @app.get("/api/legislation/changes")
-async def get_legislation_changes(profile_id: int, limit: int = 10, db: Session = Depends(get_db)):
+async def get_legislation_changes(profile_id: int, limit: int = 10, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     changes = db.query(LegislativeChange).order_by(LegislativeChange.detected_at.desc()).limit(limit).all()
     
@@ -9931,10 +10702,14 @@ async def get_legislation_changes(profile_id: int, limit: int = 10, db: Session 
     return result
 
 @app.post("/api/legislation/subscribe")
-async def subscribe_legislation(profile_id: int, notify_telegram: bool = True, db: Session = Depends(get_db)):
+async def subscribe_legislation(profile_id: int, notify_telegram: bool = True, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
     sub = db.query(LegislationSubscription).filter(LegislationSubscription.profile_id == profile_id).first()
     if sub:
@@ -9946,12 +10721,26 @@ async def subscribe_legislation(profile_id: int, notify_telegram: bool = True, d
     return {"status": "success", "subscribed": True}
 
 @app.get("/api/legislation/subscribe/status/{profile_id}")
-async def get_subscribe_status(profile_id: int, db: Session = Depends(get_db)):
+async def get_subscribe_status(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     sub = db.query(LegislationSubscription).filter(LegislationSubscription.profile_id == profile_id).first()
     return {"subscribed": sub.notify_telegram if sub else False}
 
 @app.delete("/api/legislation/subscribe/{profile_id}")
-async def unsubscribe_legislation(profile_id: int, db: Session = Depends(get_db)):
+async def unsubscribe_legislation(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     sub = db.query(LegislationSubscription).filter(LegislationSubscription.profile_id == profile_id).first()
     if sub:
         db.delete(sub)
@@ -9997,105 +10786,165 @@ def liqpay_decode(data: str, private_key: str) -> dict:
     return json.loads(json_str)
 
 @app.post("/api/payments/create")
-async def create_payment(req: dict, db: Session = Depends(get_db)):
-    """Створити платіж для сплати податку"""
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    public_key = os.getenv("LIQPAY_PUBLIC_KEY")
-    private_key = os.getenv("LIQPAY_PRIVATE_KEY")
-    
-    if not public_key or not private_key:
-        raise HTTPException(status_code=500, detail="LiqPay credentials not configured")
-    
-    amount = req.get('amount', 0)
-    profile_id = req.get('profile_id')
-    tax_type = req.get('tax_type')
-    period = req.get('period')
-    
-    if not all([amount, profile_id, tax_type, period]):
-        raise HTTPException(status_code=400, detail="Missing required fields")
-    
-    order_id = f"tax_{profile_id}_{tax_type}_{period}_{uuid.uuid4().hex[:8]}"
-    
-    # Зберігаємо в БД
-    payment = Payment(
-        profile_id=profile_id,
-        tax_type=tax_type,
-        amount=amount,
-        period=period,
-        status="pending",
-        liqpay_order_id=order_id,
-        payment_type="tax"
-    )
-    db.add(payment)
-    db.commit()
-    
-    # Створюємо дані для LiqPay
-    liqpay_data = {
-        "public_key": public_key,
-        "version": "3",
-        "action": "pay",
-        "amount": str(amount),
-        "currency": "UAH",
-        "description": f"Сплата податку {tax_type} за {period}",
-        "order_id": order_id,
-        "server_url": "https://unitas-backend.fly.dev/api/liqpay/callback",
-        "result_url": f"https://unitas-frontend.fly.dev/payment-result?order_id={order_id}",
-        "language": "uk"
-    }
-    
-    encoded_data = liqpay_encode(liqpay_data, private_key)
-    
-    return {
-        "data": encoded_data,
-        "signature": liqpay_data["public_key"],
-        "order_id": order_id
-    }
-
-@app.post("/api/liqpay/callback")
-async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
-    """Webhook від LiqPay після оплати"""
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    private_key = os.getenv("LIQPAY_PRIVATE_KEY")
-    
-    if not private_key:
-        raise HTTPException(status_code=500, detail="LiqPay credentials not configured")
-    
-    data = await request.form()
-    liqpay_data_str = data.get('data')
-    signature = data.get('signature')
-    
-    if not liqpay_data_str or not signature:
-        raise HTTPException(status_code=400, detail="Missing data or signature")
-    
-    try:
-        response = liqpay_decode(liqpay_data_str, private_key)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid signature: {str(e)}")
-    
-    if response.get('status') == 'success':
-        order_id = response.get('order_id')
-        liqpay_payment_id = response.get('payment_id')
+async def create_payment_combined(req: dict, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Спільний ендпоінт для створення платежу (податків або підписки)"""
+    if "tax_type" in req:
+        amount = req.get('amount', 0)
+        profile_id = req.get('profile_id')
+        tax_type = req.get('tax_type')
+        period = req.get('period')
         
-        # Оновлюємо статус в БД
-        payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
-        if payment:
-            payment.status = "paid"
-            payment.liqpay_payment_id = liqpay_payment_id
-            payment.paid_at = datetime.now()
+        if not all([amount, profile_id, tax_type, period]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Authorization check
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+        
+        # Create LiqPay form using the service
+        liqpay_form = liqpay_service.create_tax_payment(
+            profile_id=profile_id,
+            tax_type=tax_type,
+            amount=amount,
+            period=period
+        )
+        
+        order_id = liqpay_form.get("order_id")
+        
+        payment = Payment(
+            profile_id=profile_id,
+            tax_type=tax_type,
+            amount=amount,
+            period=period,
+            status="pending",
+            liqpay_order_id=order_id,
+            payment_type="tax"
+        )
+        db.add(payment)
+        db.commit()
+        
+        return {
+            "data": liqpay_form["data"],
+            "signature": liqpay_form["signature"],
+            "liqpay_data": liqpay_form["data"],
+            "liqpay_signature": liqpay_form["signature"],
+            "api_url": liqpay_form["api_url"],
+            "order_id": order_id,
+            "payment_required": True
+        }
+    else:
+        profile_id = req.get('profile_id')
+        plan = req.get('plan_type')
+        payment_period = req.get('payment_period')
+        
+        if not all([profile_id, plan, payment_period]):
+            raise HTTPException(status_code=400, detail="Missing required subscription fields")
+            
+        profile = db.query(Profile).filter(Profile.id == profile_id).first()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+        # Authorization check
+        if user_id is not None and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+            
+        period = "month" if payment_period == "monthly" else "year"
+        existing_sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+        
+        if plan == "free":
+            if existing_sub:
+                existing_sub.plan = "free"
+                existing_sub.plan_type = "free"
+                existing_sub.payment_period = None
+                existing_sub.status = "active"
+                existing_sub.expires_at = None
+                existing_sub.updated_at = datetime.utcnow()
+                db.commit()
+            else:
+                subscription = Subscription(
+                    profile_id=profile_id,
+                    plan="free",
+                    plan_type="free",
+                    status="active"
+                )
+                db.add(subscription)
+                db.commit()
+            return {"message": "Free plan activated", "payment_required": False}
+            
+        pricing = db.query(Pricing).filter(
+            Pricing.plan_type == plan,
+            Pricing.payment_period == payment_period
+        ).first()
+        price_val = pricing.price if pricing else (499 if payment_period == "monthly" else 4989)
+        
+        liqpay_form = liqpay_service.create_subscription_payment(
+            profile_id=profile_id,
+            plan=plan,
+            period=period,
+            amount=price_val
+        )
+        
+        order_id = liqpay_form.get("order_id", "")
+        
+        if existing_sub:
+            existing_sub.plan = plan
+            existing_sub.plan_type = plan
+            existing_sub.payment_period = payment_period
+            existing_sub.status = "pending"
+            existing_sub.liqpay_order_id = order_id
+            existing_sub.updated_at = datetime.utcnow()
             db.commit()
-    
-    return {"status": "ok"}
+        else:
+            subscription = Subscription(
+                profile_id=profile_id,
+                plan=plan,
+                plan_type=plan,
+                payment_period=payment_period,
+                status="pending",
+                liqpay_order_id=order_id
+            )
+            db.add(subscription)
+            db.commit()
+            
+        pending_payment = Payment(
+            profile_id=profile_id,
+            tax_type=plan,
+            amount=float(price_val),
+            period=payment_period,
+            status="pending",
+            liqpay_order_id=order_id,
+            payment_type="subscription"
+        )
+        db.add(pending_payment)
+        db.commit()
+        
+        return {
+            "subscription_id": existing_sub.id if existing_sub else subscription.id,
+            "data": liqpay_form["data"],
+            "signature": liqpay_form["signature"],
+            "liqpay_data": liqpay_form["data"],
+            "liqpay_signature": liqpay_form["signature"],
+            "api_url": liqpay_form["api_url"],
+            "order_id": order_id,
+            "payment_required": True
+        }
+
+# Removed duplicate liqpay_callback endpoint
 
 @app.get("/api/payments/status/{order_id}")
-async def get_payment_status(order_id: str, db: Session = Depends(get_db)):
+async def get_payment_status(order_id: str, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Перевірити статус платежу"""
     payment = db.query(Payment).filter(Payment.liqpay_order_id == order_id).first()
     if not payment:
         return {"status": "not_found"}
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == payment.profile_id).first()
+    if profile and user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: payment does not belong to this user")
     
     return {
         "status": payment.status,
@@ -10119,116 +10968,55 @@ def get_pricing_list(db: Session = Depends(get_db)):
         for p in pricings
     ]
 
-class CreatePaymentRequest(BaseModel):
-    profile_id: int
-    plan_type: str
-    payment_period: str
 
-@app.post("/api/payments/create")
-def create_payment(req: CreatePaymentRequest, db: Session = Depends(get_db)):
-    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Профіль не знайдено")
-        
-    plan = req.plan_type
-    period = "month" if req.payment_period == "monthly" else "year"
-    
-    existing_sub = db.query(Subscription).filter(Subscription.profile_id == req.profile_id).first()
-    
-    if plan == "free":
-        if existing_sub:
-            existing_sub.plan = "free"
-            existing_sub.plan_type = "free"
-            existing_sub.payment_period = None
-            existing_sub.status = "active"
-            existing_sub.expires_at = None
-            existing_sub.updated_at = datetime.utcnow()
-            db.commit()
-        else:
-            subscription = Subscription(
-                profile_id=req.profile_id,
-                plan="free",
-                plan_type="free",
-                status="active"
-            )
-            db.add(subscription)
-            db.commit()
-        return {"message": "Free plan activated", "payment_required": False}
-        
-    pricing = db.query(Pricing).filter(
-        Pricing.plan_type == plan,
-        Pricing.payment_period == req.payment_period
-    ).first()
-    price_val = pricing.price if pricing else (499 if req.payment_period == "monthly" else 4989)
-    
-    liqpay_form = liqpay_service.create_subscription_payment(
-        profile_id=req.profile_id,
-        plan=plan,
-        period=period,
-        amount=price_val
-    )
-    
-    order_id = liqpay_form.get("order_id", "")
-    
-    if existing_sub:
-        existing_sub.plan = plan
-        existing_sub.plan_type = plan
-        existing_sub.payment_period = req.payment_period
-        existing_sub.status = "pending"
-        existing_sub.liqpay_order_id = order_id
-        existing_sub.updated_at = datetime.utcnow()
-        db.commit()
-    else:
-        subscription = Subscription(
-            profile_id=req.profile_id,
-            plan=plan,
-            plan_type=plan,
-            payment_period=req.payment_period,
-            status="pending",
-            liqpay_order_id=order_id
-        )
-        db.add(subscription)
-        db.commit()
-        
-    pending_payment = Payment(
-        profile_id=req.profile_id,
-        tax_type=plan,
-        amount=float(price_val),
-        period=req.payment_period,
-        status="pending",
-        liqpay_order_id=order_id,
-        payment_type="subscription"
-    )
-    db.add(pending_payment)
-    db.commit()
-    
-    return {
-        "subscription_id": existing_sub.id if existing_sub else subscription.id,
-        "liqpay_data": liqpay_form["data"],
-        "liqpay_signature": liqpay_form["signature"],
-        "api_url": liqpay_form["api_url"],
-        "payment_required": True
-    }
 
 # Subscription API endpoints
 @app.get("/api/subscription/current/{profile_id}")
-async def get_current_subscription(profile_id: int, db: Session = Depends(get_db)):
-    sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+async def get_current_subscription(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    sub = db.query(Subscription).filter(
+        Subscription.profile_id == profile_id,
+        Subscription.status.in_(["active", "pending"])
+    ).order_by(Subscription.id.desc()).first()
     if not sub:
-        return {"plan": "free", "plan_type": "free", "payment_period": None, "expires_at": None, "auto_renew": False}
+        return {"plan": "free", "plan_type": "free", "payment_period": None, "expires_at": None, "auto_renew": False, "status": "active"}
+    
+    from datetime import datetime
+    if sub.expires_at and sub.expires_at < datetime.utcnow() and sub.status == "active":
+        sub.status = "expired"
+        db.commit()
+        return {"plan": "free", "plan_type": "free", "payment_period": None, "expires_at": sub.expires_at.isoformat(), "auto_renew": getattr(sub, "auto_renew", False), "status": "expired"}
+        
     return {
         "plan": sub.plan,
         "plan_type": sub.plan_type or sub.plan,
         "payment_period": sub.payment_period,
         "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
-        "auto_renew": sub.auto_renew,
+        "auto_renew": getattr(sub, "auto_renew", False),
         "status": sub.status
     }
 
 @app.post("/api/subscription/upgrade/{profile_id}")
-async def upgrade_to_business(profile_id: int, db: Session = Depends(get_db)):
-    expires_at = datetime.utcnow() + timedelta(days=30)
+async def upgrade_to_business(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     existing = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    
+    if existing and getattr(existing, "demo_activated", False):
+        raise HTTPException(status_code=400, detail="Швидка демо-активація вже була використана для цього профілю")
+        
+    expires_at = datetime.utcnow() + timedelta(days=7)
     
     if existing:
         existing.plan = "business"
@@ -10236,7 +11024,8 @@ async def upgrade_to_business(profile_id: int, db: Session = Depends(get_db)):
         existing.payment_period = "monthly"
         existing.status = "active"
         existing.expires_at = expires_at
-        existing.auto_renew = True
+        existing.auto_renew = False
+        existing.demo_activated = True
         existing.updated_at = datetime.utcnow()
     else:
         sub = Subscription(
@@ -10246,7 +11035,8 @@ async def upgrade_to_business(profile_id: int, db: Session = Depends(get_db)):
             payment_period="monthly",
             status="active",
             expires_at=expires_at,
-            auto_renew=True
+            auto_renew=False,
+            demo_activated=True
         )
         db.add(sub)
     db.commit()
@@ -10255,12 +11045,19 @@ async def upgrade_to_business(profile_id: int, db: Session = Depends(get_db)):
     price_amount = pricing.price if pricing else 499
     
     return {
-        "message": f"Підписку Business активовано на 30 днів за {price_amount} грн",
+        "message": f"Демо-підписку Business успішно активовано на 7 днів без автопродовження",
         "price": price_amount
     }
 
 @app.post("/api/subscription/cancel/{profile_id}")
-async def cancel_subscription_endpoint(profile_id: int, db: Session = Depends(get_db)):
+async def cancel_subscription_endpoint(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
     if sub:
         sub.auto_renew = False
@@ -10268,7 +11065,14 @@ async def cancel_subscription_endpoint(profile_id: int, db: Session = Depends(ge
     return {"message": "Автопродовження вимкнено"}
 
 @app.get("/api/subscription/usage/{profile_id}")
-async def get_usage(profile_id: int, db: Session = Depends(get_db)):
+async def get_usage(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     current_month = datetime.utcnow().replace(day=1).date()
     usage = db.query(StatementUsage).filter(
         StatementUsage.profile_id == profile_id,
@@ -10277,7 +11081,14 @@ async def get_usage(profile_id: int, db: Session = Depends(get_db)):
     return {"used": usage.count if usage else 0, "limit": 5}
 
 @app.get("/api/payments/profile/{profile_id}")
-async def get_profile_payments(profile_id: int, db: Session = Depends(get_db)):
+async def get_profile_payments(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     payments = db.query(Payment).filter(Payment.profile_id == profile_id).order_by(Payment.created_at.desc()).all()
     return [
         {
@@ -10365,30 +11176,7 @@ def admin_delete_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
         
-    # Delete related elements
-    db.query(TaxEvent).filter(TaxEvent.profile_id == profile_id).delete()
-    db.query(Employee).filter(Employee.profile_id == profile_id).delete()
-    db.query(ParsedPayment).filter(ParsedPayment.profile_id == profile_id).delete()
-    db.query(GeneratedReport).filter(GeneratedReport.profile_id == profile_id).delete()
-    db.query(ReportSubmission).filter(ReportSubmission.profile_id == profile_id).delete()
-    db.query(Certificate).filter(Certificate.profile_id == profile_id).delete()
-    db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == profile_id).delete()
-    db.query(BankConnection).filter(BankConnection.profile_id == profile_id).delete()
-    db.query(StatementUsage).filter(StatementUsage.profile_id == profile_id).delete()
-    db.query(TaxRequisite).filter(TaxRequisite.profile_id == profile_id).delete()
-    db.query(PaymentHistory).filter(PaymentHistory.profile_id == profile_id).delete()
-    db.query(Payment).filter(Payment.profile_id == profile_id).delete()
-    db.query(Subscription).filter(Subscription.profile_id == profile_id).delete()
-
-    statements = db.query(BankStatement).filter(BankStatement.profile_id == profile_id).all()
-    for stmt in statements:
-        db.query(ParsedPayment).filter(ParsedPayment.statement_id == stmt.id).delete()
-        db.delete(stmt)
-        
-    company = db.query(Company).filter(Company.id == profile_id).first()
-    if company:
-        db.delete(company)
-        
+    delete_profile_data_helper(profile_id, db)
     db.delete(profile)
     db.commit()
     return {"message": "Профіль успішно видалено"}
@@ -10529,10 +11317,17 @@ async def list_banks():
     }
 
 @app.get("/api/banks/{bank_name}/auth-url")
-async def get_bank_auth_url(bank_name: str, profile_id: int):
+async def get_bank_auth_url(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Get OAuth authorization URL for a bank"""
     if bank_name not in BANKS:
         raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     state = f"{bank_name}:{profile_id}"
     auth_url = bank_oauth_service.get_auth_url(bank_name, state)
@@ -10604,8 +11399,15 @@ async def bank_oauth_callback(bank_name: str, code: str, state: str, db: Session
         raise HTTPException(status_code=500, detail=f"OAuth error: {str(e)}")
 
 @app.get("/api/banks/connections")
-async def get_bank_connections(profile_id: int, db: Session = Depends(get_db)):
+async def get_bank_connections(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Get user's bank connections"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     connections = db.query(BankConnection).filter(
         BankConnection.profile_id == profile_id,
         BankConnection.is_active == True
@@ -10626,10 +11428,17 @@ async def get_bank_connections(profile_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/banks/{bank_name}/sync")
-async def sync_bank(bank_name: str, profile_id: int, db: Session = Depends(get_db)):
+async def sync_bank(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Force sync bank transactions"""
     if bank_name not in BANKS:
         raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     
     # Get connection
     conn = db.query(BankConnection).filter(
@@ -10685,8 +11494,15 @@ async def sync_bank(bank_name: str, profile_id: int, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
 
 @app.delete("/api/banks/{bank_name}/disconnect")
-async def disconnect_bank(bank_name: str, profile_id: int, db: Session = Depends(get_db)):
+async def disconnect_bank(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Disconnect bank"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     conn = db.query(BankConnection).filter(
         BankConnection.profile_id == profile_id,
         BankConnection.bank_name == bank_name
@@ -10792,11 +11608,16 @@ def get_latest_manual_dps_table(profile_id: int, db: Session) -> list:
 async def upload_dps_statement(
     profile_id: int = Form(...),
     file: UploadFile = File(...),
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     try:
         content = await file.read()
         from ai_parser.dps_parser import DPSParser
@@ -10836,10 +11657,14 @@ async def upload_dps_statement(
         raise HTTPException(status_code=500, detail=f"Помилка обробки виписки ДПС: {str(e)}")
 
 @app.post("/api/dps/fetch-detailed")
-async def fetch_detailed_dps_data(req: CheckDebtRequest, db: Session = Depends(get_db)):
+async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    
+    # Authorization check
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
     setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
     
     try:
@@ -10882,8 +11707,15 @@ async def fetch_detailed_dps_data(req: CheckDebtRequest, db: Session = Depends(g
     }
 
 @app.get("/api/dps/payment-deadlines")
-async def get_payment_deadlines(profile_id: int, db: Session = Depends(get_db)):
+async def get_payment_deadlines(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Get payment deadlines from the latest DPS settlements"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     # Find the latest recorded_at timestamp
     latest_row = db.query(DPSSettlement).filter(
         DPSSettlement.profile_id == profile_id
@@ -10917,7 +11749,14 @@ async def get_payment_deadlines(profile_id: int, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/dps/statements")
-def get_dps_statements(profile_id: int, db: Session = Depends(get_db)):
+def get_dps_statements(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     from sqlalchemy import func
     results = db.query(
         DPSSettlement.recorded_at,
@@ -10943,7 +11782,14 @@ def get_dps_statements(profile_id: int, db: Session = Depends(get_db)):
     return statements
 
 @app.delete("/api/dps/statements")
-def delete_dps_statement(profile_id: int, recorded_at: str, db: Session = Depends(get_db)):
+def delete_dps_statement(profile_id: int, recorded_at: str, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     from datetime import datetime, timedelta
     try:
         dt = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
@@ -10965,6 +11811,711 @@ def delete_dps_statement(profile_id: int, recorded_at: str, db: Session = Depend
     except Exception as sync_err:
         print(f"[Calendar Sync Error] Failed to sync calendar after deletion: {sync_err}")
     return {"status": "ok", "deleted_count": deleted}
+
+@app.post("/api/search/semantic")
+async def semantic_search(
+    query: str = Form(...),
+    profile_id: int = Form(...),
+    search_type: str = Form("transactions"),  # transactions, invoices, documents
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Семантичний пошук за змістом"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.embeddings_service import embeddings_service
+    
+    # Get documents based on search type
+    documents = []
+    
+    if search_type == "transactions":
+        transactions = db.query(Transaction).filter(Transaction.profile_id == profile_id).all()
+        for tx in transactions:
+            documents.append({
+                "id": tx.id,
+                "text": f"{tx.purpose} {tx.amount} {tx.date}",
+                "type": "transaction",
+                "metadata": {
+                    "amount": tx.amount,
+                    "date": tx.date,
+                    "purpose": tx.purpose,
+                    "type": tx.type
+                }
+            })
+    elif search_type == "invoices":
+        invoices = db.query(Invoice).filter(Invoice.profile_id == profile_id).all()
+        for inv in invoices:
+            documents.append({
+                "id": inv.id,
+                "text": f"{inv.client_name} {inv.amount} {inv.services}",
+                "type": "invoice",
+                "metadata": {
+                    "amount": inv.amount,
+                    "client_name": inv.client_name,
+                    "services": inv.services,
+                    "date": inv.date
+                }
+            })
+    elif search_type == "documents":
+        docs = db.query(Document).filter(Document.profile_id == profile_id).all()
+        for doc in docs:
+            documents.append({
+                "id": doc.id,
+                "text": f"{doc.name} {doc.type}",
+                "type": "document",
+                "metadata": {
+                    "name": doc.name,
+                    "type": doc.type,
+                    "date": doc.uploaded_at
+                }
+            })
+    
+    # Perform semantic search
+    results = await embeddings_service.search_similar(query, documents, top_k=10)
+    
+    return {
+        "query": query,
+        "search_type": search_type,
+        "results": results,
+        "count": len(results)
+    }
+
+@app.get("/api/recommendations/{profile_id}")
+async def get_recommendations(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Отримати проактивні рекомендації для профілю"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.recommendations_service import recommendations_service
+    
+    # Get transactions for analysis
+    transactions = db.query(Transaction).filter(Transaction.profile_id == profile_id).all()
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "tax_system": profile.tax_system,
+        "group": profile.group,
+        "tax_rate": profile.tax_rate if hasattr(profile, 'tax_rate') else None
+    }
+    
+    recommendations = await recommendations_service.generate_smart_recommendations(
+        profile_data,
+        transactions_data
+    )
+    
+    return {
+        "profile_id": profile_id,
+        "recommendations": recommendations,
+        "count": len(recommendations)
+    }
+
+@app.post("/api/declarations/generate")
+async def generate_declaration(
+    profile_id: int,
+    period: str = Form(...),
+    use_ai: bool = Form(False),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Генерація податкової декларації"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.declaration_service import declaration_service
+    
+    # Parse period and get transactions
+    try:
+        year, start_month, end_month = declaration_service.parse_period(period)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid period format: {e}")
+    
+    # Get transactions for the period
+    transactions = db.query(Transaction).filter(
+        Transaction.profile_id == profile_id,
+        Transaction.date >= date(year, start_month, 1),
+        Transaction.date <= date(year, end_month, 28)  # Simplified end date
+    ).all()
+    
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "name": profile.name,
+        "tax_system": profile.tax_system,
+        "group": profile.group,
+        "tax_id": profile.tax_id,
+        "tax_rate": 5 if profile.group == 3 else (10 if profile.group == 2 else 20)  # Simplified
+    }
+    
+    # Generate declaration
+    if use_ai:
+        declaration = await declaration_service.generate_declaration_with_ai(
+            profile_data,
+            period,
+            transactions_data
+        )
+    else:
+        declaration = declaration_service.generate_fop_declaration(
+            profile_data,
+            period,
+            transactions_data
+        )
+    
+    return declaration
+
+@app.get("/api/declarations/{profile_id}/text")
+async def get_declaration_text(
+    profile_id: int,
+    period: str,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Отримати декларацію в текстовому форматі"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.declaration_service import declaration_service
+    
+    # Generate declaration (simplified, without AI for text output)
+    try:
+        year, start_month, end_month = declaration_service.parse_period(period)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid period format: {e}")
+    
+    transactions = db.query(Transaction).filter(
+        Transaction.profile_id == profile_id,
+        Transaction.date >= date(year, start_month, 1),
+        Transaction.date <= date(year, end_month, 28)
+    ).all()
+    
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "name": profile.name,
+        "tax_system": profile.tax_system,
+        "group": profile.group,
+        "tax_id": profile.tax_id,
+        "tax_rate": 5 if profile.group == 3 else (10 if profile.group == 2 else 20)
+    }
+    
+    declaration = declaration_service.generate_fop_declaration(
+        profile_data,
+        period,
+        transactions_data
+    )
+    
+    text = declaration_service.generate_declaration_text(declaration)
+    
+    return {
+        "text": text,
+        "period": period,
+        "profile_id": profile_id
+    }
+
+@app.post("/api/invoices/generate")
+async def generate_invoice(
+    profile_id: int,
+    client_name: str = Form(...),
+    client_tax_id: str = Form(""),
+    client_address: str = Form(""),
+    client_phone: str = Form(""),
+    client_email: str = Form(""),
+    items: str = Form(...),  # JSON string of items
+    tax_rate: Optional[float] = Form(None),
+    notes: str = Form(""),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Генерація рахунку з податками"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.invoice_generator import invoice_service
+    
+    # Parse items JSON
+    try:
+        items_data = json.loads(items)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid items format: {e}")
+    
+    client_data = {
+        "name": client_name,
+        "tax_id": client_tax_id,
+        "address": client_address,
+        "phone": client_phone,
+        "email": client_email,
+        "notes": notes
+    }
+    
+    profile_data = {
+        "name": profile.name,
+        "tax_system": profile.tax_system,
+        "tax_id": profile.tax_id,
+        "address": profile.address if hasattr(profile, 'address') else "",
+        "phone": profile.phone if hasattr(profile, 'phone') else "",
+        "email": profile.email if hasattr(profile, 'email') else "",
+        "tax_rate": tax_rate if tax_rate else (20 if profile.tax_system == "general" else 0)
+    }
+    
+    invoice = invoice_service.generate_invoice(profile_data, client_data, items_data, tax_rate)
+    
+    return invoice
+
+@app.get("/api/invoices/{invoice_id}/text")
+async def get_invoice_text(invoice_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Отримати рахунок в текстовому форматі"""
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == invoice.profile_id).first()
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
+    
+    from services.invoice_generator import invoice_service
+    
+    # Reconstruct invoice data
+    profile_data = {
+        "name": profile.name,
+        "tax_system": profile.tax_system,
+        "tax_id": profile.tax_id,
+        "address": profile.address if hasattr(profile, 'address') else "",
+        "phone": profile.phone if hasattr(profile, 'phone') else "",
+        "email": profile.email if hasattr(profile, 'email') else ""
+    }
+    
+    client_data = {
+        "name": invoice.client_name,
+        "tax_id": invoice.client_tax_id if hasattr(invoice, 'client_tax_id') else "",
+        "address": invoice.client_address if hasattr(invoice, 'client_address') else "",
+        "phone": invoice.client_phone if hasattr(invoice, 'client_phone') else "",
+        "email": invoice.client_email if hasattr(invoice, 'client_email') else ""
+    }
+    
+    # Parse items from invoice
+    items_data = []
+    if hasattr(invoice, 'services') and invoice.services:
+        try:
+            items_data = json.loads(invoice.services)
+        except:
+            items_data = [{"description": invoice.services, "quantity": 1, "price": invoice.amount}]
+    else:
+        items_data = [{"description": "Послуги", "quantity": 1, "price": invoice.amount}]
+    
+    invoice_data = invoice_service.generate_invoice(profile_data, client_data, items_data)
+    text = invoice_service.generate_invoice_text(invoice_data)
+    
+    return {
+        "text": text,
+        "invoice_id": invoice_id
+    }
+
+@app.get("/api/reports/tax/{profile_id}/quarterly")
+async def get_quarterly_tax_report(
+    profile_id: int,
+    quarter: int,
+    year: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Отримати квартальний податковий звіт"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.tax_report_service import tax_report_service
+    
+    transactions = db.query(Transaction).filter(Transaction.profile_id == profile_id).all()
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "name": profile.name,
+        "tax_id": profile.tax_id,
+        "group": profile.group,
+        "tax_system": profile.tax_system,
+        "tax_rate": 5 if profile.group == 3 else (10 if profile.group == 2 else 20)
+    }
+    
+    report = tax_report_service.generate_quarterly_report(profile_data, quarter, year, transactions_data)
+    
+    return report
+
+@app.get("/api/reports/tax/{profile_id}/annual")
+async def get_annual_tax_report(
+    profile_id: int,
+    year: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Отримати річний податковий звіт"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.tax_report_service import tax_report_service
+    
+    transactions = db.query(Transaction).filter(Transaction.profile_id == profile_id).all()
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "name": profile.name,
+        "tax_id": profile.tax_id,
+        "group": profile.group,
+        "tax_system": profile.tax_system,
+        "tax_rate": 5 if profile.group == 3 else (10 if profile.group == 2 else 20)
+    }
+    
+    report = tax_report_service.generate_annual_report(profile_data, year, transactions_data)
+    
+    return report
+
+@app.get("/api/reports/tax/{profile_id}/risks")
+async def get_tax_risks(
+    profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Отримати аналіз податкових ризиків"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.recommendations_service import recommendations_service
+    
+    transactions = db.query(Transaction).filter(Transaction.profile_id == profile_id).all()
+    transactions_data = [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "date": tx.date.isoformat() if tx.date else None,
+            "purpose": tx.purpose,
+            "type": tx.type
+        }
+        for tx in transactions
+    ]
+    
+    profile_data = {
+        "tax_system": profile.tax_system,
+        "group": profile.group,
+        "tax_rate": 5 if profile.group == 3 else (10 if profile.group == 2 else 20)
+    }
+    
+    risks = recommendations_service.analyze_tax_risks(profile_data, transactions_data)
+    
+    return {
+        "profile_id": profile_id,
+        "risks": risks,
+        "count": len(risks)
+    }
+
+@app.post("/api/banks/import-statement")
+async def import_bank_statement(
+    profile_id: int,
+    bank_name: str = Form(...),
+    file: UploadFile = File(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Імпорт банківської виписки з файлу"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.bank_sync_service import bank_sync_service
+    
+    # Read file content
+    content = await file.read()
+    file_text = content.decode('utf-8')
+    
+    result = await bank_sync_service.import_statement_from_file(profile_id, file_text, bank_name)
+    
+    return result
+
+@app.get("/api/banks/reconcile/{profile_id}")
+async def reconcile_tax_payments(
+    profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Зіставлення банківських транзакцій з податковими платежами"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.bank_sync_service import bank_sync_service
+    
+    result = bank_sync_service.reconcile_tax_payments(profile_id)
+    
+    return result
+
+@app.post("/api/transactions/categorize/{profile_id}")
+async def categorize_transactions(
+    profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Автоматична категоризація транзакцій"""
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    from services.ai_service import ai_service
+    
+    # Get uncategorized transactions
+    transactions = db.query(Transaction).filter(
+        Transaction.profile_id == profile_id,
+        Transaction.category.is_(None)
+    ).all()
+    
+    categorized_count = 0
+    results = []
+    
+    for tx in transactions:
+        try:
+            analysis = await ai_service.analyze_transaction(tx.purpose, tx.amount)
+            
+            # Update transaction with category
+            tx.category = analysis.get("category", "other")
+            tx.tax_type = analysis.get("tax_type")
+            categorized_count += 1
+            
+            results.append({
+                "id": tx.id,
+                "purpose": tx.purpose,
+                "category": tx.category,
+                "tax_type": tx.tax_type,
+                "confidence": analysis.get("confidence", 0)
+            })
+        except Exception as e:
+            print(f"Error categorizing transaction {tx.id}: {e}")
+    
+    db.commit()
+    
+    return {
+        "profile_id": profile_id,
+        "categorized_count": categorized_count,
+        "total_processed": len(transactions),
+        "results": results
+    }
+
+# Support Chat Schemas
+class EnableAutoRenewRequest(BaseModel):
+    auto_renew: bool
+
+class SendPasswordRequest(BaseModel):
+    email: str
+
+class SupportMessageRequest(BaseModel):
+    profile_id: int
+    text: str
+
+class SupportReplyRequest(BaseModel):
+    profile_id: int
+    text: str
+
+@app.post("/api/subscriptions/enable-autorenew/{profile_id}")
+def enable_autorenew(profile_id: int, req: EnableAutoRenewRequest, db: Session = Depends(get_db)):
+    sub = db.query(Subscription).filter(
+        Subscription.profile_id == profile_id,
+        Subscription.status.in_(["active", "pending"])
+    ).order_by(Subscription.id.desc()).first()
+    
+    if not sub:
+        raise HTTPException(status_code=404, detail="Активної або очікуваної підписки не знайдено для цього профілю")
+        
+    sub.auto_renew = req.auto_renew
+    db.commit()
+    return {"message": "Статус автопродовження оновлено", "auto_renew": sub.auto_renew}
+
+@app.post("/api/auth/send-password-to-email")
+def send_password_to_email(req: SendPasswordRequest, db: Session = Depends(get_db)):
+    email_clean = req.email.strip().lower()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Користувача з такою електронною поштою не знайдено")
+        
+    import random
+    import string
+    import hashlib
+    
+    chars = string.ascii_letters + string.digits
+    new_pwd = "".join(random.choice(chars) for _ in range(8))
+    
+    hashed = hashlib.sha256(new_pwd.encode('utf-8')).hexdigest()
+    user.hashed_password = hashed
+    db.commit()
+    
+    subject = "Новий пароль для входу в UniTax"
+    body = (
+        f"Вітаємо!\n\n"
+        f"Ваш пароль для входу в систему UniTax було скинуто.\n"
+        f"Новий пароль: {new_pwd}\n\n"
+        f"Будь ласка, увійдіть за допомогою цього пароля та змініть його в налаштуваннях профілю."
+    )
+    send_email_with_attachments(user.email, subject, body, [])
+    
+    return {"message": "Новий пароль надіслано на вказану електронну адресу"}
+
+@app.post("/api/support/message")
+def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    msg = SupportMessage(
+        profile_id=req.profile_id,
+        sender="user",
+        message=req.text
+    )
+    db.add(msg)
+    db.commit()
+    return {"message": "Повідомлення надіслано", "id": msg.id, "created_at": msg.timestamp.isoformat()}
+
+@app.get("/api/support/messages/{profile_id}")
+def get_support_messages(profile_id: int, db: Session = Depends(get_db)):
+    messages = db.query(SupportMessage).filter(
+        SupportMessage.profile_id == profile_id
+    ).order_by(SupportMessage.timestamp.asc()).all()
+    
+    return [
+        {
+            "id": m.id,
+            "profile_id": m.profile_id,
+            "is_from_admin": m.sender == "admin",
+            "text": m.message,
+            "created_at": m.timestamp.isoformat()
+        }
+        for m in messages
+    ]
+
+@app.post("/api/support/reply")
+def reply_support_message(req: SupportReplyRequest, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    msg = SupportMessage(
+        profile_id=req.profile_id,
+        sender="admin",
+        message=req.text
+    )
+    db.add(msg)
+    db.commit()
+    return {"message": "Відповідь надіслано", "id": msg.id, "created_at": msg.timestamp.isoformat()}
+
+@app.get("/api/support/chats")
+def get_support_chats(db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    
+    subq = db.query(
+        SupportMessage.profile_id,
+        func.max(SupportMessage.timestamp).label("last_msg_time")
+    ).group_by(SupportMessage.profile_id).subquery()
+    
+    chats = db.query(Profile, subq.c.last_msg_time).join(
+        subq, Profile.id == subq.c.profile_id
+    ).order_by(subq.c.last_msg_time.desc()).all()
+    
+    result = []
+    for profile, last_time in chats:
+        last_msg = db.query(SupportMessage).filter(
+            SupportMessage.profile_id == profile.id
+        ).order_by(SupportMessage.timestamp.desc()).first()
+        
+        result.append({
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "is_blocked": getattr(profile, "is_blocked", False),
+            "last_message_text": last_msg.message if last_msg else "",
+            "last_message_time": last_time.isoformat() if last_time else None,
+            "last_message_from_admin": (last_msg.sender == "admin") if last_msg else False
+        })
+    return result
+
 
 
 

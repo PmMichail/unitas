@@ -93,6 +93,119 @@ class BankSyncService:
             await asyncio.sleep(seconds_until_sync)
             
             await self.sync_all_banks()
+    
+    async def import_statement_from_file(self, profile_id: int, file_content: str, bank_name: str) -> Dict:
+        """Імпорт виписки з файлу (PDF/Excel) для українських банків"""
+        try:
+            transactions = self._parse_statement_file(file_content, bank_name)
+            
+            imported_count = 0
+            for tx in transactions:
+                existing = db.query(ParsedPayment).filter(
+                    ParsedPayment.external_id == tx.get('id', ''),
+                    ParsedPayment.profile_id == profile_id
+                ).first()
+                
+                if not existing:
+                    parsed_payment = ParsedPayment(
+                        profile_id=profile_id,
+                        date=datetime.fromisoformat(tx['date']).date() if isinstance(tx['date'], str) else tx['date'],
+                        amount=abs(tx['amount']),
+                        purpose=tx.get('purpose', ''),
+                        type='income' if tx['amount'] > 0 else 'expense',
+                        external_id=tx.get('id', f"manual_{datetime.now().timestamp()}"),
+                        bank_name=bank_name
+                    )
+                    db.add(parsed_payment)
+                    imported_count += 1
+            
+            db.commit()
+            
+            return {
+                "success": True,
+                "imported_count": imported_count,
+                "total_count": len(transactions),
+                "bank_name": bank_name
+            }
+        
+        except Exception as e:
+            db.rollback()
+            return {
+                "success": False,
+                "error": str(e),
+                "imported_count": 0
+            }
+    
+    def _parse_statement_file(self, file_content: str, bank_name: str) -> List[Dict]:
+        """Парсинг файлу виписки залежно від банку"""
+        transactions = []
+        
+        if "csv" in file_content.lower():
+            lines = file_content.split('\n')
+            for line in lines[1:]:
+                parts = line.split(',')
+                if len(parts) >= 3:
+                    try:
+                        transactions.append({
+                            "date": parts[0],
+                            "amount": float(parts[1]),
+                            "purpose": parts[2] if len(parts) > 2 else "",
+                            "id": f"{bank_name}_{len(transactions)}"
+                        })
+                    except ValueError:
+                        continue
+        
+        return transactions
+    
+    def reconcile_tax_payments(self, profile_id: int) -> Dict:
+        """Зіставлення банківських транзакцій з податковими платежами"""
+        try:
+            transactions = db.query(ParsedPayment).filter(
+                ParsedPayment.profile_id == profile_id
+            ).all()
+            
+            tax_keywords = ["податок", "єдиний", "військовий", "пдфо", "єсв", "дпс"]
+            tax_payments = []
+            unmatched_payments = []
+            
+            for tx in transactions:
+                purpose_lower = tx.purpose.lower()
+                is_tax_payment = any(keyword in purpose_lower for keyword in tax_keywords)
+                
+                if is_tax_payment:
+                    tax_payments.append({
+                        "id": tx.id,
+                        "date": tx.date.isoformat() if tx.date else None,
+                        "amount": tx.amount,
+                        "purpose": tx.purpose,
+                        "type": tx.type,
+                        "matched": False
+                    })
+                else:
+                    unmatched_payments.append({
+                        "id": tx.id,
+                        "date": tx.date.isoformat() if tx.date else None,
+                        "amount": tx.amount,
+                        "purpose": tx.purpose,
+                        "type": tx.type
+                    })
+            
+            total_tax_paid = sum(tx["amount"] for tx in tax_payments if tx["type"] == "expense")
+            
+            return {
+                "success": True,
+                "tax_payments": tax_payments,
+                "unmatched_payments": unmatched_payments,
+                "total_tax_paid": total_tax_paid,
+                "tax_payment_count": len(tax_payments),
+                "unmatched_count": len(unmatched_payments)
+            }
+        
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
 bank_sync_service = BankSyncService()
 

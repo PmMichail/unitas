@@ -59,32 +59,32 @@ export const lightColors: ThemeColors = {
 interface ThemeContextType {
   colors: ThemeColors;
   isDark: boolean;
-  setThemeMode: (mode: 'dark' | 'light' | 'system') => void;
-  themeMode: 'dark' | 'light' | 'system';
+  setThemeMode: (mode: 'dark' | 'light') => void;
+  themeMode: 'dark' | 'light';
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const systemScheme = useColorScheme();
-  const [themeMode, setThemeModeState] = useState<'dark' | 'light' | 'system'>('dark'); // Default to dark
+  const [themeMode, setThemeModeState] = useState<'dark' | 'light'>('dark'); // Default to dark
 
   useEffect(() => {
     // Load preference
     AsyncStorage.getItem('THEME_PREFERENCE').then((val: string | null) => {
-      if (val === 'light' || val === 'dark' || val === 'system') {
+      if (val === 'light' || val === 'dark') {
         setThemeModeState(val);
+      } else if (val === 'system') {
+        setThemeModeState('dark'); // Fallback from system to dark
       }
     });
   }, []);
 
-  const setThemeMode = async (mode: 'dark' | 'light' | 'system') => {
+  const setThemeMode = async (mode: 'dark' | 'light') => {
     setThemeModeState(mode);
     await AsyncStorage.setItem('THEME_PREFERENCE', mode);
   };
 
-  const activeScheme = themeMode === 'system' ? systemScheme : themeMode;
-  const isDark = activeScheme === 'dark';
+  const isDark = themeMode === 'dark';
   const colors = isDark ? darkColors : lightColors;
 
   return (

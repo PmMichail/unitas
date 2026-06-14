@@ -98,8 +98,6 @@ export default function SettingsScreen() {
         return 'Темна';
       case 'light':
         return 'Світла';
-      case 'system':
-        return 'Системна';
     }
   };
 
@@ -194,13 +192,6 @@ export default function SettingsScreen() {
               title="Світла"
               onPress={() => setThemeMode('light')}
               variant={themeMode === 'light' ? 'primary' : 'outline'}
-              style={styles.themeBtn}
-              textStyle={styles.themeBtnText}
-            />
-            <Button
-              title="Системна"
-              onPress={() => setThemeMode('system')}
-              variant={themeMode === 'system' ? 'primary' : 'outline'}
               style={styles.themeBtn}
               textStyle={styles.themeBtnText}
             />

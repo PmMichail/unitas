@@ -12,17 +12,20 @@ import {
   Search, 
   Calendar, 
   Check, 
+  Mail,
   X,
   Edit2,
   AlertCircle,
   Trash2,
   Lock,
-  Unlock
+  Unlock,
+  Send,
+  MessageSquare
 } from "lucide-react";
 
 export default function AdminDashboard() {
   const [token, setToken] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats" | "support">("users");
   const router = useRouter();
 
   // Data states
@@ -30,6 +33,13 @@ export default function AdminDashboard() {
   const [payments, setPayments] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [pricing, setPricing] = useState<any[]>([]);
+
+  // Support Chat states
+  const [supportChats, setSupportChats] = useState<any[]>([]);
+  const [selectedChat, setSelectedChat] = useState<any | null>(null);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInputText, setChatInputText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
 
   // Search and filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -47,17 +57,25 @@ export default function AdminDashboard() {
   // Admin Profile Block & Delete states
   const [blockingProfile, setBlockingProfile] = useState<any | null>(null);
   const [blockReasonInput, setBlockReasonInput] = useState("");
+  
+  // Custom confirmation modal states
+  const [deleteConfirmProfile, setDeleteConfirmProfile] = useState<any | null>(null);
+  const [unblockConfirmProfile, setUnblockConfirmProfile] = useState<any | null>(null);
 
   // Delete Profile click handler
-  const handleDeleteProfileClick = async (profileId: number, name: string) => {
+  const handleDeleteProfileClick = (e: React.MouseEvent, profileId: number, name: string) => {
+    e.preventDefault();
+    e.stopPropagation();
     if (!token) return;
-    if (!confirm(`Ви дійсно хочете повністю видалити профіль "${name}"? Це видалить всі його виписки, транзакції, звіти та підписку без можливості відновлення!`)) {
-      return;
-    }
+    setDeleteConfirmProfile({ id: profileId, name });
+  };
 
+  const confirmDeleteProfile = async () => {
+    if (!token || !deleteConfirmProfile) return;
+    
     setLoading(true);
     try {
-      await api.adminDeleteProfile(profileId, token);
+      await api.adminDeleteProfile(deleteConfirmProfile.id, token);
       alert("Профіль та всі його дані успішно видалено!");
       const data = await api.adminGetUsers(token);
       setUsers(data);
@@ -65,29 +83,38 @@ export default function AdminDashboard() {
       alert(err.response?.data?.detail || "Помилка при видаленні профілю");
     } finally {
       setLoading(false);
+      setDeleteConfirmProfile(null);
     }
   };
 
   // Block / Unblock click handler
-  const handleToggleBlockClick = async (profile: any) => {
+  const handleToggleBlockClick = (e: React.MouseEvent, profile: any) => {
+    e.preventDefault();
+    e.stopPropagation();
     if (!token) return;
     
     if (profile.is_blocked) {
-      if (!confirm(`Розблокувати профіль "${profile.name}"?`)) return;
-      setLoading(true);
-      try {
-        await api.adminBlockProfile(profile.id, { is_blocked: false }, token);
-        alert("Профіль успішно розблоковано!");
-        const data = await api.adminGetUsers(token);
-        setUsers(data);
-      } catch (err: any) {
-        alert(err.response?.data?.detail || "Помилка при розблокуванні");
-      } finally {
-        setLoading(false);
-      }
+      setUnblockConfirmProfile(profile);
     } else {
       setBlockingProfile(profile);
       setBlockReasonInput("Порушення умов використання або несплата послуг");
+    }
+  };
+
+  const confirmUnblockProfile = async () => {
+    if (!token || !unblockConfirmProfile) return;
+    
+    setLoading(true);
+    try {
+      await api.adminBlockProfile(unblockConfirmProfile.id, { is_blocked: false }, token);
+      alert("Профіль успішно розблоковано!");
+      const data = await api.adminGetUsers(token);
+      setUsers(data);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Помилка при розблокуванні");
+    } finally {
+      setLoading(false);
+      setUnblockConfirmProfile(null);
     }
   };
 
@@ -151,6 +178,9 @@ export default function AdminDashboard() {
         } else if (activeTab === "stats") {
           const data = await api.adminGetStats(token);
           setStats(data);
+        } else if (activeTab === "support") {
+          const data = await api.adminGetSupportChats(token);
+          setSupportChats(data);
         }
       } catch (err: any) {
         console.error("Admin data loading error:", err);
@@ -245,6 +275,49 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchChatMessages = async (profileId: number) => {
+    try {
+      const msgs = await api.getSupportMessages(profileId);
+      setChatMessages(msgs);
+    } catch (e) {
+      console.error("Failed to load support messages:", e);
+    }
+  };
+
+  const handleSelectChat = (chat: any) => {
+    setSelectedChat(chat);
+    fetchChatMessages(chat.profile_id);
+  };
+
+  const handleSendReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedChat || !chatInputText.trim()) return;
+
+    setSendingReply(true);
+    try {
+      await api.adminReplySupportMessage(selectedChat.profile_id, chatInputText.trim(), token);
+      setChatInputText("");
+      await fetchChatMessages(selectedChat.profile_id);
+      
+      const data = await api.adminGetSupportChats(token);
+      setSupportChats(data);
+    } catch (err: any) {
+      alert("Не вдалося надіслати відповідь");
+    } finally {
+      setSendingReply(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "support" || !selectedChat) return;
+
+    const interval = setInterval(() => {
+      fetchChatMessages(selectedChat.profile_id);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [activeTab, selectedChat]);
+
   if (!token) {
     return (
       <div className="min-h-screen bg-[#090d16] flex items-center justify-center">
@@ -315,6 +388,17 @@ export default function AdminDashboard() {
             >
               <TrendingUp className="w-4 h-4" />
               Статистика
+            </button>
+            <button
+              onClick={() => setActiveTab("support")}
+              className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
+                activeTab === "support"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+              }`}
+            >
+              <Mail className="w-4 h-4" />
+              Чат підтримки
             </button>
           </nav>
         </div>
@@ -452,7 +536,7 @@ export default function AdminDashboard() {
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
                               <button
-                                onClick={() => handleToggleBlockClick(u)}
+                                onClick={(e) => handleToggleBlockClick(e, u)}
                                 className={`p-1.5 bg-slate-900 border border-slate-800 rounded-lg transition-all ${
                                   u.is_blocked 
                                     ? "text-amber-400 hover:text-amber-300 hover:border-amber-500/40" 
@@ -463,7 +547,7 @@ export default function AdminDashboard() {
                                 {u.is_blocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
                               </button>
                               <button
-                                onClick={() => handleDeleteProfileClick(u.id, u.name)}
+                                onClick={(e) => handleDeleteProfileClick(e, u.id, u.name)}
                                 className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-500 hover:border-rose-500/40 rounded-lg transition-all"
                                 title="Видалити профіль"
                               >
@@ -643,6 +727,155 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {/* 5. SUPPORT TAB */}
+            {activeTab === "support" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-14rem)] min-h-[480px]">
+                
+                {/* Left Column: Chats list (cols-5) */}
+                <div className="lg:col-span-5 bg-slate-950/40 border border-slate-800 rounded-3xl flex flex-col overflow-hidden">
+                  <div className="p-4 border-b border-slate-800/80 bg-slate-950/20">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-indigo-400" />
+                      Активні діалоги ({supportChats.length})
+                    </h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60 p-2 space-y-1">
+                    {supportChats.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full p-8 text-center text-slate-500 text-xs">
+                        <MessageSquare className="w-8 h-8 text-slate-700 mb-2" />
+                        Немає активних діалогів
+                      </div>
+                    ) : (
+                      supportChats.map((chat) => {
+                        const isSelected = selectedChat?.profile_id === chat.profile_id;
+                        return (
+                          <button
+                            key={chat.profile_id}
+                            onClick={() => handleSelectChat(chat)}
+                            className={`w-full text-left p-3 rounded-2xl transition-all duration-200 flex items-start gap-3 ${
+                              isSelected
+                                ? "bg-slate-800/60 border border-slate-700/60 text-white"
+                                : "hover:bg-slate-900/40 border border-transparent text-slate-300"
+                            }`}
+                          >
+                            <div className="w-2.5 h-2.5 bg-indigo-500 rounded-full shrink-0 mt-1.5" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-baseline gap-2">
+                                <span className="font-bold text-xs truncate">{chat.profile_name}</span>
+                                {chat.last_message_time && (
+                                  <span className="text-[10px] text-slate-500 shrink-0">
+                                    {new Date(chat.last_message_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                                {chat.last_message_from_admin && <span className="text-slate-500 font-medium">Ви: </span>}
+                                {chat.last_message_text}
+                              </p>
+                              <div className="flex items-center gap-1.5 mt-1">
+                                {chat.is_blocked ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                    Блокований
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    Активний
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Right Column: Active Dialog (cols-7) */}
+                <div className="lg:col-span-7 bg-slate-950/40 border border-slate-800 rounded-3xl flex flex-col overflow-hidden">
+                  {selectedChat ? (
+                    <>
+                      {/* Header */}
+                      <div className="p-4 border-b border-slate-800/80 bg-slate-950/20 flex justify-between items-center">
+                        <div>
+                          <h4 className="text-xs font-bold text-white">{selectedChat.profile_name}</h4>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-[10px] text-slate-400">Діалог відкритий</span>
+                          </div>
+                        </div>
+                        {selectedChat.is_blocked && (
+                          <span className="px-2 py-0.5 text-[9px] font-bold text-rose-400 bg-rose-500/10 rounded-full border border-rose-500/20">
+                            Користувач заблокований
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Messages scrollable area */}
+                      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/10">
+                        {chatMessages.map((msg) => {
+                          const isAdmin = msg.is_from_admin;
+                          return (
+                            <div
+                              key={msg.id}
+                              className={`flex ${isAdmin ? "justify-end" : "justify-start"}`}
+                            >
+                              <div
+                                className={`max-w-[75%] rounded-2xl px-4 py-2 text-xs font-medium space-y-1 ${
+                                  isAdmin
+                                    ? "bg-indigo-600 text-white rounded-br-none"
+                                    : "bg-slate-800/80 text-slate-100 rounded-bl-none border border-slate-700/40"
+                                }`}
+                              >
+                                <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                                <span
+                                  className={`block text-[9px] text-right font-normal ${
+                                    isAdmin ? "text-indigo-200" : "text-slate-400"
+                                  }`}
+                                >
+                                  {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {chatMessages.length === 0 && (
+                          <div className="text-center text-slate-500 text-xs py-8">
+                            Немає повідомлень у цьому діалозі.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Send Form */}
+                      <form onSubmit={handleSendReply} className="p-3 border-t border-slate-800 bg-slate-950/20 flex gap-2">
+                        <input
+                          type="text"
+                          value={chatInputText}
+                          onChange={(e) => setChatInputText(e.target.value)}
+                          placeholder="Введіть повідомлення для користувача..."
+                          className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs font-medium focus:outline-none focus:border-indigo-500 placeholder-slate-500 text-white"
+                        />
+                        <button
+                          type="submit"
+                          disabled={sendingReply || !chatInputText.trim()}
+                          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-2xl flex items-center justify-center transition-all shadow-md shadow-indigo-600/10 shrink-0 cursor-pointer"
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
+                      </form>
+                    </>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-500 text-xs">
+                      <MessageSquare className="w-12 h-12 text-slate-800 mb-3" />
+                      <p className="font-bold text-slate-400">Діалог не обрано</p>
+                      <p className="text-slate-600 mt-1 max-w-xs">Оберіть користувача зі списку ліворуч, щоб почати листування.</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )}
+
           </div>
         )}
 
@@ -761,6 +994,96 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmProfile && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-rose-500" />
+                  Видалення профілю
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Ви дійсно хочете повністю видалити профіль:{" "}
+                  <span className="font-bold text-indigo-400">{deleteConfirmProfile.name}</span>?
+                </p>
+              </div>
+              <button
+                onClick={() => setDeleteConfirmProfile(null)}
+                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-4 mb-4">
+              <p className="text-xs text-rose-400 font-semibold">
+                ⚠️ Це видалить всі виписки, транзакції, звіти та підписку без можливості відновлення!
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-4 border-t border-slate-800/60">
+              <button
+                onClick={() => setDeleteConfirmProfile(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-800 hover:bg-slate-800 text-slate-400 font-bold text-xs transition-all"
+              >
+                Скасувати
+              </button>
+              <button
+                onClick={confirmDeleteProfile}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all shadow-md shadow-rose-600/10 flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Видалити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unblock Confirmation Modal */}
+      {unblockConfirmProfile && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Unlock className="w-5 h-5 text-emerald-500" />
+                  Розблокування профілю
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Розблокувати профіль:{" "}
+                  <span className="font-bold text-indigo-400">{unblockConfirmProfile.name}</span>?
+                </p>
+              </div>
+              <button
+                onClick={() => setUnblockConfirmProfile(null)}
+                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex gap-3 pt-4 border-t border-slate-800/60">
+              <button
+                onClick={() => setUnblockConfirmProfile(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-800 hover:bg-slate-800 text-slate-400 font-bold text-xs transition-all"
+              >
+                Скасувати
+              </button>
+              <button
+                onClick={confirmUnblockProfile}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-md shadow-emerald-600/10 flex items-center justify-center gap-1.5"
+              >
+                <Unlock className="w-3.5 h-3.5" />
+                Розблокувати
+              </button>
+            </div>
           </div>
         </div>
       )}

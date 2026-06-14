@@ -6,6 +6,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import "@/app/globals.css";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { api } from "@/lib/api";
+import { LiqPayFooter } from "@/components/LiqPayFooter";
 import {
   LayoutDashboard,
   Building2,
@@ -29,8 +31,71 @@ import {
   AlertCircle,
   Cpu,
   Bot,
-  Inbox
+  Inbox,
+  Lock,
+  Crown,
+  HelpCircle
 } from "lucide-react";
+
+function SubscriptionLockedView() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] p-4 text-center">
+      <div className="w-full max-w-lg p-8 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/55 dark:bg-slate-900/30 backdrop-blur-xl shadow-2xl relative overflow-hidden space-y-6">
+        <div className="absolute top-[-20%] left-[-20%] w-[50%] h-[50%] rounded-full bg-amber-500/5 blur-[100px] pointer-events-none" />
+        
+        <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-amber-500/5 animate-bounce">
+          <Crown className="w-8 h-8" />
+        </div>
+
+        <div className="space-y-2">
+          <h2 className="text-2xl font-black bg-gradient-to-r from-slate-900 via-slate-700 to-amber-500 dark:from-white dark:via-slate-200 dark:to-amber-400 bg-clip-text text-transparent tracking-tight">
+            Функція недоступна у тарифі Free
+          </h2>
+          <p className="text-xs text-slate-550 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+            Робота з календарем, транзакціями, податковими розрахунками, звітами та КЕП доступна тільки в рамках тарифу <span className="font-extrabold text-amber-500">Business</span>.
+          </p>
+        </div>
+
+        <div className="p-5 rounded-2xl bg-amber-500/5 border border-amber-500/15 text-left text-xs space-y-3">
+          <span className="text-[10px] text-slate-550 dark:text-slate-500 font-bold uppercase tracking-wider block">З підпискою Business ви отримаєте:</span>
+          <ul className="space-y-2 text-slate-650 dark:text-slate-300">
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              <span>Повний податковий календар та розрахунки боргів</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              <span>Створення, перевірка та авто-подача звітів через ДПС API</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              <span>Автоматична синхронізація з банками та необмежений імпорт</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              <span>Розрахунок зарплат, податків за найманих працівників</span>
+            </li>
+          </ul>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800/60 flex flex-col sm:flex-row gap-3">
+          <Link
+            href="/settings/subscription"
+            className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-amber-600/10"
+          >
+            <CreditCard className="w-4 h-4" /> Оновити тариф
+          </Link>
+          <Link
+            href="/dashboard"
+            className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-805 bg-white dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+          >
+            <LayoutDashboard className="w-4 h-4" /> На дашборд
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function MainLayoutContent({ children }: { children: React.ReactNode }) {
   const {
@@ -38,15 +103,64 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     selectedProfile,
     setSelectedProfile,
     loadingProfiles,
+    loadingSubscription,
     telegramId,
     setTelegramId,
+    subscription,
   } = useApp();
 
   const pathname = usePathname();
   const router = useRouter();
+  
+  const isFree = subscription !== null && subscription.plan === "free";
+  const isAllowedPathForFree = (path: string) => {
+    const allowed = [
+      "/dashboard",
+      "/profiles",
+      "/settings",
+      "/settings/subscription",
+    ];
+    return allowed.includes(path) || path.startsWith("/statements/");
+  };
+  const showLockScreen = isFree && !isAllowedPathForFree(pathname);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [theme, setThemeState] = useState<"dark" | "light">("dark");
+
+  // Polling for blocked status
+  useEffect(() => {
+    if (!selectedProfile?.is_blocked || !telegramId) return;
+    
+    const interval = setInterval(async () => {
+      try {
+        const updatedProfiles = await api.getProfiles(telegramId);
+        const current = updatedProfiles.find((p: any) => p.id === selectedProfile.id);
+        if (current && !current.is_blocked) {
+          window.location.reload();
+        }
+      } catch (e) {
+        console.error("Error polling block status:", e);
+      }
+    }, 10000);
+    
+    return () => clearInterval(interval);
+  }, [selectedProfile, telegramId]);
+
+  const handleCheckUnblock = async () => {
+    if (!telegramId || !selectedProfile) return;
+    try {
+      const updatedProfiles = await api.getProfiles(telegramId);
+      const current = updatedProfiles.find((p: any) => p.id === selectedProfile.id);
+      if (current && !current.is_blocked) {
+        alert("Ваш профіль успішно розблоковано!");
+        window.location.reload();
+      } else {
+        alert("Профіль все ще заблоковано. Якщо ви здійснили оплату, зачекайте кілька хвилин або зверніться в чат підтримки.");
+      }
+    } catch (e) {
+      alert("Помилка під час перевірки статусу.");
+    }
+  };
 
   // Sync theme with next-themes/document element
   useEffect(() => {
@@ -88,6 +202,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Пошта", href: "/settings/email", icon: Mail },
     { name: "КЕП (Підписи)", href: "/settings/certificates", icon: Shield },
     { name: "API ДПС", href: "/settings/tax-api", icon: Cpu },
+    { name: "Тариф та оплата", href: "/settings/subscription", icon: Crown },
     { name: "Налаштування", href: "/settings", icon: SettingsIcon },
   ];
 
@@ -150,6 +265,13 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
               </div>
             )}
             
+            <button
+              onClick={handleCheckUnblock}
+              className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-550 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+            >
+              Перевірити статус
+            </button>
+
             <button
               onClick={() => setTelegramId("")}
               className="flex-1 py-2.5 rounded-xl border border-rose-500/20 bg-rose-500/5 hover:bg-rose-500/10 text-rose-500 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
@@ -238,6 +360,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;
+            const isLocked = isFree && !isAllowedPathForFree(item.href);
             return (
               <Link
                 key={item.name}
@@ -253,7 +376,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                     isActive ? "text-white" : "text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300"
                   }`}
                 />
-                {item.name}
+                <span className="flex-1">{item.name}</span>
+                {isLocked && <Lock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-550 shrink-0 ml-2" />}
               </Link>
             );
           })}
@@ -355,6 +479,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
               {navItems.map((item) => {
                 const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
                 const Icon = item.icon;
+                const isLocked = isFree && !isAllowedPathForFree(item.href);
                 return (
                   <Link
                     key={item.name}
@@ -367,7 +492,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                     }`}
                   >
                     <Icon className="w-4 h-4 mr-3" />
-                    {item.name}
+                    <span className="flex-1">{item.name}</span>
+                    {isLocked && <Lock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-550 shrink-0 ml-2" />}
                   </Link>
                 );
               })}
@@ -388,22 +514,224 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
         )}
 
         {/* Page Content for Mobile */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 z-10">{children}</main>
+        <main className="flex-1 overflow-y-auto px-4 py-6 z-10 flex flex-col justify-between">
+          <div className="flex-1">
+            {loadingProfiles || loadingSubscription ? (
+              <div className="flex h-full items-center justify-center bg-[#fafbfd] dark:bg-[#090d16] py-12">
+                <div className="text-center">
+                  <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+                </div>
+              </div>
+            ) : showLockScreen ? (
+              <SubscriptionLockedView />
+            ) : (
+              children
+            )}
+          </div>
+          <LiqPayFooter />
+        </main>
       </div>
 
       {/* Page Content for Desktop */}
-      <main className="hidden md:block flex-1 overflow-y-auto h-screen z-10 relative custom-scrollbar">
-        {loadingProfiles ? (
-          <div className="flex h-full items-center justify-center bg-[#fafbfd] dark:bg-[#090d16]">
-            <div className="text-center">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
-              <p className="mt-4 text-xs font-semibold text-slate-400">Завантаження кабінету UniTax...</p>
+      <main className="hidden md:flex flex-col justify-between flex-1 overflow-y-auto h-screen z-10 relative custom-scrollbar">
+        <div className="p-8 max-w-7xl w-full mx-auto flex-1">
+          {loadingProfiles || loadingSubscription ? (
+            <div className="flex h-full items-center justify-center bg-[#fafbfd] dark:bg-[#090d16] py-12">
+              <div className="text-center">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+                <p className="mt-4 text-xs font-semibold text-slate-400">Завантаження кабінету UniTax...</p>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="p-8 max-w-7xl mx-auto">{children}</div>
-        )}
+          ) : showLockScreen ? (
+            <SubscriptionLockedView />
+          ) : (
+            children
+          )}
+        </div>
+        <LiqPayFooter />
       </main>
+
+      <SupportChatWidget />
+    </div>
+  );
+}
+
+function SupportChatWidget() {
+  const { selectedProfile } = useApp();
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!selectedProfile) return;
+    
+    fetchMessages();
+    
+    const interval = setInterval(() => {
+      fetchMessages(true);
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [selectedProfile]);
+
+  useEffect(() => {
+    if (isOpen) {
+      const container = document.getElementById("support-chat-messages-container");
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+  }, [messages, isOpen]);
+
+  const fetchMessages = async (isPoll = false) => {
+    if (!selectedProfile) return;
+    try {
+      const msgs = await api.getSupportMessages(selectedProfile.id);
+      
+      if (isPoll && msgs.length > messages.length) {
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg.is_from_admin && !isOpen) {
+          setUnreadCount(prev => prev + 1);
+        }
+      }
+      
+      setMessages(msgs);
+    } catch (e) {
+      console.error("Failed to load chat messages:", e);
+    }
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim() || !selectedProfile) return;
+    
+    const textToSend = inputText.trim();
+    setInputText("");
+    setLoading(true);
+    
+    try {
+      const tempMsg = {
+        id: Date.now(),
+        profile_id: selectedProfile.id,
+        is_from_admin: false,
+        text: textToSend,
+        created_at: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, tempMsg]);
+      
+      await api.postSupportMessage(selectedProfile.id, textToSend);
+      await fetchMessages();
+    } catch (err) {
+      console.error("Failed to send support message:", err);
+      alert("Не вдалося надіслати повідомлення");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!selectedProfile) return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 font-sans">
+      {!isOpen && (
+        <button
+          onClick={() => {
+            setIsOpen(true);
+            setUnreadCount(0);
+          }}
+          className="relative w-14 h-14 bg-gradient-to-tr from-indigo-650 to-indigo-500 hover:from-indigo-550 hover:to-indigo-450 text-white rounded-full flex items-center justify-center shadow-lg hover:shadow-indigo-500/20 active:scale-95 transition-all duration-300 group border border-indigo-400/20"
+        >
+          <Mail className="w-6 h-6 group-hover:rotate-12 transition-transform duration-300" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-950 animate-bounce">
+              {unreadCount}
+            </span>
+          )}
+        </button>
+      )}
+
+      {isOpen && (
+        <div className="w-80 sm:w-96 h-[450px] bg-slate-900/95 dark:bg-slate-950/95 backdrop-blur-xl border border-slate-800/80 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="p-4 bg-slate-950/80 border-b border-slate-800/60 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-center">
+                <Bot className="w-4.5 h-4.5 text-indigo-400" />
+              </div>
+              <div className="text-left">
+                <h4 className="text-xs font-bold text-white font-sans">Чат з адміністратором</h4>
+                <p className="text-[9px] text-emerald-450 font-semibold flex items-center gap-1 font-sans">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-555 animate-pulse" />
+                  Адміністратор в мережі
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsOpen(false)}
+              className="p-1.5 hover:bg-slate-900 rounded-lg text-slate-450 hover:text-white transition-all"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div 
+            id="support-chat-messages-container"
+            className="flex-1 p-4 overflow-y-auto space-y-3 custom-scrollbar bg-slate-900/10 flex flex-col"
+          >
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-4 my-auto">
+                <HelpCircle className="w-8 h-8 text-slate-755 mb-2" />
+                <p className="text-xs font-bold text-slate-400 font-sans">Почати діалог</p>
+                <p className="text-[10px] text-slate-500 max-w-[180px] mt-1 leading-relaxed font-sans">
+                  Напишіть нам ваше питання. Адміністратор відповість вам найближчим часом.
+                </p>
+              </div>
+            ) : (
+              messages.map((m) => {
+                const isAgent = m.is_from_admin;
+                return (
+                  <div
+                    key={m.id}
+                    className={`flex flex-col max-w-[85%] ${isAgent ? "self-start" : "self-end ml-auto"}`}
+                  >
+                    <div
+                      className={`p-3 rounded-2xl text-xs leading-relaxed font-sans ${
+                        isAgent
+                          ? "bg-slate-800/80 border border-slate-700/50 text-slate-200 rounded-tl-none"
+                          : "bg-indigo-650 text-white rounded-tr-none shadow-md"
+                      }`}
+                    >
+                      {m.text}
+                    </div>
+                    <span className={`text-[8px] text-slate-500 mt-1 font-mono ${isAgent ? "text-left" : "text-right"}`}>
+                      {new Date(m.created_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <form onSubmit={handleSend} className="p-3 bg-slate-950/80 border-t border-slate-800/60 flex gap-2">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Напишіть повідомлення..."
+              className="flex-1 px-3.5 py-2 bg-slate-900/60 border border-slate-800 rounded-xl focus:outline-none focus:border-indigo-550 text-xs text-slate-250 placeholder-slate-500 font-sans"
+              disabled={loading}
+            />
+            <button
+              type="submit"
+              disabled={loading || !inputText.trim()}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 font-sans"
+            >
+              Надіслати
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

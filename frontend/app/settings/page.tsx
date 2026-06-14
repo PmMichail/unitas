@@ -484,6 +484,24 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Subscription and Billing Link */}
+          <div className="p-6 rounded-2xl glass-panel space-y-4">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <CreditCard className="w-4 h-4 text-indigo-500" />
+              Тариф та оплата підписки
+            </h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Керуйте передплатою, переглядайте ліміти виписок, статус автоматичного продовження та історію рахунків вашої компанії.
+            </p>
+            <a
+              href="/settings/subscription"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-bold text-xs transition-all shadow-lg flex items-center justify-center gap-1.5 shadow-amber-600/10"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>Оплатити та керувати підпискою</span>
+            </a>
+          </div>
+
           {/* Security details */}
           <div className="p-6 rounded-2xl glass-panel space-y-4">
             <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">

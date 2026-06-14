@@ -17,6 +17,8 @@ import {
   Linking,
   Dimensions,
   useWindowDimensions,
+  TextInput,
+  TouchableOpacity,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
@@ -70,6 +72,11 @@ export default function ProfilesScreen() {
   const [address, setAddress] = useState('');
   const [invClientAddress, setInvClientAddress] = useState('');
   const [oneoffClientAddress, setOneoffClientAddress] = useState('');
+  const [calculationStartDate, setCalculationStartDate] = useState('');
+  const [startingDebtEdp, setStartingDebtEdp] = useState('');
+  const [startingDebtEsv, setStartingDebtEsv] = useState('');
+  const [startingDebtVz, setStartingDebtVz] = useState('');
+  const [startingDebtPdfo, setStartingDebtPdfo] = useState('');
 
   // Employee Modal State
   const [employeesModalVisible, setEmployeesModalVisible] = useState(false);
@@ -123,6 +130,53 @@ export default function ProfilesScreen() {
   const [customSendMonth, setCustomSendMonth] = useState('');
   const [sendIncludeAct, setSendIncludeAct] = useState(true);
 
+  // Support Chat States
+  const [supportModalVisible, setSupportModalVisible] = useState(false);
+  const [supportChatProfile, setSupportChatProfile] = useState<ProfileData | null>(null);
+  const [supportMessages, setSupportMessages] = useState<any[]>([]);
+  const [supportInputText, setSupportInputText] = useState('');
+  const [sendingSupport, setSendingSupport] = useState(false);
+
+  const fetchSupportMessages = async (profileId: number) => {
+    try {
+      const msgs = await api.getSupportMessages(profileId);
+      setSupportMessages(msgs);
+    } catch (e) {
+      console.error("Failed to fetch support messages:", e);
+    }
+  };
+
+  const handleOpenSupportChat = (profile: ProfileData) => {
+    setSupportChatProfile(profile);
+    setSupportInputText('');
+    setSupportMessages([]);
+    setSupportModalVisible(true);
+    fetchSupportMessages(profile.id);
+  };
+
+  const handleSendSupportMessage = async () => {
+    if (!supportInputText.trim() || !supportChatProfile || sendingSupport) return;
+    const txt = supportInputText.trim();
+    setSupportInputText('');
+    setSendingSupport(true);
+    try {
+      await api.sendSupportMessage(supportChatProfile.id, txt);
+      await fetchSupportMessages(supportChatProfile.id);
+    } catch (e) {
+      Alert.alert('Помилка', 'Не вдалося надіслати повідомлення');
+    } finally {
+      setSendingSupport(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!supportModalVisible || !supportChatProfile) return;
+    const interval = setInterval(() => {
+      fetchSupportMessages(supportChatProfile.id);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [supportModalVisible, supportChatProfile]);
+
   useEffect(() => {
     fetchProfiles();
   }, []);
@@ -152,6 +206,11 @@ export default function ProfilesScreen() {
     setIsVatPayer(false);
     setIsDirector(true);
     setAddress('');
+    setCalculationStartDate('');
+    setStartingDebtEdp('');
+    setStartingDebtEsv('');
+    setStartingDebtVz('');
+    setStartingDebtPdfo('');
     setEditingProfile(null);
   };
 
@@ -172,6 +231,11 @@ export default function ProfilesScreen() {
     setIsVatPayer(!!profile.is_vat_payer);
     setIsDirector(!!profile.is_director);
     setAddress(profile.address || '');
+    setCalculationStartDate(profile.calculation_start_date || '');
+    setStartingDebtEdp(profile.starting_debt_edp !== undefined && profile.starting_debt_edp !== null ? String(profile.starting_debt_edp) : '');
+    setStartingDebtEsv(profile.starting_debt_esv !== undefined && profile.starting_debt_esv !== null ? String(profile.starting_debt_esv) : '');
+    setStartingDebtVz(profile.starting_debt_vz !== undefined && profile.starting_debt_vz !== null ? String(profile.starting_debt_vz) : '');
+    setStartingDebtPdfo(profile.starting_debt_pdfo !== undefined && profile.starting_debt_pdfo !== null ? String(profile.starting_debt_pdfo) : '');
     setModalVisible(true);
   };
 
@@ -197,6 +261,11 @@ export default function ProfilesScreen() {
         is_vat_payer: isVatPayer,
         reg_date: new Date().toISOString().split('T')[0],
         address: address.trim() || undefined,
+        calculation_start_date: calculationStartDate || undefined,
+        starting_debt_edp: startingDebtEdp ? parseFloat(startingDebtEdp) : 0,
+        starting_debt_esv: startingDebtEsv ? parseFloat(startingDebtEsv) : 0,
+        starting_debt_vz: startingDebtVz ? parseFloat(startingDebtVz) : 0,
+        starting_debt_pdfo: startingDebtPdfo ? parseFloat(startingDebtPdfo) : 0,
       };
 
       if (editingProfile) {
@@ -674,6 +743,9 @@ export default function ProfilesScreen() {
                         <Users size={18} color={colors.success} />
                       </Pressable>
                     )}
+                    <Pressable onPress={() => handleOpenSupportChat(item)} style={styles.actionBtn}>
+                      <Mail size={18} color="#3b82f6" />
+                    </Pressable>
                     <Pressable onPress={() => handleOpenEdit(item)} style={styles.actionBtn}>
                       <Edit3 size={18} color={colors.primary} />
                     </Pressable>
@@ -782,6 +854,149 @@ export default function ProfilesScreen() {
             )}
           />
         </>
+      )}
+
+      {/* Support Chat Modal */}
+      {supportModalVisible && supportChatProfile && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={supportModalVisible}
+          onRequestClose={() => setSupportModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setSupportModalVisible(false)} />
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ width: '100%', justifyContent: 'flex-end' }}
+              pointerEvents="box-none"
+            >
+              <View
+                style={[
+                  styles.modalContent,
+                  {
+                    backgroundColor: colors.background,
+                    borderColor: colors.cardBorder,
+                    height: windowHeight * 0.7,
+                    maxHeight: windowHeight * 0.7,
+                    width: '100%',
+                    paddingBottom: Math.max(insets.bottom, 12),
+                  },
+                ]}
+              >
+                <View style={styles.modalHeader}>
+                  <View>
+                    <Text style={[styles.modalTitle, { color: colors.text, fontSize: 16 }]}>Служба підтримки</Text>
+                    <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>
+                      Профіль: {supportChatProfile.name}
+                    </Text>
+                  </View>
+                  <Pressable onPress={() => setSupportModalVisible(false)} style={styles.closeBtn}>
+                    <X size={24} color={colors.text} />
+                  </Pressable>
+                </View>
+
+                {/* Messages List */}
+                <FlatList
+                  data={supportMessages}
+                  keyExtractor={(item) => item.id.toString()}
+                  style={{ flex: 1, paddingVertical: 12 }}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                  renderItem={({ item }) => {
+                    const isFromAdmin = item.is_from_admin;
+                    return (
+                      <View style={{
+                        flexDirection: 'row',
+                        justifyContent: isFromAdmin ? 'flex-start' : 'flex-end',
+                        marginBottom: 10,
+                        paddingHorizontal: 8
+                      }}>
+                        <View style={{
+                          backgroundColor: isFromAdmin ? colors.border : colors.primary,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 16,
+                          borderBottomLeftRadius: isFromAdmin ? 2 : 16,
+                          borderBottomRightRadius: isFromAdmin ? 16 : 2,
+                          maxWidth: '80%',
+                        }}>
+                          <Text style={{
+                            color: isFromAdmin ? colors.text : '#ffffff',
+                            fontSize: 13,
+                            lineHeight: 18
+                          }}>
+                            {item.text}
+                          </Text>
+                          <Text style={{
+                            color: isFromAdmin ? colors.textMuted : 'rgba(255,255,255,0.7)',
+                            fontSize: 9,
+                            textAlign: 'right',
+                            marginTop: 4
+                          }}>
+                            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  }}
+                  ListEmptyComponent={() => (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}>
+                      <Mail size={48} color={colors.textMuted} style={{ marginBottom: 12 }} />
+                      <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>
+                        Немає повідомлень. Напишіть нам ваше питання, і адміністратор відповість вам найближчим часом.
+                      </Text>
+                    </View>
+                  )}
+                />
+
+                {/* Send input */}
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderTopWidth: 1,
+                  borderTopColor: colors.border,
+                  paddingTop: 8,
+                  paddingHorizontal: 8,
+                }}>
+                  <TextInput
+                    style={[
+                      styles.modalInput,
+                      {
+                        flex: 1,
+                        color: colors.text,
+                        borderColor: colors.border,
+                        backgroundColor: colors.card,
+                        marginBottom: 0,
+                        marginRight: 8,
+                        borderRadius: 20,
+                        paddingHorizontal: 16,
+                        height: 40,
+                      }
+                    ]}
+                    value={supportInputText}
+                    onChangeText={setSupportInputText}
+                    placeholder="Напишіть повідомлення..."
+                    placeholderTextColor={colors.textMuted + '80'}
+                  />
+                  <TouchableOpacity
+                    onPress={handleSendSupportMessage}
+                    disabled={!supportInputText.trim() || sendingSupport}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      backgroundColor: supportInputText.trim() ? colors.primary : colors.border,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Send size={18} color={supportInputText.trim() ? '#ffffff' : colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
       )}
 
       {/* Add / Edit Profile Modal */}
@@ -972,6 +1187,49 @@ export default function ProfilesScreen() {
                       thumbColor={isVatPayer ? '#ffffff' : '#f4f3f4'}
                     />
                   </View>
+
+                  <Text style={[styles.sectionLabel, { color: colors.textMuted, marginTop: 16, marginBottom: 8 }]}>
+                    Фіксація початкових боргів
+                  </Text>
+                  
+                  <Input
+                    label="Дата фіксації боргів (РРРР-ММ-ДД)"
+                    placeholder="Наприклад: 2026-01-01"
+                    value={calculationStartDate}
+                    onChangeText={setCalculationStartDate}
+                  />
+                  
+                  <Input
+                    label="Початковий борг по Єдиному податку (грн)"
+                    placeholder="0"
+                    value={startingDebtEdp}
+                    onChangeText={setStartingDebtEdp}
+                    keyboardType="numeric"
+                  />
+                  
+                  <Input
+                    label="Початковий борг по ЄСВ (грн)"
+                    placeholder="0"
+                    value={startingDebtEsv}
+                    onChangeText={setStartingDebtEsv}
+                    keyboardType="numeric"
+                  />
+                  
+                  <Input
+                    label="Початковий борг по Військовому збору (грн)"
+                    placeholder="0"
+                    value={startingDebtVz}
+                    onChangeText={setStartingDebtVz}
+                    keyboardType="numeric"
+                  />
+                  
+                  <Input
+                    label="Початковий борг по ПДФО (грн)"
+                    placeholder="0"
+                    value={startingDebtPdfo}
+                    onChangeText={setStartingDebtPdfo}
+                    keyboardType="numeric"
+                  />
 
                   <Button
                     title={editingProfile ? 'Оновити профіль' : 'Створити профіль'}
@@ -2226,5 +2484,13 @@ const styles = StyleSheet.create({
   periodicityText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  modalInput: {
+    height: 40,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    fontSize: 14,
+    marginBottom: 12,
   },
 });

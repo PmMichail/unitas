@@ -34,6 +34,13 @@ interface Profile {
   custom_iban_vz?: string;
 }
 
+interface SubscriptionInfo {
+  plan: string;
+  status: string;
+  expires_at: string | null;
+  features: Record<string, boolean>;
+}
+
 interface AppContextType {
   telegramId: string;
   setTelegramId: (id: string) => void;
@@ -44,6 +51,9 @@ interface AppContextType {
   refreshProfiles: () => Promise<void>;
   dashboardTrigger: number;
   triggerDashboardReload: () => void;
+  subscription: SubscriptionInfo | null;
+  refreshSubscription: () => Promise<void>;
+  loadingSubscription: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -134,6 +144,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+  const [loadingSubscription, setLoadingSubscription] = useState<boolean>(true);
+
+  const refreshSubscription = async () => {
+    if (!selectedProfile) {
+      setSubscription(null);
+      setLoadingSubscription(false);
+      return;
+    }
+    setLoadingSubscription(true);
+    try {
+      const data = await api.getCurrentSubscription(selectedProfile.id);
+      setSubscription(data);
+    } catch (err) {
+      console.error("Failed to load subscription in context:", err);
+      // Fail secure: default to free plan if error loading subscription
+      setSubscription({
+        plan: "free",
+        status: "active",
+        expires_at: null,
+        features: {}
+      });
+    } finally {
+      setLoadingSubscription(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshSubscription();
+  }, [selectedProfile]);
+
   const triggerDashboardReload = () => {
     setDashboardTrigger((prev) => prev + 1);
   };
@@ -150,6 +191,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshProfiles,
         dashboardTrigger,
         triggerDashboardReload,
+        subscription,
+        refreshSubscription,
+        loadingSubscription,
       }}
     >
       {children}

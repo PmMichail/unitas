@@ -464,7 +464,7 @@ export default function SubscriptionPage() {
                       <>
                         <CreditCard className="w-3.5 h-3.5" />
                         <span>
-                          {isActiveBusiness ? "Змінити період" : `Придбати за ${selectedPeriod === "monthly" ? prices.monthly : prices.yearly} грн`}
+                          {isActiveBusiness ? "Змінити період" : `Оплатити підписку (${selectedPeriod === "monthly" ? prices.monthly : prices.yearly} грн)`}
                         </span>
                       </>
                     )}

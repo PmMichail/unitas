@@ -2220,7 +2220,7 @@ export default function Profiles() {
                                 <>
                                   <CreditCard className="w-3 h-3" />
                                   <span>
-                                    {subModalSubscription?.plan === "business" ? "Змінити період" : `Придбати`}
+                                    {subModalSubscription?.plan === "business" ? "Змінити період" : `Оплатити підписку`}
                                   </span>
                                 </>
                               )}

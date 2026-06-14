@@ -40,7 +40,7 @@ export const api = {
   // Profiles
   getProfiles: async (telegramId: string) => {
     const response = await client.get(`/api/profiles`, {
-      params: { telegram_id: telegramId },
+      params: { telegram_id: telegramId, _t: Date.now() },
     });
     return response.data;
   },
@@ -403,7 +403,8 @@ export const api = {
   },
   adminGetUsers: async (token: string) => {
     const response = await client.get("/api/admin/users", {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
+      params: { _t: Date.now() }
     });
     return response.data;
   },
@@ -476,6 +477,45 @@ export const api = {
   resetPassword: async (data: Record<string, any>) => {
     const formData = toFormData(data);
     const response = await client.post("/api/auth/reset-password", formData);
+    return response.data;
+  },
+  enableAutoRenew: async (profileId: number, autoRenew: boolean) => {
+    const response = await client.post(`/api/subscriptions/enable-autorenew/${profileId}`, {
+      auto_renew: autoRenew
+    });
+    return response.data;
+  },
+  sendPasswordToEmail: async (email: string) => {
+    const response = await client.post(`/api/auth/send-password-to-email`, { email });
+    return response.data;
+  },
+  getSupportMessages: async (profileId: number) => {
+    const response = await client.get(`/api/support/messages/${profileId}`, {
+      params: { _t: Date.now() }
+    });
+    return response.data;
+  },
+  postSupportMessage: async (profileId: number, text: string) => {
+    const response = await client.post(`/api/support/message`, {
+      profile_id: profileId,
+      text: text
+    });
+    return response.data;
+  },
+  adminGetSupportChats: async (token: string) => {
+    const response = await client.get(`/api/support/chats`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { _t: Date.now() }
+    });
+    return response.data;
+  },
+  adminReplySupportMessage: async (profileId: number, text: string, token: string) => {
+    const response = await client.post(`/api/support/reply`, {
+      profile_id: profileId,
+      text: text
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     return response.data;
   }
 };
@@ -788,7 +828,8 @@ export const legislationApi = {
   },
   adminGetUsers: async (token: string) => {
     const response = await client.get("/api/admin/users", {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
+      params: { _t: Date.now() }
     });
     return response.data;
   },

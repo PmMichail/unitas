@@ -38,6 +38,13 @@ export interface ProfileData {
   reg_date?: string;
   esv_paid_by_employer?: boolean;
   address?: string;
+  calculation_start_date?: string;
+  starting_debt_edp?: number;
+  starting_debt_esv?: number;
+  starting_debt_vz?: number;
+  starting_debt_pdfo?: number;
+  is_blocked?: boolean;
+  block_reason?: string;
 }
 
 export const api = {
@@ -397,6 +404,75 @@ export const api = {
 
   confirmPayment: async (paymentId: number) => {
     const response = await client.post(`/api/payments/${paymentId}/confirm`);
+    return response.data;
+  },
+
+  // Templated Documents
+  createTemplatedDocument: async (data: {
+    profile_id: number;
+    template_name: string;
+    client_name: string;
+    contract_number: string;
+    client_email: string;
+    amount: number;
+    content?: string;
+  }) => {
+    const response = await client.post('/api/documents/template', data);
+    return response.data;
+  },
+
+  // Send Invoice / Document via Email
+  sendInvoice: async (invoiceId: number, toEmail: string, subject: string, message: string) => {
+    const response = await client.post(`/api/invoices/${invoiceId}/send`, {
+      to_email: toEmail,
+      subject,
+      message,
+    });
+    return response.data;
+  },
+
+  // Enterprise Documents
+  getProfileDocuments: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/documents`);
+    return response.data;
+  },
+
+  deleteProfileDocument: async (profileId: number, docId: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/documents/${docId}`);
+    return response.data;
+  },
+
+  sendProfileDocument: async (docId: number, data: { toEmail: string; subject?: string; message?: string }) => {
+    const response = await client.post(`/api/profiles/documents/${docId}/send`, data);
+    return response.data;
+  },
+
+  uploadProfileDocument: async (profileId: number, fileUri: string, fileName: string, fileType: string) => {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: fileType,
+    } as any);
+    const response = await client.post(`/api/profiles/${profileId}/documents`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  },
+
+  // Support Chat
+  getSupportMessages: async (profileId: number) => {
+    const response = await client.get(`/api/support/messages/${profileId}`);
+    return response.data;
+  },
+
+  sendSupportMessage: async (profileId: number, text: string) => {
+    const response = await client.post('/api/support/message', {
+      profile_id: profileId,
+      text,
+    });
     return response.data;
   },
 };
