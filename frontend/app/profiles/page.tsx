@@ -155,6 +155,22 @@ export default function Profiles() {
     }
   };
 
+  const handleSubModalToggleAutoRenew = async (currentStatus: boolean) => {
+    if (!subModalProfile) return;
+    setSubModalLoading(true);
+    try {
+      const updated = await api.enableAutoRenew(subModalProfile.id, !currentStatus);
+      alert(updated.auto_renew ? "Автопродовження успішно увімкнено!" : "Автопродовження успішно вимкнено!");
+      const subData = await api.getCurrentSubscription(subModalProfile.id);
+      setSubModalSubscription(subData);
+    } catch (error) {
+      console.error("Error toggling auto-renew:", error);
+      alert("Помилка при зміні статусу автопродовження");
+    } finally {
+      setSubModalLoading(false);
+    }
+  };
+
   const handleSubModalRefreshHistory = async () => {
     if (!subModalProfile) return;
     setSubModalRefreshingHistory(true);
@@ -2253,30 +2269,35 @@ export default function Profiles() {
                                 <span className="text-slate-550">Діє до:</span>
                                 <span className="font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-1">
                                   <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-                                  {subModalSubscription.expires_at ? new Date(subModalSubscription.expires_at).toLocaleDateString("uk-UA") : "Необмежено"}
+                                  {subModalSubscription.status === "pending"
+                                    ? "Очікує оплати"
+                                    : subModalSubscription.expires_at
+                                      ? new Date(subModalSubscription.expires_at).toLocaleDateString("uk-UA")
+                                      : "Необмежено"}
                                 </span>
                               </div>
                               
                               <div className="flex justify-between items-center py-1.5 border-b border-slate-100 dark:border-slate-900/60">
                                 <span className="text-slate-550">Автопродовження:</span>
-                                <span className={`font-bold ${subModalSubscription.auto_renew ? "text-emerald-500" : "text-rose-500"}`}>
-                                  {subModalSubscription.auto_renew ? "Увімкнено" : "Вимкнено"}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSubModalToggleAutoRenew(subModalSubscription.auto_renew)}
+                                  disabled={subModalLoading}
+                                  title="Натисніть для зміни статусу"
+                                  className={`text-[11px] px-2.5 py-0.5 rounded-xl font-bold transition-all border flex items-center gap-1 ${
+                                    subModalSubscription.auto_renew 
+                                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/20" 
+                                      : "bg-rose-500/10 text-rose-500 border-rose-500/30 hover:bg-rose-500/20"
+                                  }`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${subModalSubscription.auto_renew ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`} />
+                                  <span>{subModalSubscription.auto_renew ? "Увімкнено" : "Вимкнено"}</span>
+                                  <span className="text-[9px] font-normal opacity-60">(Змінити)</span>
+                                </button>
                               </div>
                             </>
                           )}
                         </div>
-
-                        {subModalSubscription?.plan === "business" && subModalSubscription.auto_renew && (
-                          <button
-                            onClick={handleSubModalCancelAutoRenew}
-                            disabled={subModalLoading}
-                            className="w-full py-2.5 rounded-xl border border-rose-500/15 bg-rose-500/5 hover:bg-rose-500/10 text-rose-550 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                            <span>Вимкнути автопродовження</span>
-                          </button>
-                        )}
                       </div>
 
                       {/* Usage details for Free tariff */}

@@ -150,9 +150,10 @@ export default function SubscriptionPage() {
       alert(data.message || "Підписку активовано!");
       await loadData();
       await refreshProfiles();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error upgrading directly:", error);
-      alert("Помилка при прямому підключенні підписки");
+      const detail = error.response?.data?.detail || "Помилка при прямому підключенні підписки";
+      alert(detail);
     } finally {
       setLoading(false);
     }
@@ -171,6 +172,21 @@ export default function SubscriptionPage() {
     } catch (error) {
       console.error("Error canceling subscription:", error);
       alert("Помилка при вимкненні автопродовження");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleAutoRenew = async (currentStatus: boolean) => {
+    if (!selectedProfile) return;
+    setLoading(true);
+    try {
+      const updated = await api.enableAutoRenew(selectedProfile.id, !currentStatus);
+      alert(updated.auto_renew ? "Автопродовження успішно увімкнено!" : "Автопродовження успішно вимкнено!");
+      await fetchSubscriptionDetails();
+    } catch (error) {
+      console.error("Error toggling auto-renew:", error);
+      alert("Помилка при зміні статусу автопродовження");
     } finally {
       setLoading(false);
     }
@@ -508,27 +524,26 @@ export default function SubscriptionPage() {
                   </div>
                   <div className="flex justify-between items-center py-2 border-b border-slate-900/60">
                     <span className="text-xs text-slate-550">Автопродовження</span>
-                    <span className={`text-xs font-bold ${subscription.auto_renew ? "text-emerald-400" : "text-rose-450"}`}>
-                      {subscription.auto_renew ? "Увімкнено" : "Вимкнено"}
-                    </span>
+                    <button
+                      onClick={() => handleToggleAutoRenew(subscription.auto_renew)}
+                      disabled={loading}
+                      title="Натисніть для зміни статусу"
+                      className={`text-[11px] px-3 py-1 rounded-xl font-bold transition-all border flex items-center gap-1.5 ${
+                        subscription.auto_renew 
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20" 
+                          : "bg-rose-500/10 text-rose-400 border-rose-500/30 hover:bg-rose-500/20"
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${subscription.auto_renew ? "bg-emerald-400 animate-pulse" : "bg-rose-455"}`} />
+                      <span>{subscription.auto_renew ? "Увімкнено" : "Вимкнено"}</span>
+                      <span className="text-[9px] font-normal opacity-60">(Змінити)</span>
+                    </button>
                   </div>
                 </>
               )}
             </div>
-
-            {/* Cancel Auto Renew button */}
-            {isActiveBusiness && subscription.auto_renew && (
-              <button
-                onClick={cancelAutoRenew}
-                disabled={loading}
-                className="w-full py-2.5 rounded-xl border border-rose-500/15 bg-rose-500/5 hover:bg-rose-500/10 text-rose-400 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-              >
-                <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                <span>Вимкнути автопродовження</span>
-              </button>
-            )}
           </div>
-
+ 
           {/* Usage limit bar */}
           {!isActiveBusiness && (
             <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-4">
