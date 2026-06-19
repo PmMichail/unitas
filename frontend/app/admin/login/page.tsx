@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { Lock, Mail, AlertCircle, ShieldAlert } from "lucide-react";
 
 export default function AdminLogin() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("admin@unitas.com");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

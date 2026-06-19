@@ -51,4 +51,5 @@ declare module 'lucide-react-native' {
   export const Clipboard: Icon;
   export const Mail: Icon;
   export const Send: Icon;
+  export const Globe: Icon;
 }

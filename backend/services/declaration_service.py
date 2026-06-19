@@ -1,6 +1,7 @@
 # backend/services/declaration_service.py
 
 import os
+import json
 from typing import Dict, List, Optional
 from datetime import datetime, date
 import google.generativeai as genai

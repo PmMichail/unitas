@@ -515,3 +515,60 @@ class DPSAPI:
             "document_name": accepted_doc.get("docName"),
             "registration_number": accepted_doc.get("nreg")
         }
+    
+    def get_current_tax_rates(self) -> dict:
+        """Отримати актуальні податкові ставки для ФОП"""
+        return {
+            "single_tax": {
+                "group_1": {"rate": 10, "limit": 294000, "description": "до 294,000 грн/рік"},
+                "group_2": {"rate": 20, "limit": 2208000, "description": "до 2,208,000 грн/рік"},
+                "group_3": {"rate": 5, "limit": None, "description": "без обмежень"}
+            },
+            "military_tax": {
+                "rate": 1.5,
+                "description": "1.5% від доходу"
+            },
+            "esv": {
+                "rate": 22,
+                "min_wage_base": 9288,  # UAH per month (2024)
+                "description": "22% від мінімальної зарплати"
+            },
+            "pdfo": {
+                "rate": 18,
+                "description": "18% від доходу (загальна система)"
+            },
+            "vat": {
+                "rate": 20,
+                "description": "20% ПДВ"
+            },
+            "updated_at": datetime.datetime.now().isoformat()
+        }
+    
+    def get_recent_changes(self) -> list:
+        """Отримати останні зміни в податковому законодавстві"""
+        return [
+            {
+                "id": 1,
+                "date": "2024-01-01",
+                "title": "Збільшення військового збору",
+                "description": "Ставка військового збору збільшена з 1% до 1.5%",
+                "affected_groups": [1, 2, 3],
+                "type": "rate_change"
+            },
+            {
+                "id": 2,
+                "date": "2024-01-01",
+                "title": "Оновлення лімітів доходу для ФОП",
+                "description": "Нові ліміти: Група 1 - 294,000 грн, Група 2 - 2,208,000 грн",
+                "affected_groups": [1, 2],
+                "type": "limit_change"
+            },
+            {
+                "id": 3,
+                "date": "2024-01-01",
+                "title": "Обов'язкове використання ПРРО",
+                "description": "Групи 2 та 3 зобов'язані використовувати ПРРО",
+                "affected_groups": [2, 3],
+                "type": "requirement"
+            }
+        ]

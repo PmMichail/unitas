@@ -39,6 +39,7 @@ function LoginPageContent() {
   const [regRate, setRegRate] = useState<number>(5);
   const [regHasEmployees, setRegHasEmployees] = useState(false);
   const [regIsVatPayer, setRegIsVatPayer] = useState(false);
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
 
   const searchParams = useSearchParams();
   const refParam = searchParams.get("ref") || "";
@@ -256,6 +257,11 @@ function LoginPageContent() {
       return;
     }
 
+    if (!agreeToTerms) {
+      setError("Будь ласка, погодьтеся з Публічною офертою та Політикою конфіденційності.");
+      return;
+    }
+
     setIsLoading(true);
     setError("");
 
@@ -299,6 +305,15 @@ function LoginPageContent() {
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-600/10 blur-[120px] pointer-events-none" />
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md z-10">
+        <div className="flex justify-center mb-4">
+          <Link
+            href="/benefits"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600/10 border border-indigo-500/30 rounded-full text-indigo-400 hover:text-indigo-300 hover:bg-indigo-600/20 text-xs font-semibold transition-all"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Чому UniTax?
+          </Link>
+        </div>
         <div className="flex justify-center">
           <div className="w-12 h-12 bg-gradient-to-tr from-indigo-600 to-indigo-400 rounded-2xl flex items-center justify-center shadow-xl shadow-indigo-600/25">
             <span className="font-extrabold text-white text-2xl">U</span>
@@ -441,6 +456,7 @@ function LoginPageContent() {
                     <option value="fop_general">ФОП (Загальна)</option>
                     <option value="llc_ep">ТОВ (Єдиний)</option>
                     <option value="llc_profit">ТОВ (Загальна)</option>
+                    <option value="non_profit">Неприбуткова організація</option>
                   </select>
                 </div>
 
@@ -499,6 +515,26 @@ function LoginPageContent() {
                     className="rounded border-slate-800 bg-slate-950 text-indigo-600 focus:ring-indigo-500/20"
                   />
                   <span>Платник ПДВ</span>
+                </label>
+
+                <label className="flex items-start space-x-3 text-xs font-semibold text-slate-400 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={agreeToTerms}
+                    onChange={(e) => setAgreeToTerms(e.target.checked)}
+                    className="rounded border-slate-800 bg-slate-950 text-indigo-600 focus:ring-indigo-500/20 mt-0.5"
+                    required
+                  />
+                  <span>
+                    Я погоджуюся з{" "}
+                    <Link href="/terms" target="_blank" className="text-indigo-400 hover:text-indigo-300 underline">
+                      Публічною офертою (договором про надання послуг)
+                    </Link>{" "}
+                    та{" "}
+                    <Link href="/privacy" target="_blank" className="text-indigo-400 hover:text-indigo-300 underline">
+                      Політикою конфіденційності
+                    </Link>
+                  </span>
                 </label>
               </div>
 
@@ -670,9 +706,6 @@ function LoginPageContent() {
                       disabled={isLoading}
                       required
                     />
-                  </div>
-                  <div className="text-[10px] text-slate-500 italic mt-1">
-                    Для тестування підійде код: <span className="font-bold text-indigo-400">123456</span>
                   </div>
                 </div>
 
@@ -1011,10 +1044,6 @@ function LoginPageContent() {
                     </div>
                   )}
 
-                  <div className="text-[11px] text-slate-500 italic text-center">
-                    Для тестування підійде код: <span className="font-bold text-indigo-400">123456</span>
-                  </div>
-
                   <div>
                     <button
                       type="submit"
@@ -1045,32 +1074,6 @@ function LoginPageContent() {
                 >
                   Немає акаунта? Зареєструватися
                 </button>
-              </div>
-
-              <div className="mt-8">
-                <div className="relative">
-                  <div className="absolute inset-y-0 flex items-center w-full">
-                    <div className="w-full border-t border-slate-800/80"></div>
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase tracking-wider font-bold">
-                    <span className="px-3 bg-[#0a0f1d] text-slate-500">Або для тесту</span>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInputValue("1038622739");
-                      handleTelegramLogin("1038622739");
-                    }}
-                    disabled={isLoading}
-                    className="w-full flex items-center justify-center py-3.5 px-4 bg-slate-950/60 hover:bg-slate-950 border border-slate-800 text-indigo-400 hover:text-indigo-300 text-xs font-bold rounded-2xl transition-all gap-2"
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    <span>Швидкий вхід з тестовим акаунтом</span>
-                  </button>
-                </div>
               </div>
             </>
           )}

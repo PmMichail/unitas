@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { User, Moon, Sun, Fingerprint, LogOut, Info, Laptop } from 'lucide-react-native';
+import { User, Moon, Sun, Fingerprint, LogOut, Info, Laptop, Globe } from 'lucide-react-native';
 import { api } from '../../services/api';
 
 export default function SettingsScreen() {
@@ -233,6 +233,26 @@ export default function SettingsScreen() {
                 Версія мобільного додатка: 1.0.0{'\n'}
                 Платформа: {Platform.OS === 'ios' ? 'iOS' : 'Android'} (Expo SDK 54)
               </Text>
+            </View>
+          </View>
+        </Card>
+
+        {/* Transition to website Card */}
+        <Card style={styles.card}>
+          <View style={styles.row}>
+            <Globe size={24} color={colors.primary} style={styles.settingIcon} />
+            <View style={styles.textContainer}>
+              <Text style={[styles.infoTitle, { color: colors.text }]}>Веб-сайт UniTax</Text>
+              <Text style={[styles.infoDesc, { color: colors.textMuted, marginBottom: 8 }]}>
+                На нашому веб-сайті доступно більше функцій, включаючи повний кабінет, завантаження звітів, рахунки, акти та правову інформацію.
+              </Text>
+              <Button
+                title="Перейти на unitax.pro"
+                onPress={() => Linking.openURL('https://unitax.pro')}
+                variant="outline"
+                style={{ borderColor: colors.primary }}
+                textStyle={{ color: colors.primary }}
+              />
             </View>
           </View>
         </Card>

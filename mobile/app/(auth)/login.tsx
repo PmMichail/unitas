@@ -61,6 +61,7 @@ export default function LoginScreen() {
   // Success Modal State
   const [successModalVisible, setSuccessModalVisible] = useState(false);
   const [newEmail, setNewEmail] = useState('');
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
 
   // 2FA Verification State
   const [verificationModalVisible, setVerificationModalVisible] = useState(false);
@@ -194,6 +195,11 @@ export default function LoginScreen() {
   const handleRegister = async () => {
     if (!emailInput.trim() || !passwordInput.trim() || !regName.trim() || !regTaxId.trim()) {
       Alert.alert('Помилка', 'Будь ласка, обов\'язково вкажіть Email, Пароль, Назву компанії та Код ЄДРПОУ/ІПН.');
+      return;
+    }
+
+    if (!agreeToTerms) {
+      Alert.alert('Помилка', 'Будь ласка, погодьтеся з Публічною офертою та Політикою конфіденційності для продовження.');
       return;
     }
 
@@ -395,14 +401,6 @@ export default function LoginScreen() {
               />
             )}
 
-            <Button
-              title="Спробувати гостьовий доступ"
-              onPress={handleGuestLogin}
-              variant="outline"
-              isLoading={loading}
-              style={[styles.secondaryBtn, { marginTop: 8 }]}
-            />
-
             <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
               <Text style={[styles.toggleModeText, { color: colors.primary }]}>
                 Немає акаунта? Зареєструватися
@@ -463,7 +461,12 @@ export default function LoginScreen() {
             <View style={styles.segmentedContainer}>
               <Pressable
                 style={[styles.segment, regType === 'fop' && { backgroundColor: colors.primary }]}
-                onPress={() => setRegType('fop')}
+                onPress={() => {
+                  setRegType('fop');
+                  if (regTaxSystem === 'non_profit') {
+                    setRegTaxSystem('single_tax');
+                  }
+                }}
               >
                 <Text style={[styles.segmentText, regType === 'fop' && { color: '#ffffff' }, { color: colors.text }]}>
                   ФОП
@@ -498,7 +501,7 @@ export default function LoginScreen() {
                 onPress={() => setRegTaxSystem('single_tax')}
               >
                 <Text style={[styles.segmentText, regTaxSystem === 'single_tax' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Єдиний податок
+                  Єдиний
                 </Text>
               </Pressable>
               <Pressable
@@ -509,6 +512,16 @@ export default function LoginScreen() {
                   Загальна
                 </Text>
               </Pressable>
+              {regType === 'company' && (
+                <Pressable
+                  style={[styles.segment, regTaxSystem === 'non_profit' && { backgroundColor: colors.primary }]}
+                  onPress={() => setRegTaxSystem('non_profit')}
+                >
+                  <Text style={[styles.segmentText, regTaxSystem === 'non_profit' && { color: '#ffffff' }, { color: colors.text }]}>
+                    Неприбуткова
+                  </Text>
+                </Pressable>
+              )}
             </View>
 
             {regType === 'fop' && regTaxSystem === 'single_tax' && (
@@ -570,6 +583,38 @@ export default function LoginScreen() {
                 />
               </View>
             )}
+
+            {/* Agreement with Terms & Public Offer */}
+            <View style={styles.termsRow}>
+              <Pressable
+                onPress={() => setAgreeToTerms(!agreeToTerms)}
+                style={[
+                  styles.checkbox,
+                  { borderColor: colors.textMuted },
+                  agreeToTerms && { backgroundColor: colors.primary, borderColor: colors.primary }
+                ]}
+              >
+                {agreeToTerms && <Text style={styles.checkboxCheck}>✓</Text>}
+              </Pressable>
+              <View style={styles.termsTextContainer}>
+                <Text style={[styles.termsText, { color: colors.textMuted }]}>
+                  Я погоджуюся з{' '}
+                  <Text
+                    style={[styles.linkText, { color: colors.primary }]}
+                    onPress={() => Linking.openURL('https://unitax.pro/terms')}
+                  >
+                    Публічною офертою (договором про надання послуг)
+                  </Text>{' '}
+                  та{' '}
+                  <Text
+                    style={[styles.linkText, { color: colors.primary }]}
+                    onPress={() => Linking.openURL('https://unitax.pro/privacy')}
+                  >
+                    Політикою конфіденційності
+                  </Text>
+                </Text>
+              </View>
+            </View>
 
             <Button
               title="Зареєструватися"
@@ -842,5 +887,37 @@ const styles = StyleSheet.create({
   },
   continueBtn: {
     width: '100%',
+  },
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginVertical: 12,
+    paddingHorizontal: 4,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 2,
+  },
+  checkboxCheck: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  termsTextContainer: {
+    flex: 1,
+  },
+  termsText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  linkText: {
+    textDecorationLine: 'underline',
+    fontWeight: '600',
   },
 });

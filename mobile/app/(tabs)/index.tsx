@@ -38,6 +38,7 @@ import {
   Upload,
   MessageSquare,
   Send,
+  Globe,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -54,6 +55,27 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [activeMobileModal, setActiveMobileModal] = useState<'income' | 'tax_due' | 'tax_paid' | 'debt' | 'pay_taxes' | null>(null);
+  const [pendingTaxSelect, setPendingTaxSelect] = useState<{
+    tax_type: string;
+    period: string;
+    amount: number;
+  } | null>(null);
+
+  const parseAmountFromDesc = (desc: string): number => {
+    if (!desc) return 0;
+    const cleanDesc = desc.replace(/\s/g, '');
+    const match = cleanDesc.match(/([\d]+(?:[.,]\d+)?)(?:грн|uah)/i);
+    if (match) {
+      const valStr = match[1].replace(',', '.');
+      return parseFloat(valStr) || 0;
+    }
+    const numbersMatch = cleanDesc.match(/([\d]+(?:[.,]\d+)?)/);
+    if (numbersMatch) {
+      const valStr = numbersMatch[1].replace(',', '.');
+      return parseFloat(valStr) || 0;
+    }
+    return 0;
+  };
 
   // States for tax calendar events
   const [isAllEventsModalVisible, setIsAllEventsModalVisible] = useState(false);
@@ -86,8 +108,18 @@ export default function DashboardScreen() {
   const [generatingPayment, setGeneratingPayment] = useState(false);
   const [paymentAmounts, setPaymentAmounts] = useState<{[key: string]: string}>({});
 
+  const [showCustomAccounts, setShowCustomAccounts] = useState(false);
+  const [customRecipient, setCustomRecipient] = useState('');
+  const [customEdrpou, setCustomEdrpou] = useState('');
+  const [customIbanEdp, setCustomIbanEdp] = useState('');
+  const [customIbanEsv, setCustomIbanEsv] = useState('');
+  const [customIbanVz, setCustomIbanVz] = useState('');
+  const [customIbanPdfo, setCustomIbanPdfo] = useState('');
+  const [savingCustom, setSavingCustom] = useState(false);
+  const [payingMonoPay, setPayingMonoPay] = useState(false);
+
   const loadLiabilities = async () => {
-    if (!selectedProfile) return;
+    if (!selectedProfile) return [];
     setLoadingLiabilities(true);
     try {
       const data = await api.getTaxLiabilities(selectedProfile.id);
@@ -97,9 +129,11 @@ export default function DashboardScreen() {
         initialAmounts[l.tax_type] = String(l.amount || 0);
       });
       setPaymentAmounts(initialAmounts);
+      return data;
     } catch (err) {
       console.error(err);
       Alert.alert('Помилка', 'Не вдалося завантажити податкові зобов\'язання');
+      return [];
     } finally {
       setLoadingLiabilities(false);
     }
@@ -107,17 +141,70 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     if (activeMobileModal === 'pay_taxes' && selectedProfile) {
-      loadLiabilities();
-      setGeneratedPayment(null);
-      setSelectedLiability(null);
+      loadLiabilities().then((loadedLiabilities) => {
+        if (pendingTaxSelect) {
+          const targetType = pendingTaxSelect.tax_type;
+          const matched = loadedLiabilities.find((l: any) => l.tax_type === targetType);
+          
+          if (matched) {
+            setSelectedLiability(matched);
+            if (pendingTaxSelect.amount > 0) {
+              setPaymentAmounts(prev => ({
+                ...prev,
+                [targetType]: String(pendingTaxSelect.amount)
+              }));
+              handleGeneratePayment({
+                ...matched,
+                amount: pendingTaxSelect.amount
+              }, pendingTaxSelect.amount);
+            } else {
+              handleGeneratePayment(matched);
+            }
+          } else {
+            // Virtual liability fallback
+            const taxNames: Record<string, string> = {
+              edp: 'Єдиний податок',
+              esv: 'ЄСВ за себе',
+              vz: 'Військовий збір',
+              pdfo: 'ПДФО за працівників'
+            };
+            const virtualLiab = {
+              id: -Math.floor(Math.random() * 10000) - 1,
+              tax_type: targetType,
+              tax_type_name: taxNames[targetType] || 'Податок',
+              amount: pendingTaxSelect.amount || (targetType === 'esv' ? 1760 : 0),
+              period: pendingTaxSelect.period,
+              description: `Сплата за календарем: ${pendingTaxSelect.period}`
+            };
+            setLiabilities(prev => [virtualLiab, ...prev]);
+            setSelectedLiability(virtualLiab);
+            setPaymentAmounts(prev => ({
+              ...prev,
+              [targetType]: String(virtualLiab.amount)
+            }));
+            handleGeneratePayment(virtualLiab, virtualLiab.amount);
+          }
+        }
+      });
+      
+      if (!pendingTaxSelect) {
+        setGeneratedPayment(null);
+        setSelectedLiability(null);
+      }
     }
-  }, [activeMobileModal, selectedProfile?.id]);
+  }, [activeMobileModal, selectedProfile?.id, pendingTaxSelect]);
 
-  const handleGeneratePayment = async (liability: any) => {
+  useEffect(() => {
+    if (activeMobileModal === 'pay_taxes' && selectedLiability && generatedPayment) {
+      handleGeneratePayment(selectedLiability);
+    }
+  }, [selectedRegion, selectedBank]);
+
+  const handleGeneratePayment = async (liability: any, customAmt?: number) => {
     if (!selectedProfile) return;
     setGeneratingPayment(true);
     const amtStr = paymentAmounts[liability.tax_type] ?? String(liability.amount || 0);
-    const amtVal = parseFloat(amtStr) || liability.amount || 0;
+    const amtVal = customAmt !== undefined ? customAmt : (parseFloat(amtStr) || liability.amount || 0);
     try {
       const res = await api.generatePayment({
         profile_id: selectedProfile.id,
@@ -137,24 +224,107 @@ export default function DashboardScreen() {
     }
   };
 
+
+  const handleClosePayTaxes = () => {
+    setActiveMobileModal(null);
+    setPendingTaxSelect(null);
+    setGeneratedPayment(null);
+    setSelectedLiability(null);
+  };
+
   const handleConfirmPayment = async () => {
     if (!generatedPayment) return;
-    setLoading(true);
+    Alert.alert(
+      'Підтвердження',
+      'Ви впевнені, що хочете позначити це податкове зобов\'язання як сплачене вручну?',
+      [
+        { text: 'Скасувати', style: 'cancel' },
+        {
+          text: 'Підтвердити',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              await api.confirmPayment(generatedPayment.id);
+              haptics.success();
+              Alert.alert('Успіх', 'Оплату підтверджено. Статус оновиться після клірингу.');
+              setGeneratedPayment(null);
+              setSelectedLiability(null);
+              loadLiabilities();
+              if (selectedProfile) {
+                fetchDashboard(selectedProfile.id);
+              }
+            } catch (err) {
+              console.error(err);
+              Alert.alert('Помилка', 'Не вдалося підтвердити платіж');
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleSaveCustomAccounts = async () => {
+    if (!selectedProfile) return;
+    setSavingCustom(true);
     try {
-      await api.confirmPayment(generatedPayment.id);
+      await api.updateProfile(selectedProfile.id, {
+        custom_recipient: customRecipient.trim(),
+        custom_edrpou: customEdrpou.trim(),
+        custom_iban_edp: customIbanEdp.trim(),
+        custom_iban_esv: customIbanEsv.trim(),
+        custom_iban_vz: customIbanVz.trim(),
+        custom_iban_pdfo: customIbanPdfo.trim()
+      });
+
+      const updatedProfile = {
+        ...selectedProfile,
+        custom_recipient: customRecipient.trim(),
+        custom_edrpou: customEdrpou.trim(),
+        custom_iban_edp: customIbanEdp.trim(),
+        custom_iban_esv: customIbanEsv.trim(),
+        custom_iban_vz: customIbanVz.trim(),
+        custom_iban_pdfo: customIbanPdfo.trim()
+      };
+      setSelectedProfile(updatedProfile);
+      setProfiles(prev => prev.map(p => p.id === selectedProfile.id ? updatedProfile : p));
+
       haptics.success();
-      Alert.alert('Успіх', 'Оплату підтверджено. Статус оновиться після клірингу.');
-      setGeneratedPayment(null);
-      setSelectedLiability(null);
-      loadLiabilities();
-      if (selectedProfile) {
-        fetchDashboard(selectedProfile.id);
+      Alert.alert('Успіх', 'Бюджетні рахунки успішно збережено!');
+
+      if (selectedLiability) {
+        handleGeneratePayment(selectedLiability);
       }
     } catch (err) {
       console.error(err);
-      Alert.alert('Помилка', 'Не вдалося підтвердити платіж');
+      Alert.alert('Помилка', 'Не вдалося зберегти бюджетні рахунки');
     } finally {
-      setLoading(false);
+      setSavingCustom(false);
+    }
+  };
+
+  const handleMonoPayPayment = async () => {
+    if (!selectedProfile || !selectedLiability || !generatedPayment) return;
+    setPayingMonoPay(true);
+    try {
+      const res = await api.createMonoPayPayment({
+        profile_id: selectedProfile.id,
+        tax_type: selectedLiability.tax_type,
+        period: selectedLiability.period || generatedPayment.period || '2026-06',
+        amount: generatedPayment.amount || selectedLiability.amount || 0
+      });
+
+      if (res.pageUrl) {
+        await Linking.openURL(res.pageUrl);
+      } else {
+        Alert.alert('Помилка', 'Не вдалося отримати посилання на оплату Mono Pay');
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Помилка', 'Не вдалося створити платіж Mono Pay');
+    } finally {
+      setPayingMonoPay(false);
     }
   };
 
@@ -298,6 +468,41 @@ export default function DashboardScreen() {
           text: `Вітаю! Я ваш персональний ШІ-Асистент UniTax для профілю **${selectedProfile.name}**. Я знаю все про ваші податки, доходи, працівників та військовий збір. Запитайте мене про будь-що!`,
         },
       ]);
+
+      // Detect region based on profile address
+      if (selectedProfile.address) {
+        const addr = selectedProfile.address.toLowerCase();
+        if (addr.includes("дніпро") || addr.includes("dnipro")) {
+          setSelectedRegion("dnipro");
+        } else if (addr.includes("львів") || addr.includes("lviv")) {
+          setSelectedRegion("lviv");
+        } else if (addr.includes("одес") || addr.includes("odesa")) {
+          setSelectedRegion("odesa");
+        } else if (addr.includes("харк") || addr.includes("kharkiv")) {
+          setSelectedRegion("kharkiv");
+        } else {
+          setSelectedRegion("kyiv");
+        }
+      } else {
+        setSelectedRegion("kyiv");
+      }
+
+      // Initialize custom budget accounts
+      setCustomRecipient(selectedProfile.custom_recipient || "");
+      setCustomEdrpou(selectedProfile.custom_edrpou || "");
+      setCustomIbanEdp(selectedProfile.custom_iban_edp || "");
+      setCustomIbanEsv(selectedProfile.custom_iban_esv || "");
+      setCustomIbanVz(selectedProfile.custom_iban_vz || "");
+      setCustomIbanPdfo(selectedProfile.custom_iban_pdfo || "");
+      setShowCustomAccounts(false);
+    } else {
+      setCustomRecipient("");
+      setCustomEdrpou("");
+      setCustomIbanEdp("");
+      setCustomIbanEsv("");
+      setCustomIbanVz("");
+      setCustomIbanPdfo("");
+      setShowCustomAccounts(false);
     }
   }, [selectedProfile]);
 
@@ -326,8 +531,8 @@ export default function DashboardScreen() {
     setSendingChat(true);
 
     try {
-      const res = await api.agentChat(selectedProfile.id, userMsg);
-      setChatMessages((prev) => [...prev, { sender: 'agent', text: res.response }]);
+      const res = await api.agentChat(selectedProfile.id, userMsg, chatMessages);
+      setChatMessages((prev) => [...prev, { sender: 'agent', text: res.response || res.answer }]);
     } catch (e) {
       console.error(e);
       setChatMessages((prev) => [
@@ -685,6 +890,20 @@ export default function DashboardScreen() {
                           if (isReport) {
                             router.push('/invoices');
                           } else {
+                            const tax_name_to_type: Record<string, string> = {
+                              "unified_tax": "edp",
+                              "esv": "esv",
+                              "military_tax": "vz",
+                              "pit": "pdfo"
+                            };
+                            const type = tax_name_to_type[event.tax_name];
+                            if (type) {
+                              setPendingTaxSelect({
+                                tax_type: type,
+                                period: getEventPeriod(event.title) || (event.due_date ? String(event.due_date).substring(0, 7) : ""),
+                                amount: event.amount_desc ? parseAmountFromDesc(event.amount_desc) : 0
+                              });
+                            }
                             setActiveMobileModal('pay_taxes');
                           }
                         }}
@@ -813,6 +1032,24 @@ export default function DashboardScreen() {
                 title="Запустити Чат з ШІ"
                 onPress={() => setChatModalVisible(true)}
                 variant="primary"
+                style={styles.aiCardBtn}
+              />
+            </Card>
+
+            {/* Website Redirect Card */}
+            <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 16 }]}>Веб-версія UniTax</Text>
+            <Card style={[styles.aiCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <View style={styles.aiCardHeader}>
+                <Globe size={18} color={colors.primary} style={styles.aiIcon} />
+                <Text style={[styles.aiCardTitle, { color: colors.text }]}>Офіційний веб-сайт</Text>
+              </View>
+              <Text style={[styles.aiCardBody, { color: colors.textMuted }]}>
+                Повний кабінет, імпорт банківських виписок, формування звітів, створення інвойсів та правові документи на unitax.pro.
+              </Text>
+              <Button
+                title="Перейти на unitax.pro"
+                onPress={() => Linking.openURL('https://unitax.pro')}
+                variant="outline"
                 style={styles.aiCardBtn}
               />
             </Card>
@@ -1311,7 +1548,7 @@ export default function DashboardScreen() {
       <Modal
         animationType="fade"
         transparent={true}
-        visible={activeMobileModal !== null}
+        visible={activeMobileModal !== null && activeMobileModal !== 'pay_taxes'}
         onRequestClose={() => setActiveMobileModal(null)}
       >
         <Pressable style={styles.modalOverlay} onPress={() => setActiveMobileModal(null)}>
@@ -1517,7 +1754,7 @@ export default function DashboardScreen() {
 
                   <View style={[styles.mobileStatsBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
                     <View style={styles.mobileStatRow}>
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>
                           {isSimplified 
                             ? 'Єдиний податок' 
@@ -1527,40 +1764,116 @@ export default function DashboardScreen() {
                         </Text>
                         <Text style={{ color: colors.textMuted, fontSize: 10 }}>Нарах: {dashboardData?.tax_due} ₴ | Спл: {dashboardData?.ep_paid} ₴</Text>
                       </View>
-                      <Text style={{ color: dashboardData?.ep_diff > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
-                        {dashboardData?.ep_diff > 0 ? `+${dashboardData?.ep_diff} ₴` : 'Сплачено'}
-                      </Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ color: dashboardData?.ep_diff > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
+                          {dashboardData?.ep_diff > 0 ? `+${dashboardData?.ep_diff} ₴` : 'Сплачено'}
+                        </Text>
+                        {dashboardData?.ep_diff > 0 && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setActiveMobileModal(null);
+                              setPendingTaxSelect({
+                                tax_type: 'edp',
+                                period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+                                amount: dashboardData.ep_diff
+                              });
+                              setTimeout(() => {
+                                setActiveMobileModal('pay_taxes');
+                              }, 300);
+                            }}
+                          >
+                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     </View>
 
                     <View style={[styles.mobileStatRow, { borderTopWidth: 0.5, borderTopColor: colors.border, paddingTop: 6, marginTop: 6 }]}>
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={{ color: colors.warning, fontSize: 13, fontWeight: '700' }}>Військовий збір</Text>
                         <Text style={{ color: colors.textMuted, fontSize: 10 }}>Нарах: {dashboardData?.military_tax_due} ₴ | Спл: {dashboardData?.mil_paid} ₴</Text>
                       </View>
-                      <Text style={{ color: dashboardData?.mil_diff > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
-                        {dashboardData?.mil_diff > 0 ? `+${dashboardData?.mil_diff} ₴` : 'Сплачено'}
-                      </Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ color: dashboardData?.mil_diff > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
+                          {dashboardData?.mil_diff > 0 ? `+${dashboardData?.mil_diff} ₴` : 'Сплачено'}
+                        </Text>
+                        {dashboardData?.mil_diff > 0 && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setActiveMobileModal(null);
+                              setPendingTaxSelect({
+                                tax_type: 'vz',
+                                period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+                                amount: dashboardData.mil_diff
+                              });
+                              setTimeout(() => {
+                                setActiveMobileModal('pay_taxes');
+                              }, 300);
+                            }}
+                          >
+                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     </View>
 
                     <View style={[styles.mobileStatRow, { borderTopWidth: 0.5, borderTopColor: colors.border, paddingTop: 6, marginTop: 6 }]}>
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>ЄСВ (ФОП + працівники)</Text>
                         <Text style={{ color: colors.textMuted, fontSize: 10 }}>Нарах: {dashboardData?.esv_due} ₴ | Спл: {dashboardData?.esv_paid} ₴</Text>
                       </View>
-                      <Text style={{ color: (dashboardData?.esv_diff || 0) > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
-                        {(dashboardData?.esv_diff || 0) > 0 ? `+${dashboardData?.esv_diff} ₴` : 'Сплачено'}
-                      </Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ color: (dashboardData?.esv_diff || 0) > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
+                          {(dashboardData?.esv_diff || 0) > 0 ? `+${dashboardData?.esv_diff} ₴` : 'Сплачено'}
+                        </Text>
+                        {(dashboardData?.esv_diff || 0) > 0 && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setActiveMobileModal(null);
+                              setPendingTaxSelect({
+                                tax_type: 'esv',
+                                period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+                                amount: dashboardData.esv_diff
+                              });
+                              setTimeout(() => {
+                                setActiveMobileModal('pay_taxes');
+                              }, 300);
+                            }}
+                          >
+                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     </View>
 
                     {((dashboardData?.employee_pit_due || 0) > 0 || (dashboardData?.pit_diff || 0) > 0) && (
                       <View style={[styles.mobileStatRow, { borderTopWidth: 0.5, borderTopColor: colors.border, paddingTop: 6, marginTop: 6 }]}>
-                        <View>
+                        <View style={{ flex: 1 }}>
                           <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>ПДФО за працівників</Text>
                           <Text style={{ color: colors.textMuted, fontSize: 10 }}>Нарах: {dashboardData?.employee_pit_due} ₴ | Спл: {dashboardData?.pit_paid} ₴</Text>
                         </View>
-                        <Text style={{ color: (dashboardData?.pit_diff || 0) > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
-                          {(dashboardData?.pit_diff || 0) > 0 ? `+${dashboardData?.pit_diff} ₴` : 'Сплачено'}
-                        </Text>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Text style={{ color: (dashboardData?.pit_diff || 0) > 0 ? colors.error : colors.success, fontSize: 13, fontWeight: '500' }}>
+                            {(dashboardData?.pit_diff || 0) > 0 ? `+${dashboardData?.pit_diff} ₴` : 'Сплачено'}
+                          </Text>
+                          {(dashboardData?.pit_diff || 0) > 0 && (
+                            <TouchableOpacity
+                              onPress={() => {
+                                setActiveMobileModal(null);
+                                setPendingTaxSelect({
+                                  tax_type: 'pdfo',
+                                  period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+                                  amount: dashboardData.pit_diff
+                                });
+                                setTimeout(() => {
+                                  setActiveMobileModal('pay_taxes');
+                                }, 300);
+                              }}
+                            >
+                              <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
                       </View>
                     )}
                   </View>
@@ -1587,7 +1900,7 @@ export default function DashboardScreen() {
         animationType="slide"
         transparent={false}
         visible={activeMobileModal === 'pay_taxes'}
-        onRequestClose={() => setActiveMobileModal(null)}
+        onRequestClose={handleClosePayTaxes}
       >
         <SafeAreaView style={[styles.chatModalContainer, { backgroundColor: colors.background }]}>
           <View style={[styles.chatHeader, { borderBottomColor: colors.cardBorder }]}>
@@ -1603,12 +1916,13 @@ export default function DashboardScreen() {
               </View>
             </View>
             <TouchableOpacity
-              onPress={() => setActiveMobileModal(null)}
+              onPress={handleClosePayTaxes}
               style={styles.chatCloseBtn}
             >
               <Text style={{ color: colors.primary, fontSize: 16, fontWeight: '600' }}>Закрити</Text>
             </TouchableOpacity>
           </View>
+
 
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
             {/* 1. Region Selector */}
@@ -1653,6 +1967,178 @@ export default function DashboardScreen() {
                   <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>{b.label}</Text>
                 </TouchableOpacity>
               ))}
+            </View>
+
+            {/* Custom budget accounts settings */}
+            <View style={{ marginBottom: 16 }}>
+              <TouchableOpacity
+                onPress={() => setShowCustomAccounts(!showCustomAccounts)}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingVertical: 12,
+                  paddingHorizontal: 16,
+                  backgroundColor: colors.card,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: colors.cardBorder,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.primary }}>
+                    ⚙️ Власні бюджетні рахунки (якщо авто невірні)
+                  </Text>
+                </View>
+                <ChevronDown
+                  size={16}
+                  color={colors.primary}
+                  style={{ transform: [{ rotate: showCustomAccounts ? '180deg' : '0deg' }] }}
+                />
+              </TouchableOpacity>
+
+              {showCustomAccounts && (
+                <Card style={{ padding: 16, marginTop: 8, backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)' }}>
+                  <View style={{ gap: 10 }}>
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>Отримувач платежу</Text>
+                      <TextInput
+                        value={customRecipient}
+                        onChangeText={setCustomRecipient}
+                        placeholder="Наприклад: ГУ ДПС у Львівській області"
+                        placeholderTextColor={colors.textMuted}
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                        }}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>Код ЄДРПОУ отримувача</Text>
+                      <TextInput
+                        value={customEdrpou}
+                        onChangeText={setCustomEdrpou}
+                        placeholder="Наприклад: 44081023"
+                        placeholderTextColor={colors.textMuted}
+                        keyboardType="numeric"
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                        }}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>IBAN Єдиного податку (ЄП)</Text>
+                      <TextInput
+                        value={customIbanEdp}
+                        onChangeText={setCustomIbanEdp}
+                        placeholder="UA..."
+                        placeholderTextColor={colors.textMuted}
+                        autoCapitalize="characters"
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                          fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                        }}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>IBAN ЄСВ за себе</Text>
+                      <TextInput
+                        value={customIbanEsv}
+                        onChangeText={setCustomIbanEsv}
+                        placeholder="UA..."
+                        placeholderTextColor={colors.textMuted}
+                        autoCapitalize="characters"
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                          fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                        }}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>IBAN Військового збору (ВЗ)</Text>
+                      <TextInput
+                        value={customIbanVz}
+                        onChangeText={setCustomIbanVz}
+                        placeholder="UA..."
+                        placeholderTextColor={colors.textMuted}
+                        autoCapitalize="characters"
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                          fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                        }}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>IBAN ПДФО</Text>
+                      <TextInput
+                        value={customIbanPdfo}
+                        onChangeText={setCustomIbanPdfo}
+                        placeholder="UA..."
+                        placeholderTextColor={colors.textMuted}
+                        autoCapitalize="characters"
+                        style={{
+                          backgroundColor: colors.inputBg,
+                          color: colors.text,
+                          borderColor: colors.cardBorder,
+                          borderWidth: 1,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          fontSize: 13,
+                          fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                        }}
+                      />
+                    </View>
+
+                    <Button
+                      title="Зберегти реквізити"
+                      onPress={handleSaveCustomAccounts}
+                      isLoading={savingCustom}
+                      variant="primary"
+                      style={{ marginTop: 8 }}
+                    />
+                  </View>
+                </Card>
+              )}
             </View>
 
             {/* 3. Liabilities List */}
@@ -1791,9 +2277,39 @@ export default function DashboardScreen() {
             {/* 4. Generated Requisites & Payment Action */}
             {generatedPayment && selectedLiability && (
               <Card style={{ padding: 16, marginTop: 16, backgroundColor: colors.card, borderColor: colors.primary, borderWidth: 1 }}>
-                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, marginBottom: 12 }}>
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, marginBottom: 8 }}>
                   Реквізити для сплати {selectedLiability.tax_type_name}
                 </Text>
+
+                {(() => {
+                  const hasCustom = !!(
+                    selectedProfile?.custom_recipient ||
+                    selectedProfile?.custom_edrpou ||
+                    (selectedLiability.tax_type === 'edp' && selectedProfile?.custom_iban_edp) ||
+                    (selectedLiability.tax_type === 'esv' && selectedProfile?.custom_iban_esv) ||
+                    (selectedLiability.tax_type === 'vz' && selectedProfile?.custom_iban_vz) ||
+                    (selectedLiability.tax_type === 'pdfo' && selectedProfile?.custom_iban_pdfo)
+                  );
+                  if (hasCustom) {
+                    return (
+                      <View style={{
+                        alignSelf: 'flex-start',
+                        backgroundColor: colors.successMuted,
+                        borderColor: colors.success,
+                        borderWidth: 1,
+                        borderRadius: 8,
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                        marginBottom: 12
+                      }}>
+                        <Text style={{ color: colors.success, fontSize: 11, fontWeight: '700' }}>
+                          ⚙️ Використовуються ваші збережені реквізити
+                        </Text>
+                      </View>
+                    );
+                  }
+                  return null;
+                })()}
 
                 <View style={{ gap: 8, marginBottom: 16 }}>
                   <View>
@@ -1843,10 +2359,33 @@ export default function DashboardScreen() {
                   </View>
                 </View>
 
+                {selectedBank === 'privat24' ? (
+                  <Button
+                    title="Перейти до сплати в Приват24"
+                    onPress={handleOpenBankLink}
+                    variant="primary"
+                    style={{ marginBottom: 10 }}
+                  />
+                ) : (
+                  <View style={{
+                    backgroundColor: isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.08)',
+                    borderColor: 'rgba(234, 179, 8, 0.4)',
+                    borderWidth: 1,
+                    borderRadius: 12,
+                    padding: 12,
+                    marginBottom: 12,
+                  }}>
+                    <Text style={{ color: isDark ? '#fef08a' : '#854d0e', fontSize: 12, fontWeight: '700', lineHeight: 16 }}>
+                      ⚠️ {selectedBank === 'monobank' ? 'monobank' : 'А-Банк'} не підтримує автоматичні посилання для сплати на довільний IBAN. Будь ласка, скопіюйте реквізити вище для ручної оплати у вашому банку або сплатіть карткою через Mono Pay нижче.
+                    </Text>
+                  </View>
+                )}
+
                 <Button
-                  title={`Перейти до сплати в ${selectedBank === 'privat24' ? 'Приват24' : selectedBank === 'monobank' ? 'monobank' : 'А-Банк'}`}
-                  onPress={handleOpenBankLink}
-                  variant="primary"
+                  title="Сплатити карткою (Mono Pay)"
+                  onPress={handleMonoPayPayment}
+                  isLoading={payingMonoPay}
+                  variant={selectedBank === 'privat24' ? 'outline' : 'primary'}
                   style={{ marginBottom: 10 }}
                 />
 
@@ -1994,6 +2533,20 @@ export default function DashboardScreen() {
                               router.push('/invoices');
                             } else {
                               setIsAllEventsModalVisible(false);
+                              const tax_name_to_type: Record<string, string> = {
+                                "unified_tax": "edp",
+                                "esv": "esv",
+                                "military_tax": "vz",
+                                "pit": "pdfo"
+                              };
+                              const type = tax_name_to_type[item.tax_name];
+                              if (type) {
+                                setPendingTaxSelect({
+                                  tax_type: type,
+                                  period: getEventPeriod(item.title) || (item.due_date ? String(item.due_date).substring(0, 7) : ""),
+                                  amount: item.amount_desc ? parseAmountFromDesc(item.amount_desc) : 0
+                                });
+                              }
                               setActiveMobileModal('pay_taxes');
                             }
                           }}

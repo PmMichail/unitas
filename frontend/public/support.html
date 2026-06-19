@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Підтримка користувачів — UniTax</title>
+  <meta name="description" content="Служба підтримки користувачів податкового асистента UniTax. Зв'яжіться з нами з питань роботи додатку, оплати та звітів.">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-color: #0b0f19;
+      --card-bg: rgba(17, 24, 39, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --glow-color: rgba(99, 102, 241, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Ambient background glows */
+    body::before, body::after {
+      content: "";
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--glow-color) 0%, rgba(11, 15, 25, 0) 70%);
+      z-index: -1;
+      filter: blur(40px);
+    }
+    body::before {
+      top: -100px;
+      left: -100px;
+    }
+    body::after {
+      bottom: -100px;
+      right: -100px;
+    }
+
+    .container {
+      max-width: 650px;
+      width: 100%;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 24px;
+      padding: 40px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      text-align: center;
+      animation: fadeIn 0.8s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .logo-container {
+      margin-bottom: 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 24px;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .logo-text {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #fff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .contact-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 30px;
+      text-align: left;
+      transition: border-color 0.3s ease;
+    }
+
+    .contact-card:hover {
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .contact-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .contact-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .icon-wrapper {
+      width: 40px;
+      height: 40px;
+      background: rgba(99, 102, 241, 0.1);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .icon-wrapper svg {
+      width: 20px;
+      height: 20px;
+      fill: var(--primary);
+    }
+
+    .contact-details h3 {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .contact-details p {
+      font-size: 18px;
+      font-weight: 500;
+      color: #fff;
+    }
+
+    .contact-details a {
+      color: var(--primary);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .contact-details a:hover {
+      color: #818cf8;
+      text-decoration: underline;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%);
+      color: #fff;
+      font-weight: 600;
+      font-size: 16px;
+      padding: 14px 28px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      width: 100%;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .footer-links {
+      margin-top: 32px;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      font-size: 14px;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover {
+      color: #fff;
+    }
+
+    .copyright {
+      margin-top: 24px;
+      font-size: 12px;
+      color: rgba(156, 163, 175, 0.5);
+    }
+
+    .back-link {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      margin-bottom: 24px;
+      transition: color 0.2s;
+    }
+
+    .back-link:hover {
+      color: #fff;
+    }
+
+    .back-link svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    .logo-link {
+      text-decoration: none;
+      display: inline-block;
+      transition: opacity 0.2s;
+    }
+
+    .logo-link:hover {
+      opacity: 0.9;
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 24px;
+      }
+      .logo-text {
+        font-size: 24px;
+      }
+      h1 {
+        font-size: 20px;
+      }
+      .contact-details p {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container" style="display: flex; flex-direction: column; align-items: center;">
+    <a href="/" class="back-link">
+      <svg viewBox="0 0 24 24">
+        <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+      </svg>
+      На сайт
+    </a>
+    
+    <a href="/" class="logo-link">
+      <div class="logo-container">
+        <div class="logo-icon">U</div>
+        <div class="logo-text">UniTax</div>
+      </div>
+    </a>
+    
+    <h1>Служба підтримки UniTax</h1>
+    <p class="subtitle">Маєте запитання щодо роботи додатку, оплати підписки чи подання звітів? Наша команда готова допомогти вам.</p>
+    
+    <div class="contact-card">
+      <!-- Email support -->
+      <div class="contact-item">
+        <div class="icon-wrapper">
+          <svg viewBox="0 0 24 24">
+            <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+          </svg>
+        </div>
+        <div class="contact-details">
+          <h3>Електронна пошта</h3>
+          <p><a href="mailto:support@unitax.pro">support@unitax.pro</a></p>
+        </div>
+      </div>
+      
+      <!-- Address/Working Hours support -->
+      <div class="contact-item">
+        <div class="icon-wrapper">
+          <svg viewBox="0 0 24 24">
+            <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm3.3 14.3L11 14V7h1.5v5.25l3.22 1.92-.73 1.13z"/>
+          </svg>
+        </div>
+        <div class="contact-details">
+          <h3>Графік роботи підтримки</h3>
+          <p>Пн-Пт: 09:00 - 18:00 (Київський час)</p>
+        </div>
+      </div>
+    </div>
+
+    <a href="mailto:support@unitax.pro" class="btn">Надіслати запит</a>
+    
+    <div class="footer-links">
+      <a href="/privacy">Політика конфіденційності</a>
+      <span>•</span>
+      <a href="/terms">Умови використання</a>
+      <span>•</span>
+      <a href="/refund">Правила повернення коштів</a>
+    </div>
+    
+    <div class="copyright">
+      &copy; 2026 UniTax. Всі права захищені.
+    </div>
+  </div>
+
+</body>
+</html>

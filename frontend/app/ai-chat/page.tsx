@@ -22,25 +22,34 @@ export default function AIChatPage() {
     const sendQuestion = async () => {
         if (!question.trim() || !selectedProfile) return;
         
+        const userMsg = question.trim();
+        setQuestion("");
+        
+        const currentHistory = [...messages];
+        const updatedMessages = [...currentHistory, { role: "user" as const, content: userMsg }];
+        
+        setMessages(updatedMessages);
         setLoading(true);
-        setMessages([...messages, { role: "user", content: question }]);
         
         try {
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/ai/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ profile_id: selectedProfile.id, question: question })
+                body: JSON.stringify({ 
+                    profile_id: selectedProfile.id, 
+                    question: userMsg,
+                    history: currentHistory.map(m => ({ role: m.role, content: m.content }))
+                })
             });
             const data = await res.json();
             
-            setMessages([...messages, { role: "user", content: question }, { role: "assistant", content: data.answer }]);
-            setQuestion("");
+            setMessages([...updatedMessages, { role: "assistant" as const, content: data.answer || data.response || "Немає відповіді від асистента" }]);
         } catch (err) {
             console.error("Failed to send question:", err);
-            setMessages([...messages, { role: "user", content: question }, { role: "assistant", content: "Помилка зв'язку з сервером" }]);
+            setMessages([...updatedMessages, { role: "assistant" as const, content: "Помилка зв'язку з сервером" }]);
+        } finally {
+            setLoading(false);
         }
-        
-        setLoading(false);
     };
 
     return (

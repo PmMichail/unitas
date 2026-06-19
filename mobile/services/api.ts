@@ -45,6 +45,14 @@ export interface ProfileData {
   starting_debt_pdfo?: number;
   is_blocked?: boolean;
   block_reason?: string;
+  custom_recipient?: string;
+  custom_edrpou?: string;
+  custom_iban_edp?: string;
+  custom_iban_esv?: string;
+  custom_iban_vz?: string;
+  custom_iban_pdfo?: string;
+  organization_subtype?: string;
+  non_profit_code?: string;
 }
 
 export const api = {
@@ -106,6 +114,13 @@ export const api = {
     name: string;
     tax_id: string;
     salary: number;
+    is_main_job?: boolean;
+    contract_type?: string;
+    esv_paid_by_other?: boolean;
+    is_archived?: boolean;
+    start_date?: string | null;
+    end_date?: string | null;
+    active_months_json?: string | null;
   }) => {
     const formData = toFormData(data);
     const response = await client.post('/api/employees', formData);
@@ -118,6 +133,13 @@ export const api = {
       name?: string;
       tax_id?: string;
       salary?: number;
+      is_main_job?: boolean;
+      contract_type?: string;
+      esv_paid_by_other?: boolean;
+      is_archived?: boolean;
+      start_date?: string | null;
+      end_date?: string | null;
+      active_months_json?: string | null;
     }
   ) => {
     const formData = toFormData(data);
@@ -127,6 +149,164 @@ export const api = {
 
   deleteEmployee: async (employeeId: number) => {
     const response = await client.delete(`/api/employees/${employeeId}`);
+    return response.data;
+  },
+
+  // Non-profit Members & Billing
+  getMembers: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/members`, {
+      params: userId ? { user_id: userId } : undefined,
+    });
+    return response.data;
+  },
+
+  createMember: async (profileId: number, data: {
+    identifier: string;
+    owner_name?: string;
+    area?: number;
+    rate_per_sqm?: number;
+    fixed_monthly_fee?: number;
+    email?: string;
+    phone?: string;
+    balance?: number;
+    user_id?: number;
+    property_type?: string;
+    parent_id?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/members`, formData);
+    return response.data;
+  },
+
+  updateMember: async (profileId: number, memberId: number, data: {
+    identifier?: string;
+    owner_name?: string;
+    area?: number;
+    rate_per_sqm?: number;
+    fixed_monthly_fee?: number;
+    email?: string;
+    phone?: string;
+    balance?: number;
+    user_id?: number;
+    property_type?: string;
+    parent_id?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/profiles/${profileId}/members/${memberId}`, formData);
+    return response.data;
+  },
+
+  deleteMember: async (profileId: number, memberId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/members/${memberId}`, {
+      params: userId ? { user_id: userId } : undefined,
+    });
+    return response.data;
+  },
+
+  chargeMembers: async (profileId: number, data: {
+    description?: string;
+    user_id?: number;
+    charge_type?: string;
+    period_type?: string;
+    multiplier?: number;
+    amount?: number;
+    member_id?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/billing/charge`, formData);
+    return response.data;
+  },
+
+  reconcilePayment: async (profileId: number, data: {
+    payment_id: number;
+    member_id: number;
+    user_id?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/billing/reconcile-payment`, formData);
+    return response.data;
+  },
+
+  matchPayments: async (profileId: number, data: { user_id?: number }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/billing/match-payments`, formData);
+    return response.data;
+  },
+
+  getMemberDetails: async (profileId: number, memberId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/members/${memberId}/details`);
+    return response.data;
+  },
+
+  createMonoInvoice: async (profileId: number, data: {
+    member_id: number;
+    amount: number;
+    charge_type: string;
+    description?: string;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/billing/invoice`, formData);
+    return response.data;
+  },
+
+  getMeters: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/meters`);
+    return response.data;
+  },
+
+  createMeter: async (profileId: number, data: {
+    name: string;
+    type: string;
+    parent_id?: number;
+    member_id?: number;
+    tariff?: number;
+    initial_reading?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/meters`, formData);
+    return response.data;
+  },
+
+  updateMeter: async (profileId: number, meterId: number, data: {
+    name?: string;
+    type?: string;
+    parent_id?: number;
+    member_id?: number;
+    tariff?: number;
+    initial_reading?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/profiles/${profileId}/meters/${meterId}`, formData);
+    return response.data;
+  },
+
+  deleteMeter: async (profileId: number, meterId: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/meters/${meterId}`);
+    return response.data;
+  },
+
+  addMeterReading: async (profileId: number, meterId: number, data: {
+    reading_value: number;
+    reading_date?: string;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/meters/${meterId}/readings`, formData);
+    return response.data;
+  },
+
+  getMeterReadings: async (profileId: number, meterId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/meters/${meterId}/readings`);
+    return response.data;
+  },
+
+  lockReadings: async (profileId: number, data: { month: number; year: number }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/meters/lock-readings`, formData);
+    return response.data;
+  },
+
+  deleteMeterReading: async (profileId: number, meterId: number, readingId: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/meters/${meterId}/readings/${readingId}`);
     return response.data;
   },
 
@@ -374,10 +554,11 @@ export const api = {
     return response.data;
   },
 
-  agentChat: async (profileId: number, message: string) => {
+  agentChat: async (profileId: number, message: string, history?: Array<{ sender: string; text: string }>) => {
     const response = await client.post('/api/agent/chat', {
       profile_id: profileId,
       message,
+      history,
     });
     return response.data;
   },
@@ -399,6 +580,16 @@ export const api = {
     region?: string;
   }) => {
     const response = await client.post('/api/payments/generate', data);
+    return response.data;
+  },
+
+  createMonoPayPayment: async (data: {
+    profile_id: number;
+    tax_type: string;
+    period: string;
+    amount: number;
+  }) => {
+    const response = await client.post('/api/payments/create', data);
     return response.data;
   },
 

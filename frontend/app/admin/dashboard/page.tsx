@@ -20,19 +20,35 @@ import {
   Lock,
   Unlock,
   Send,
-  MessageSquare
+  MessageSquare,
+  RefreshCw
 } from "lucide-react";
 
 export default function AdminDashboard() {
   const [token, setToken] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats" | "support">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats" | "support" | "emails">("users");
   const router = useRouter();
 
   // Data states
   const [users, setUsers] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
+  const [statsPeriod, setStatsPeriod] = useState<"day" | "week" | "month">("day");
   const [pricing, setPricing] = useState<any[]>([]);
+
+  // Edit pricing states
+  const [monthlyPriceInput, setMonthlyPriceInput] = useState<string>("499");
+  const [halfYearlyPriceInput, setHalfYearlyPriceInput] = useState<string>("2499");
+  const [yearlyPriceInput, setYearlyPriceInput] = useState<string>("4989");
+  const [residentCabinetPriceInput, setResidentCabinetPriceInput] = useState<string>("500");
+
+  // Email connection and sent emails log states
+  const [emails, setEmails] = useState<any[]>([]);
+  const [loadingEmails, setLoadingEmails] = useState(false);
+  const [isEmailConnected, setIsEmailConnected] = useState(false);
+  const [connectedEmail, setConnectedEmail] = useState("");
+  const [loadingEmailStatus, setLoadingEmailStatus] = useState(false);
+  const [isTestingEmail, setIsTestingEmail] = useState(false);
 
   // Support Chat states
   const [supportChats, setSupportChats] = useState<any[]>([]);
@@ -52,6 +68,7 @@ export default function AdminDashboard() {
   // Edit subscription modal states
   const [selectedProfileForSub, setSelectedProfileForSub] = useState<any | null>(null);
   const [editPlanType, setEditPlanType] = useState("free");
+  const [editPaymentPeriod, setEditPaymentPeriod] = useState("monthly");
   const [editExpiresAt, setEditExpiresAt] = useState("");
 
   // Admin Profile Block & Delete states
@@ -139,9 +156,120 @@ export default function AdminDashboard() {
     }
   };
 
-  // Edit pricing states
-  const [monthlyPriceInput, setMonthlyPriceInput] = useState<string>("499");
-  const [yearlyPriceInput, setYearlyPriceInput] = useState<string>("4989");
+  // Email connection status, connect status loading, disconnect, test email and log fetching functions
+  const fetchEmailStatus = async () => {
+    if (!token) return;
+    setLoadingEmailStatus(true);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/status/0`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data && data.connected) {
+        setIsEmailConnected(true);
+        setConnectedEmail(data.email || "");
+      } else {
+        setIsEmailConnected(false);
+        setConnectedEmail("");
+      }
+    } catch (error) {
+      console.error("Error fetching email status:", error);
+    } finally {
+      setLoadingEmailStatus(false);
+    }
+  };
+
+  const fetchEmails = async () => {
+    if (!token) return;
+    setLoadingEmails(true);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/admin/emails`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      setEmails(data || []);
+    } catch (error) {
+      console.error("Error fetching admin emails:", error);
+    } finally {
+      setLoadingEmails(false);
+    }
+  };
+
+  const handleConnectEmail = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/url/0?token=${token}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data && data.url) {
+        window.location.href = data.url;
+      } else {
+        alert("Не вдалося отримати URL авторизації");
+      }
+    } catch (error) {
+      console.error("Error during email connect:", error);
+      alert("Помилка при підключенні пошти");
+    }
+  };
+
+  const handleDisconnectEmail = async () => {
+    if (!token) return;
+    if (!confirm("Ви впевнені, що хочете відключити пошту Gmail адміністратора?")) return;
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/0`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        setIsEmailConnected(false);
+        setConnectedEmail("");
+        alert("Gmail адміністратора відключено");
+      } else {
+        alert("Не вдалося відключити пошту");
+      }
+    } catch (error) {
+      console.error("Error disconnecting email:", error);
+      alert("Помилка при відключенні пошти");
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!token) return;
+    setIsTestingEmail(true);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/test-email/0`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        alert(`Тестовий лист успішно надіслано на ${connectedEmail}!`);
+        fetchEmails();
+      } else {
+        const data = await response.json();
+        alert(data.detail || "Не вдалося надіслати тестовий лист");
+      }
+    } catch (error) {
+      console.error("Error testing email:", error);
+      alert("Помилка при надсиланні тестового листа");
+    } finally {
+      setIsTestingEmail(false);
+    }
+  };
+
+  // Handle URL callback parameters (success or error)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get("success") === "email_connected") {
+        alert("Gmail успішно підключено!");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else if (urlParams.get("error")) {
+        alert(`Помилка авторизації: ${urlParams.get("error")}`);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, []);
 
   // Load and verify Admin token
   useEffect(() => {
@@ -172,8 +300,10 @@ export default function AdminDashboard() {
           setPricing(data);
           // Set inputs
           const monthlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "monthly");
+          const halfYearlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "half_yearly");
           const yearlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "yearly");
           if (monthlyObj) setMonthlyPriceInput(String(monthlyObj.price));
+          if (halfYearlyObj) setHalfYearlyPriceInput(String(halfYearlyObj.price));
           if (yearlyObj) setYearlyPriceInput(String(yearlyObj.price));
         } else if (activeTab === "stats") {
           const data = await api.adminGetStats(token);
@@ -181,6 +311,9 @@ export default function AdminDashboard() {
         } else if (activeTab === "support") {
           const data = await api.adminGetSupportChats(token);
           setSupportChats(data);
+        } else if (activeTab === "emails") {
+          await fetchEmailStatus();
+          await fetchEmails();
         }
       } catch (err: any) {
         console.error("Admin data loading error:", err);
@@ -214,10 +347,135 @@ export default function AdminDashboard() {
     });
   };
 
+  // Get subscription status formatting details for table row status column
+  const getSubscriptionStatusInfo = (u: any) => {
+    // Use the color_marker from subscription if available
+    if (u.subscription && u.subscription.color_marker) {
+      const colorMarker = u.subscription.color_marker;
+      
+      switch (colorMarker) {
+        case "red":
+          return { color: "red", text: "Просрочено", bg: "bg-rose-500/10 text-rose-500 border-rose-500/20" };
+        case "orange":
+          return { 
+            color: "orange", 
+            text: u.subscription.days_until_expiry !== null 
+              ? `Закінчується за ${u.subscription.days_until_expiry} дн.` 
+              : "Закінчується", 
+            bg: "bg-amber-500/10 text-amber-500 border-amber-500/20" 
+          };
+        case "blue":
+          return { color: "blue", text: "Лист надіслано", bg: "bg-sky-500/10 text-sky-400 border-sky-500/20" };
+        case "green":
+          return { 
+            color: "green", 
+            text: u.subscription.status === "trial" ? "Пробний період" : "Оплачено", 
+            bg: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" 
+          };
+        case "gray":
+          return { color: "gray", text: "Скасовано", bg: "bg-slate-500/10 text-slate-400 border-slate-800/40" };
+        default:
+          return { color: "slate", text: "Не активовано", bg: "bg-slate-500/10 text-slate-400 border-slate-800/40" };
+      }
+    }
+    
+    // Fallback to old logic for backward compatibility
+    if (!u || u.plan !== "business") {
+      if (u && u.free_status === "downgraded_unpaid") {
+        return { color: "orange", text: "Переключено за несплату", bg: "bg-amber-500/10 text-amber-500 border-amber-500/20" };
+      }
+      return { color: "slate", text: "Не активовано", bg: "bg-slate-500/10 text-slate-400 border-slate-850 border-slate-800/40" };
+    }
+    
+    if (u.status === "pending") {
+      return {
+        color: "orange",
+        text: "Очікує оплату",
+        bg: "bg-amber-500/10 text-amber-500 border-amber-500/20"
+      };
+    }
+    
+    const now = new Date();
+    const expiresAt = u.expires_at ? new Date(u.expires_at) : null;
+    
+    // 1. Check if expired
+    if (u.status === "expired" || (expiresAt && expiresAt < now)) {
+      return {
+        color: "red",
+        text: "Прострочено",
+        bg: "bg-rose-500/10 text-rose-500 border-rose-500/20"
+      };
+    }
+    
+    // 2. Check if warning was sent for the CURRENT expiration cycle (within the active window)
+    const warningSentForCurrentCycle = u.warning_sent_at && expiresAt && 
+      (new Date(u.warning_sent_at).getTime() >= expiresAt.getTime() - 5 * 24 * 60 * 60 * 1000);
+
+    if (warningSentForCurrentCycle) {
+      return {
+        color: "blue",
+        text: "Лист надіслано",
+        bg: "bg-sky-500/10 text-sky-400 border-sky-500/20"
+      };
+    }
+    
+    // 3. Check if expiring within 7 days
+    if (expiresAt) {
+      const diffTime = expiresAt.getTime() - now.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays <= 7 && diffDays >= 0) {
+        return {
+          color: "orange",
+          text: `Закінчується за ${diffDays} дн.`,
+          bg: "bg-amber-500/10 text-amber-500 border-amber-500/20"
+        };
+      }
+    }
+    
+    // 4. Default to active/green
+    if (u.status === "active") {
+      return {
+        color: "green",
+        text: u.demo_activated ? "Демо-доступ" : "Активний",
+        bg: "bg-emerald-500/10 text-emerald-500 border-emerald-550 border-emerald-500/20"
+      };
+    }
+    
+    return {
+      color: "green",
+      text: u.demo_activated ? "Демо-доступ" : "Business",
+      bg: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+    };
+  };
+
+  const getSubscriptionPeriodDatesText = (u: any) => {
+    if (!u.expires_at) return "Безлімітно";
+    const expiresAt = new Date(u.expires_at);
+    const startAt = new Date(expiresAt);
+    
+    if (u.demo_activated) {
+      startAt.setDate(expiresAt.getDate() - 7);
+    } else if (u.payment_period === "monthly") {
+      startAt.setMonth(expiresAt.getMonth() - 1);
+    } else if (u.payment_period === "half_yearly") {
+      startAt.setMonth(expiresAt.getMonth() - 6);
+    } else if (u.payment_period === "yearly") {
+      startAt.setFullYear(expiresAt.getFullYear() - 1);
+    } else {
+      startAt.setMonth(expiresAt.getMonth() - 1);
+    }
+    
+    const startStr = startAt.toLocaleDateString('uk-UA');
+    const endStr = expiresAt.toLocaleDateString('uk-UA');
+    
+    return `з ${startStr} по ${endStr}${u.demo_activated ? " (Пробний)" : ""}`;
+  };
+
   // Open Edit Subscription Modal
   const openEditSubscription = (profile: any) => {
     setSelectedProfileForSub(profile);
     setEditPlanType(profile.plan || "free");
+    setEditPaymentPeriod(profile.payment_period || "monthly");
     setEditExpiresAt(profile.expires_at ? profile.expires_at.split(" ")[0] : "");
   };
 
@@ -232,6 +490,7 @@ export default function AdminDashboard() {
         selectedProfileForSub.id, 
         {
           plan_type: editPlanType,
+          payment_period: editPaymentPeriod,
           expires_at: editExpiresAt || null
         }, 
         token
@@ -249,7 +508,7 @@ export default function AdminDashboard() {
   };
 
   // Update business plan pricing
-  const handleUpdatePrice = async (period: "monthly" | "yearly", amountStr: string) => {
+  const handleUpdatePrice = async (period: "monthly" | "half_yearly" | "yearly" | "resident_cabinet", amountStr: string) => {
     if (!token) return;
     const priceVal = parseInt(amountStr, 10);
     if (isNaN(priceVal) || priceVal <= 0) {
@@ -260,8 +519,8 @@ export default function AdminDashboard() {
     setLoading(true);
     try {
       await api.adminUpdatePricing({
-        plan_type: "business",
-        payment_period: period,
+        plan_type: period === "resident_cabinet" ? "resident_cabinet" : "business",
+        payment_period: period === "resident_cabinet" ? "onetime" : period,
         price: priceVal
       }, token);
       alert("Ціну успішно оновлено!");
@@ -397,8 +656,19 @@ export default function AdminDashboard() {
                   : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
               }`}
             >
-              <Mail className="w-4 h-4" />
+              <MessageSquare className="w-4 h-4" />
               Чат підтримки
+            </button>
+            <button
+              onClick={() => setActiveTab("emails")}
+              className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
+                activeTab === "emails"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+              }`}
+            >
+              <Mail className="w-4 h-4" />
+              Пошта
             </button>
           </nav>
         </div>
@@ -424,12 +694,16 @@ export default function AdminDashboard() {
               {activeTab === "payments" && "Транзакції та рахунки"}
               {activeTab === "pricing" && "Налаштування вартості підписок"}
               {activeTab === "stats" && "Аналітика та статистика"}
+              {activeTab === "emails" && "Керування системною поштою"}
+              {activeTab === "support" && "Чат підтримки клієнтів"}
             </h2>
             <p className="text-xs text-slate-500 mt-1">
               {activeTab === "users" && "Переглядайте профілі клієнтів, їхні підписки та змінюйте тарифи вручну."}
-              {activeTab === "payments" && "Журнал платежів через LiqPay за оренду або заміну тарифу."}
+              {activeTab === "payments" && "Журнал платежів через Mono Pay за оренду або заміну тарифу."}
               {activeTab === "pricing" && "Редагуйте вартості бізнес тарифів, які показуються користувачам при виборі."}
               {activeTab === "stats" && "Загальний вигляд основних фінансових та кількісних метрик UniTax."}
+              {activeTab === "emails" && "OAuth підключення Gmail, відправка тестових листів та перегляд журналу логів."}
+              {activeTab === "support" && "Переписка з користувачами та відповіді на повідомлення техпідтримки."}
             </p>
           </div>
         </div>
@@ -484,13 +758,13 @@ export default function AdminDashboard() {
                     <thead className="bg-slate-900/40 text-slate-400 border-b border-slate-800">
                       <tr>
                         <th className="p-4 font-bold">Профіль</th>
-                        <th className="p-4 font-bold">Email користувача</th>
-                        <th className="p-4 font-bold">Система</th>
-                        <th className="p-4 font-bold">Реєстрація</th>
+                        <th className="p-4 font-bold">Email</th>
                         <th className="p-4 font-bold">Тариф</th>
-                        <th className="p-4 font-bold">Статус</th>
+                        <th className="p-4 font-bold">Статус підписки</th>
+                        <th className="p-4 font-bold">Остання оплата</th>
                         <th className="p-4 font-bold">Діє до</th>
-                        <th className="p-4 font-bold text-center">Дія</th>
+                        <th className="p-4 font-bold">Нагадування</th>
+                        <th className="p-4 font-bold text-center">Дії</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
@@ -498,26 +772,48 @@ export default function AdminDashboard() {
                         <tr key={u.id} className="hover:bg-slate-900/20 transition-all">
                           <td className="p-4 font-bold text-white">{u.name}</td>
                           <td className="p-4 text-slate-400 font-semibold">{u.email || "—"}</td>
-                          <td className="p-4 text-slate-400 uppercase font-semibold">{u.tax_system === "ednuy-3-5%" ? "ЄП" : "Загальна"}</td>
-                          <td className="p-4 text-slate-400 font-semibold">{u.reg_date || "—"}</td>
                           <td className="p-4">
-                            <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
-                              u.plan === "business" 
-                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
-                                : "bg-slate-800 text-slate-400"
-                            }`}>
-                              {u.plan}
-                            </span>
+                            <div className="flex flex-col gap-1">
+                              <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                                u.plan === "business" 
+                                  ? u.demo_activated
+                                    ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+                                    : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                                  : u.free_status === "downgraded_unpaid"
+                                    ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                    : "bg-slate-800 text-slate-400"
+                              }`}>
+                                {u.demo_activated 
+                                  ? "business (пробний)" 
+                                  : u.plan === "business"
+                                    ? u.payment_period === "yearly"
+                                      ? "business (річна)"
+                                      : u.payment_period === "half_yearly"
+                                        ? "business (піврічна)"
+                                        : u.payment_period === "monthly"
+                                          ? "business (місячна)"
+                                          : "business"
+                                    : u.free_status === "downgraded_unpaid"
+                                      ? "free (несплата)"
+                                      : u.plan}
+                              </span>
+                              {u.payment_period && u.plan === "business" && (
+                                <span className="text-[9px] text-slate-500">
+                                  {u.payment_period === "monthly" ? "1 місяць" : u.payment_period === "half_yearly" ? "6 місяців" : "1 рік"}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="p-4">
                             <div className="flex flex-col gap-1 items-start">
-                              <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
-                                u.status === "active" 
-                                  ? "bg-emerald-500/10 text-emerald-400" 
-                                  : "bg-rose-500/10 text-rose-400"
-                              }`}>
-                                {u.status}
-                              </span>
+                              {(() => {
+                                const statusInfo = getSubscriptionStatusInfo(u);
+                                return (
+                                  <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase border ${statusInfo.bg}`}>
+                                    {statusInfo.text}
+                                  </span>
+                                );
+                              })()}
                               {u.is_blocked && (
                                 <span className="px-2 py-0.5 rounded-md font-bold text-[10px] uppercase bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1" title={u.block_reason}>
                                   <Lock className="w-2.5 h-2.5" /> Блок
@@ -525,7 +821,36 @@ export default function AdminDashboard() {
                               )}
                             </div>
                           </td>
-                          <td className="p-4 text-slate-400 font-semibold">{u.expires_at || "Безлімітно"}</td>
+                          <td className="p-4 text-slate-400 font-semibold text-xs">
+                            {u.subscription && u.subscription.last_payment_date 
+                              ? new Date(u.subscription.last_payment_date).toLocaleDateString('uk-UA')
+                              : "—"}
+                          </td>
+                          <td className="p-4 text-slate-400 font-semibold text-xs">
+                            {u.plan === "free"
+                              ? u.free_status === "downgraded_unpaid"
+                                ? `Завершено: ${u.expires_at ? new Date(u.expires_at).toLocaleDateString('uk-UA') : "—"}`
+                                : "Не активовано"
+                              : u.subscription && u.subscription.expires_at
+                                ? `До ${new Date(u.subscription.expires_at).toLocaleDateString('uk-UA')}`
+                                : "Не активовано"}
+                          </td>
+                          <td className="p-4">
+                            <div className="flex flex-col gap-1">
+                              {u.subscription && u.subscription.reminder_email_sent_at ? (
+                                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] uppercase bg-sky-500/10 text-sky-400 border border-sky-500/20 flex items-center gap-1">
+                                  <Mail className="w-2.5 h-2.5" /> {new Date(u.subscription.reminder_email_sent_at).toLocaleDateString('uk-UA')}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 text-[10px]">—</span>
+                              )}
+                              {u.subscription && u.subscription.auto_renew && (
+                                <span className="px-2 py-0.5 rounded-md font-bold text-[9px] uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                                  Автопродовження
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="p-4">
                             <div className="flex items-center justify-center gap-2">
                               <button
@@ -582,7 +907,7 @@ export default function AdminDashboard() {
                       <th className="p-4 font-bold">Сума</th>
                       <th className="p-4 font-bold">Період оплати</th>
                       <th className="p-4 font-bold">Призначення</th>
-                      <th className="p-4 font-bold">LiqPay Order ID</th>
+                      <th className="p-4 font-bold">Mono Invoice ID</th>
                       <th className="p-4 font-bold">Дата створення</th>
                       <th className="p-4 font-bold">Статус</th>
                     </tr>
@@ -631,7 +956,7 @@ export default function AdminDashboard() {
 
             {/* 3. PRICING TAB */}
             {activeTab === "pricing" && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
                 {/* Monthly Configuration Card */}
                 <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
@@ -652,6 +977,32 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       onClick={() => handleUpdatePrice("monthly", monthlyPriceInput)}
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
+                    >
+                      Оновити
+                    </button>
+                  </div>
+                </div>
+
+                {/* Half-Yearly Configuration Card */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-amber-500 font-black uppercase tracking-wider block">Тариф Business</span>
+                    <h3 className="text-lg font-bold text-white">Піврічна оплата (Business Half-Yearly)</h3>
+                    <p className="text-xs text-slate-500">Вартість повного доступу за 180 календарних днів.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        value={halfYearlyPriceInput}
+                        onChange={(e) => setHalfYearlyPriceInput(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
+                      />
+                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / 6 міс</span>
+                    </div>
+                    <button
+                      onClick={() => handleUpdatePrice("half_yearly", halfYearlyPriceInput)}
                       className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
                     >
                       Оновити
@@ -685,45 +1036,173 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
+                {/* Resident Cabinet Module Configuration Card */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-rose-500 font-black uppercase tracking-wider block">Модуль кабінету мешканця</span>
+                    <h3 className="text-lg font-bold text-white">Одноразова оплата (Resident Cabinet)</h3>
+                    <p className="text-xs text-slate-500">Вартість активації особистого кабінету для мешканців ОСББ.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        value={residentCabinetPriceInput}
+                        onChange={(e) => setResidentCabinetPriceInput(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
+                      />
+                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / одноразово</span>
+                    </div>
+                    <button
+                      onClick={() => handleUpdatePrice("resident_cabinet", residentCabinetPriceInput)}
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
+                    >
+                      Оновити
+                    </button>
+                  </div>
+                </div>
+
               </div>
             )}
 
             {/* 4. STATS TAB */}
             {activeTab === "stats" && stats && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                
-                {/* Users Count */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl" />
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Користувачі в системі</p>
-                  <h4 className="text-3xl font-black text-white">{stats.total_users}</h4>
-                  <p className="text-[10px] text-slate-600">Загальна кількість зареєстрованих ID</p>
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                  
+                  {/* Users Count */}
+                  <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl" />
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Користувачі в системі</p>
+                    <h4 className="text-3xl font-black text-white">{stats.total_users}</h4>
+                    <p className="text-[10px] text-slate-600">Загальна кількість зареєстрованих ID</p>
+                  </div>
+
+                  {/* Profiles Count */}
+                  <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl" />
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Суб'єкти (Профілі)</p>
+                    <h4 className="text-3xl font-black text-white">{stats.total_profiles}</h4>
+                    <p className="text-[10px] text-slate-600">Кількість доданих ФОП та ТОВ</p>
+                  </div>
+
+                  {/* Subscriptions Count */}
+                  <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl" />
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Активні Business підписки</p>
+                    <h4 className="text-3xl font-black text-white text-amber-400">{stats.active_business_subscriptions}</h4>
+                    <p className="text-[10px] text-slate-600">Користувачі з платними тарифами</p>
+                  </div>
+
+                  {/* Total Revenue */}
+                  <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl" />
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Загальний дохід (Mono Pay)</p>
+                    <h4 className="text-3xl font-black text-emerald-400">{stats.total_revenue} грн</h4>
+                    <p className="text-[10px] text-slate-600">Сума всіх успішних транзакцій</p>
+                  </div>
+
+                  {/* Visits Count */}
+                  <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-sky-500/5 rounded-full blur-2xl" />
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Кількість відвідувань</p>
+                    <h4 className="text-3xl font-black text-sky-400">{stats.visit_count || 0}</h4>
+                    <p className="text-[10px] text-slate-600">Загальний лічильник відвідувань сайту</p>
+                  </div>
+
                 </div>
 
-                {/* Profiles Count */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl" />
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Суб'єкти (Профілі)</p>
-                  <h4 className="text-3xl font-black text-white">{stats.total_profiles}</h4>
-                  <p className="text-[10px] text-slate-600">Кількість доданих ФОП та ТОВ</p>
-                </div>
+                {/* Visits Analytics Chart */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-6">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-900/60 pb-4">
+                    <div>
+                      <h4 className="text-base font-bold text-white">Аналітика відвідувань сайту</h4>
+                      <p className="text-xs text-slate-500 mt-0.5">Перегляд активності користувачів та трафіку за вибраний період.</p>
+                    </div>
 
-                {/* Subscriptions Count */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl" />
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Активні Business підписки</p>
-                  <h4 className="text-3xl font-black text-white text-amber-400">{stats.active_business_subscriptions}</h4>
-                  <p className="text-[10px] text-slate-600">Користувачі з платними тарифами</p>
-                </div>
+                    {/* Period Switcher */}
+                    <div className="flex bg-slate-950/80 p-1 rounded-2xl border border-slate-800/80 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setStatsPeriod("day")}
+                        className={`px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all ${
+                          statsPeriod === "day"
+                            ? "bg-indigo-650 text-white shadow"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        По днях
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatsPeriod("week")}
+                        className={`px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all ${
+                          statsPeriod === "week"
+                            ? "bg-indigo-650 text-white shadow"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        По тижнях
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatsPeriod("month")}
+                        className={`px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all ${
+                          statsPeriod === "month"
+                            ? "bg-indigo-650 text-white shadow"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        По місяцях
+                      </button>
+                    </div>
+                  </div>
 
-                {/* Total Revenue */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-2 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl" />
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Загальний дохід (LiqPay)</p>
-                  <h4 className="text-3xl font-black text-emerald-400">{stats.total_revenue} грн</h4>
-                  <p className="text-[10px] text-slate-600">Сума всіх успішних транзакцій</p>
-                </div>
+                  {/* Chart representation */}
+                  {(() => {
+                    const currentDataset = 
+                      statsPeriod === "day" 
+                        ? (stats.visits_by_day || [])
+                        : statsPeriod === "week"
+                          ? (stats.visits_by_week || [])
+                          : (stats.visits_by_month || []);
 
+                    const maxCount = Math.max(...currentDataset.map((d: any) => d.count), 1);
+
+                    if (currentDataset.length === 0) {
+                      return (
+                        <div className="py-12 text-center text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                          Немає даних за цей період
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4">
+                        {currentDataset.map((item: any, idx: number) => {
+                          const percentage = Math.round((item.count / maxCount) * 100);
+                          return (
+                            <div key={idx} className="flex items-center gap-4 text-xs">
+                              {/* Label */}
+                              <div className="w-28 text-slate-400 font-semibold truncate text-left shrink-0">
+                                {item.label}
+                              </div>
+                              
+                              {/* Bar */}
+                              <div className="flex-1 bg-slate-900/60 border border-slate-850 h-8 rounded-xl overflow-hidden relative flex items-center px-3 group hover:border-slate-705 transition-all">
+                                <div 
+                                  className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-indigo-600/30 to-indigo-500/40 border-r-2 border-indigo-400/50 rounded-l-xl transition-all duration-500"
+                                  style={{ width: `${percentage}%` }}
+                                />
+                                <span className="relative font-bold text-white z-10">{item.count} відвідувань</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             )}
 
@@ -876,6 +1355,165 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {/* 6. EMAILS TAB */}
+            {activeTab === "emails" && (
+              <div className="space-y-6">
+                
+                {/* Gmail Connection Status Card */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-6">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex items-center space-x-4">
+                      <div className="p-3 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-2xl">
+                        <Mail className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-white">Gmail OAuth 2.0 (Адміністратор)</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Підключіть системну пошту адміністратора для надсилання рахунків підписок та повідомлень про закінчення.
+                        </p>
+                      </div>
+                    </div>
+
+                    {loadingEmailStatus ? (
+                      <div className="w-6 h-6 border-2 border-indigo-500/30 border-b-indigo-500 rounded-full animate-spin shrink-0" />
+                    ) : isEmailConnected ? (
+                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-450 border border-emerald-500/20 flex items-center gap-1.5 shrink-0">
+                        <Check className="w-3.5 h-3.5 text-emerald-455" />
+                        Активно
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-400 border border-slate-750 flex items-center gap-1.5 shrink-0">
+                        Не підключено
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="border-t border-slate-800/60 pt-6">
+                    {loadingEmailStatus ? (
+                      <div className="flex items-center justify-center py-6">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500" />
+                      </div>
+                    ) : isEmailConnected ? (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-slate-950/20 border border-slate-850 rounded-2xl max-w-xl">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Підключена пошта</span>
+                          <span className="text-base font-bold text-white mt-1 block">{connectedEmail}</span>
+                          <span className="text-[11px] text-slate-500 mt-1 block">Всі автоматичні листи про оновлення підписок надсилатимуться з цієї адреси.</span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            onClick={handleTestEmail}
+                            disabled={isTestingEmail}
+                            className="px-4 py-2.5 bg-indigo-650 hover:bg-indigo-600 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10 flex items-center gap-2"
+                          >
+                            {isTestingEmail ? (
+                              <>
+                                <div className="w-3.5 h-3.5 border-2 border-white/30 border-b-white rounded-full animate-spin" />
+                                <span>Надсилання...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5" />
+                                <span>Надіслати тестовий лист</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            onClick={handleDisconnectEmail}
+                            className="px-4 py-2.5 bg-slate-950/60 hover:bg-rose-950/20 border border-slate-800 hover:border-rose-900/50 text-slate-400 hover:text-rose-455 font-bold text-xs rounded-xl transition-all flex items-center gap-2"
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            <span>Відключити Gmail</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
+                          Щоб UniTax міг автоматично відправляти інвойси, квитанції про сплату та попередження про завершення підписки, вам потрібно авторизувати поштову скриньку адміністратора через Google OAuth 2.0.
+                        </p>
+                        <button
+                          onClick={handleConnectEmail}
+                          className="px-5 py-3 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold rounded-2xl shadow-lg shadow-indigo-600/10 transition-all flex items-center gap-2"
+                        >
+                          <Mail className="w-4 h-4" />
+                          <span>Підключити пошту Gmail</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Email Logs Table Card */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="text-base font-bold text-white">Журнал відправлених повідомлень</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Логи останніх системних повідомлень, надісланих користувачам.</p>
+                    </div>
+                    <button
+                      onClick={fetchEmails}
+                      disabled={loadingEmails}
+                      className="px-3.5 py-2 bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingEmails ? "animate-spin" : ""}`} />
+                      Оновити
+                    </button>
+                  </div>
+
+                  <div className="border border-slate-855 rounded-2xl overflow-hidden overflow-x-auto">
+                    <table className="w-full border-collapse text-left text-xs">
+                      <thead className="bg-slate-900/40 text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="p-4 font-bold">ID</th>
+                          <th className="p-4 font-bold">Одержувач (Recipient)</th>
+                          <th className="p-4 font-bold">Тема листа (Subject)</th>
+                          <th className="p-4 font-bold">Статус</th>
+                          <th className="p-4 font-bold">Дата відправки</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {emails.map((e: any) => (
+                          <tr key={e.id} className="hover:bg-slate-900/20 transition-all">
+                            <td className="p-4 font-mono text-slate-500">#{e.id}</td>
+                            <td className="p-4 font-semibold text-white">{e.recipient}</td>
+                            <td className="p-4 text-slate-300 font-semibold">{e.subject}</td>
+                            <td className="p-4">
+                              <div className="flex flex-col gap-1 items-start">
+                                <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase border ${
+                                  e.status === "success"
+                                    ? "bg-emerald-500/10 text-emerald-450 border-emerald-500/25"
+                                    : "bg-rose-500/10 text-rose-455 border-rose-500/25"
+                                }`}>
+                                  {e.status === "success" ? "Успішно" : "Помилка"}
+                                </span>
+                                {e.error_message && (
+                                  <span className="text-[9px] text-rose-400 font-medium max-w-[200px] truncate" title={e.error_message}>
+                                    {e.error_message}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-4 text-slate-400 font-semibold">{e.sent_at || "—"}</td>
+                          </tr>
+                        ))}
+                        {emails.length === 0 && !loadingEmails && (
+                          <tr>
+                            <td colSpan={5} className="p-8 text-center text-slate-500 font-semibold italic">
+                              Логи надісланих повідомлень відсутні.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
           </div>
         )}
 
@@ -910,6 +1548,21 @@ export default function AdminDashboard() {
                   <option value="business">Business (Платний)</option>
                 </select>
               </div>
+
+              {editPlanType === "business" && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Період оплати</label>
+                  <select
+                    value={editPaymentPeriod}
+                    onChange={(e) => setEditPaymentPeriod(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                  >
+                    <option value="monthly">Щомісячно (30 днів)</option>
+                    <option value="half_yearly">Піврічно (6 місяців)</option>
+                    <option value="yearly">Щорічно (365 днів)</option>
+                  </select>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Діє до (Expiry Date)</label>

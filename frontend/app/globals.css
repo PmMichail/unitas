@@ -5,10 +5,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --background: #fafbfd;
-  --foreground: #090e1a;
-  --border: rgba(15, 23, 42, 0.07);
-  --card: rgba(255, 255, 255, 0.65);
+  --background: #edf1f6;
+  --foreground: #0f172a;
+  --border: rgba(99, 102, 241, 0.08);
+  --card: rgba(255, 255, 255, 0.95);
   --accent: #4f46e5;
   --font-sans: 'Outfit', sans-serif;
 }
@@ -46,7 +46,7 @@ body {
 
 .light .glass-panel:hover {
   border-color: rgba(79, 70, 229, 0.15);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05), 0 0 20px -5px rgba(79, 70, 229, 0.03);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 0 20px -5px rgba(79, 70, 229, 0.02);
 }
 
 .glow-button {
@@ -61,10 +61,10 @@ body {
 }
 
 .light .glow-button {
-  box-shadow: 0 0 15px -3px rgba(79, 70, 229, 0.25);
+  box-shadow: 0 0 15px -3px rgba(79, 70, 229, 0.2);
 }
 .light .glow-button:hover {
-  box-shadow: 0 0 25px 0px rgba(79, 70, 229, 0.45);
+  box-shadow: 0 0 25px 0px rgba(79, 70, 229, 0.4);
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -78,9 +78,168 @@ body {
   background: rgba(15, 23, 42, 0.15);
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(99, 102, 241, 0.25);
+  background: rgba(99, 102, 241, 0.2);
   border-radius: 9999px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(99, 102, 241, 0.55);
+  background: rgba(99, 102, 241, 0.5);
+}
+
+/* Card container overrides in light theme */
+.light .glass-panel,
+.light .bg-slate-950,
+.light .bg-slate-950\/95,
+.light .bg-slate-950\/80,
+.light .bg-slate-950\/40,
+.light .bg-slate-900\/40 {
+  background-color: #ffffff !important;
+  border-color: rgba(99, 102, 241, 0.08) !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 8px -1px rgba(99, 102, 241, 0.02) !important;
+}
+
+/* Inner nested boxes, tabs, switchers, list items, and table headers */
+.light .bg-slate-900,
+.light .bg-slate-900\/80,
+.light .bg-slate-900\/60,
+.light .bg-slate-900\/50,
+.light .bg-slate-950\/60,
+.light .bg-slate-950\/20,
+.light .bg-slate-950\/10,
+.light .bg-slate-900\/20,
+.light .bg-slate-900\/10,
+.light .bg-slate-950\/5,
+.light .bg-slate-900\/5,
+.light .bg-slate-800,
+.light .bg-slate-800\/80,
+.light .bg-slate-800\/60,
+.light .bg-slate-850,
+.light select,
+.light input[type="text"],
+.light input[type="password"],
+.light input[type="email"],
+.light input[type="number"],
+.light textarea {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+}
+
+/* Soft hover backgrounds for lists and interactive cards */
+.light .hover\:bg-slate-900\/30:hover,
+.light .hover\:bg-slate-900\/40:hover,
+.light .hover\:bg-slate-800\/80:hover,
+.light .hover\:bg-slate-800:hover,
+.light .hover\:bg-slate-700:hover,
+.light .hover\:bg-slate-950\/40:hover {
+  background-color: #e2e8f0 !important;
+}
+
+/* Border overrides in light theme */
+.light .border-slate-700,
+.light .border-slate-700\/50,
+.light .border-slate-800,
+.light .border-slate-800\/40,
+.light .border-slate-800\/60,
+.light .border-slate-800\/80,
+.light .border-slate-850,
+.light .border-slate-900,
+.light .border-slate-900\/40,
+.light .border-slate-900\/60,
+.light .border-slate-950,
+.light .border-slate-950\/10,
+.light .border-slate-950\/20,
+.light .border-slate-950\/40,
+.light .border-slate-950\/80 {
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Text overrides in light theme panels */
+.light h1.text-white,
+.light h2.text-white,
+.light h3.text-white,
+.light h4.text-white,
+.light h5.text-white,
+.light h6.text-white,
+.light p.text-white,
+.light th.text-white,
+.light td.text-white,
+.light span.text-white:not(button *):not(a *):not(.bg-indigo-650 *):not(.bg-indigo-600 *):not(.bg-indigo-500 *):not(.bg-emerald-600 *):not(.bg-emerald-500 *):not(.bg-rose-600 *):not(.bg-rose-500 *):not(.paid-badge *),
+.light div.text-white:not(button *):not(a *):not(.bg-indigo-650 *):not(.bg-indigo-600 *):not(.bg-indigo-500 *):not(.bg-emerald-600 *):not(.bg-emerald-500 *):not(.bg-rose-600 *):not(.bg-rose-500 *):not(.paid-badge *),
+.light .text-slate-100,
+.light .text-slate-200,
+.light .text-slate-250,
+.light .text-slate-300 {
+  color: #0f172a !important;
+}
+
+.light .text-slate-350,
+.light .text-slate-405,
+.light .text-slate-455,
+.light .text-slate-400,
+.light .text-slate-450 {
+  color: #475569 !important;
+}
+
+.light .text-slate-500,
+.light .text-slate-550,
+.light .text-slate-600 {
+  color: #64748b !important;
+}
+
+/* Specific blue stats/alert containers in light theme */
+.light .bg-blue-950\/30 {
+  background-color: rgba(219, 234, 254, 0.55) !important;
+  border-color: rgba(59, 130, 246, 0.25) !important;
+}
+.light .text-blue-300,
+.light .text-blue-400,
+.light .text-blue-500\/80 {
+  color: #1e40af !important;
+}
+
+/* Specific red stats/alert containers in light theme */
+.light .bg-red-950\/10 {
+  background-color: rgba(254, 226, 226, 0.55) !important;
+  border-color: rgba(239, 68, 68, 0.2) !important;
+}
+.light .text-red-400,
+.light .text-red-505 {
+  color: #b91c1c !important;
+}
+
+/* Specific emerald/green stats/alert containers in light theme */
+.light .bg-emerald-505\/10,
+.light .bg-emerald-950\/10 {
+  background-color: rgba(209, 250, 229, 0.55) !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+}
+.light .text-emerald-400 {
+  color: #047857 !important;
+}
+
+/* Specific amber/yellow stats/alert containers in light theme */
+.light .bg-amber-950\/5,
+.light .bg-amber-950\/10 {
+  background-color: rgba(254, 243, 199, 0.55) !important;
+  border-color: rgba(245, 158, 11, 0.2) !important;
+}
+.light .text-amber-400 {
+  color: #b45309 !important;
+}
+
+/* Layout sidebar corrections in light theme */
+.light aside {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+  border-right-color: rgba(99, 102, 241, 0.08) !important;
+}
+
+.light aside a:not(.bg-indigo-600),
+.light aside button:not(.bg-indigo-600) {
+  color: #475569 !important;
+}
+
+.light aside a:hover:not(.bg-indigo-600),
+.light aside button:hover:not(.bg-indigo-600) {
+  color: #0f172a !important;
+  background-color: rgba(15, 23, 42, 0.04) !important;
 }

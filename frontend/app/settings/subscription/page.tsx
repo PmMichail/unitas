@@ -17,22 +17,82 @@ import {
   Sparkles,
   ArrowRight,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Mail,
+  Send
 } from "lucide-react";
+
 
 export default function SubscriptionPage() {
   const { selectedProfile, refreshProfiles } = useApp();
   const [subscription, setSubscription] = useState<any>(null);
-  const [prices, setPrices] = useState({ monthly: 499, yearly: 4989 });
+  const [prices, setPrices] = useState({ monthly: 499, half_yearly: 2499, yearly: 4989 });
   const [usage, setUsage] = useState({ used: 0, limit: 5 });
   const [paymentsList, setPaymentsList] = useState<any[]>([]);
   
   // UI States
-  const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "yearly">("monthly");
+  const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "half_yearly" | "yearly">("monthly");
   const [loading, setLoading] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [refreshingHistory, setRefreshingHistory] = useState(false);
   const [liqpayForm, setLiqpayForm] = useState<any>(null);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+
+  // Send invoice states
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [invoiceEmail, setInvoiceEmail] = useState("");
+  const [sendingInvoice, setSendingInvoice] = useState(false);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [invoiceSuccess, setInvoiceSuccess] = useState<string | null>(null);
+
+  const handleOpenInvoiceModal = () => {
+    const savedEmail = localStorage.getItem("notify_email") || "";
+    setInvoiceEmail(savedEmail);
+    setInvoiceError(null);
+    setInvoiceSuccess(null);
+    setShowInvoiceModal(true);
+  };
+
+  const handleSendInvoice = async () => {
+    if (!selectedProfile) return;
+    if (!invoiceEmail) {
+      setInvoiceError("Будь ласка, введіть email");
+      return;
+    }
+    setSendingInvoice(true);
+    setInvoiceError(null);
+    try {
+      await api.sendSubscriptionInvoice({
+        profile_id: selectedProfile.id,
+        plan_type: "business",
+        payment_period: selectedPeriod,
+        email: invoiceEmail
+      });
+      setInvoiceSuccess("Рахунок успішно надіслано на вашу пошту! Також ви можете переглянути його в історії счетов.");
+      setTimeout(() => {
+        setShowInvoiceModal(false);
+        setInvoiceSuccess(null);
+        fetchPaymentsHistory(); // refresh payment list
+      }, 3000);
+    } catch (e: any) {
+      console.error(e);
+      setInvoiceError(e.response?.data?.detail || "Не вдалося надіслати рахунок");
+    } finally {
+      setSendingInvoice(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("success") === "true") {
+        setShowSuccessBanner(true);
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      }
+    }
+  }, []);
 
   // Auto-submit LiqPay payment form when it updates
   useEffect(() => {
@@ -74,7 +134,13 @@ export default function SubscriptionPage() {
       const subData = await api.getCurrentSubscription(selectedProfile.id);
       setSubscription(subData);
       if (subData.payment_period) {
-        setSelectedPeriod(subData.payment_period === "yearly" ? "yearly" : "monthly");
+        setSelectedPeriod(
+          subData.payment_period === "yearly" 
+            ? "yearly" 
+            : subData.payment_period === "half_yearly" 
+              ? "half_yearly" 
+              : "monthly"
+        );
       }
     } catch (e) {
       console.error("Failed to load subscription details:", e);
@@ -85,8 +151,9 @@ export default function SubscriptionPage() {
     try {
       const priceData = await api.getPricing();
       const monthlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "monthly")?.price || 499;
+      const halfYearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "half_yearly")?.price || 2499;
       const yearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "yearly")?.price || 4989;
-      setPrices({ monthly: monthlyPrice, yearly: yearlyPrice });
+      setPrices({ monthly: monthlyPrice, half_yearly: halfYearlyPrice, yearly: yearlyPrice });
     } catch (e) {
       console.error("Failed to load pricing details:", e);
     }
@@ -127,7 +194,11 @@ export default function SubscriptionPage() {
       });
 
       if (res.payment_required) {
-        setLiqpayForm(res);
+        if (res.pageUrl) {
+          window.location.href = res.pageUrl;
+        } else {
+          setLiqpayForm(res);
+        }
       } else {
         alert("Тариф Business успішно активовано!");
         await loadData();
@@ -216,9 +287,12 @@ export default function SubscriptionPage() {
     );
   }
 
-  // Calculate savings on yearly plan
+  // Calculate savings on yearly and half-yearly plans
   const yearlySavings = Math.round((prices.monthly * 12) - prices.yearly);
   const yearlySavingsPercent = Math.round((yearlySavings / (prices.monthly * 12)) * 100);
+
+  const halfYearlySavings = Math.round((prices.monthly * 6) - prices.half_yearly);
+  const halfYearlySavingsPercent = Math.round((halfYearlySavings / (prices.monthly * 6)) * 100);
 
   const isActiveBusiness = subscription?.plan === "business";
   const isPendingBusiness = subscription?.status === "pending" && subscription?.plan === "business";
@@ -226,6 +300,36 @@ export default function SubscriptionPage() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-10">
       
+      {/* Success Notification Banner */}
+      {showSuccessBanner && (
+        <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-250 rounded-3xl flex flex-col sm:flex-row justify-between sm:items-center gap-4 animate-in fade-in duration-300">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 bg-emerald-500/20 rounded-2xl border border-emerald-500/25 shrink-0">
+              <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-base text-white">Оплату успішно отримано! 🎉</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Ваш тарифний план <span className="font-bold text-amber-400">Business</span> успішно активовано та продовжено. Дякуємо за довіру!
+              </p>
+              {subscription && subscription.expires_at && (
+                <p className="text-xs font-semibold text-emerald-400 mt-1 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  Термін дії підписки: до {new Date(subscription.expires_at).toLocaleDateString("uk-UA")}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowSuccessBanner(false)}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-xl border border-slate-800 transition-all cursor-pointer shadow shrink-0 self-end sm:self-center"
+          >
+            Зрозуміло
+          </button>
+        </div>
+      )}
+
       {/* Hidden LiqPay Submit Form */}
       {liqpayForm && (
         <form id="liqpay-submit-form" method="POST" action={liqpayForm.api_url}>
@@ -252,7 +356,9 @@ export default function SubscriptionPage() {
               <Crown className="w-4 h-4 text-amber-400 animate-pulse" />
               <div className="text-left">
                 <p className="text-[9px] uppercase font-black tracking-widest text-slate-500">Поточний план</p>
-                <p className="text-xs font-bold text-amber-400">Business ({subscription.payment_period === "yearly" ? "Річний" : "Місячний"})</p>
+                <p className="text-xs font-bold text-amber-400">
+                  Business ({subscription.payment_period === "yearly" ? "Річний" : subscription.payment_period === "half_yearly" ? "Піврічний" : "Місячний"})
+                </p>
               </div>
             </div>
           ) : (
@@ -289,10 +395,22 @@ export default function SubscriptionPage() {
                   className={`px-4 py-1.5 text-xs font-bold rounded-xl transition-all ${
                     selectedPeriod === "monthly"
                       ? "bg-indigo-650 text-white shadow"
-                      : "text-slate-400 hover:text-slate-200"
+                      : "text-slate-400 hover:text-slate-205"
                   }`}
                 >
                   Місяць
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPeriod("half_yearly")}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 ${
+                    selectedPeriod === "half_yearly"
+                      ? "bg-indigo-650 text-white shadow"
+                      : "text-slate-400 hover:text-slate-205"
+                  }`}
+                >
+                  <span>Пів року</span>
+                  <span className="bg-emerald-500/10 text-emerald-450 border border-emerald-500/20 px-1 py-0.5 rounded-md text-[8px] uppercase font-black">-{halfYearlySavingsPercent}%</span>
                 </button>
                 <button
                   type="button"
@@ -300,7 +418,7 @@ export default function SubscriptionPage() {
                   className={`px-4 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 ${
                     selectedPeriod === "yearly"
                       ? "bg-indigo-650 text-white shadow"
-                      : "text-slate-400 hover:text-slate-200"
+                      : "text-slate-400 hover:text-slate-205"
                   }`}
                 >
                   <span>Рік</span>
@@ -359,15 +477,30 @@ export default function SubscriptionPage() {
                   ) : (
                     <button
                       onClick={async () => {
-                        if (confirm("Ви дійсно хочете перейти на безкоштовний тариф? Ваш сплачений Business буде скасовано.")) {
+                        const hasActiveBusiness = subscription?.plan === "business" && subscription?.status === "active";
+                        const expiresDate = subscription?.expires_at ? new Date(subscription.expires_at).toLocaleDateString("uk-UA") : null;
+                        
+                        let confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф?";
+                        if (hasActiveBusiness && expiresDate) {
+                          confirmMessage = `ℹ️ Ви вже оплатили Business-тариф до ${expiresDate}. Ви можете продовжувати користуватися всіма перевагами Business до кінця цього терміну. Після цієї дати підписка автоматично зміниться на Безкоштовну, а нових списань з картки не буде. Підтверджуєте скасування автоматичного подовження?`;
+                        } else {
+                          confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф? Ваш сплачений Business буде скасовано.";
+                        }
+
+                        if (confirm(confirmMessage)) {
                           setLoading(true);
                           try {
-                            await api.createPayment({
+                            const res = await api.createPayment({
                               profile_id: selectedProfile.id,
                               plan_type: "free",
                               payment_period: "monthly"
                             });
-                            alert("Перехід на безкоштовний тариф активовано!");
+                            
+                            if (res.deferred) {
+                              alert(`Автопродовження підписки скасовано. Ваш тариф Business діятиме до ${expiresDate}.`);
+                            } else {
+                              alert("Перехід на безкоштовний тариф активовано!");
+                            }
                             loadData();
                           } catch (e) {
                             alert("Помилка при зміні тарифу");
@@ -381,6 +514,7 @@ export default function SubscriptionPage() {
                       Перейти на Free
                     </button>
                   )}
+
                 </div>
               </div>
 
@@ -393,6 +527,11 @@ export default function SubscriptionPage() {
                 {selectedPeriod === "yearly" && (
                   <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
                     Економія {yearlySavings} грн
+                  </div>
+                )}
+                {selectedPeriod === "half_yearly" && (
+                  <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
+                    Економія {halfYearlySavings} грн
                   </div>
                 )}
                 
@@ -410,10 +549,18 @@ export default function SubscriptionPage() {
                   
                   <div className="mt-4 flex items-baseline gap-1">
                     <span className="text-3xl font-black text-white">
-                      {selectedPeriod === "monthly" ? prices.monthly : prices.yearly}
+                      {selectedPeriod === "monthly" 
+                        ? prices.monthly 
+                        : selectedPeriod === "half_yearly" 
+                          ? prices.half_yearly 
+                          : prices.yearly}
                     </span>
                     <span className="text-xs text-slate-400">
-                      грн / {selectedPeriod === "monthly" ? "міс" : "рік"}
+                      грн / {selectedPeriod === "monthly" 
+                        ? "міс" 
+                        : selectedPeriod === "half_yearly" 
+                          ? "пів року" 
+                          : "рік"}
                     </span>
                   </div>
                   
@@ -448,26 +595,29 @@ export default function SubscriptionPage() {
                     className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-1.5 ${
                       loading 
                         ? "bg-amber-600/50 text-white/50 cursor-not-allowed" 
-                        : isActiveBusiness && subscription.payment_period === selectedPeriod
-                          ? "bg-slate-800 hover:bg-slate-700 text-white border border-slate-700"
-                          : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
+                        : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
                     }`}
                   >
                     {loading ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : isActiveBusiness && subscription.payment_period === selectedPeriod ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Продовжити термін</span>
-                      </>
                     ) : (
                       <>
                         <CreditCard className="w-3.5 h-3.5" />
                         <span>
-                          {isActiveBusiness ? "Змінити період" : `Оплатити підписку (${selectedPeriod === "monthly" ? prices.monthly : prices.yearly} грн)`}
+                          Оплатити підписку ({selectedPeriod === "monthly" ? prices.monthly : selectedPeriod === "half_yearly" ? prices.half_yearly : prices.yearly} грн)
                         </span>
                       </>
                     )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenInvoiceModal}
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl border border-slate-700 hover:border-slate-650 bg-slate-900/40 hover:bg-slate-900 text-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>Отримати рахунок на email</span>
                   </button>
 
                   {/* Direct Demo Upgrader */}
@@ -572,7 +722,7 @@ export default function SubscriptionPage() {
         <div className="flex justify-between items-center">
           <div>
             <h3 className="text-lg font-bold text-white">Історія рахунків та оплат</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Журнал виставлених счетов та LiqPay оплат</p>
+            <p className="text-xs text-slate-500 mt-0.5">Журнал виставлених рахунків та оплат Mono Pay</p>
           </div>
           <button
             onClick={handleRefreshHistory}
@@ -600,7 +750,7 @@ export default function SubscriptionPage() {
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Період</th>
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Дата створення</th>
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Статус</th>
-                  <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Рахунок LiqPay</th>
+                  <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Рахунок Mono Pay</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
@@ -620,7 +770,7 @@ export default function SubscriptionPage() {
                           </span>
                           <span className="font-semibold text-slate-200">
                             {isSub 
-                              ? `Upgrade to Business (${p.period === "yearly" ? "Рік" : "Місяць"})` 
+                              ? `Upgrade to Business (${p.period === "yearly" ? "Рік" : p.period === "half_yearly" ? "Пів року" : "Місяць"})` 
                               : `Сплата податку: ${p.tax_type.toUpperCase()}`}
                           </span>
                         </div>
@@ -660,10 +810,14 @@ export default function SubscriptionPage() {
                                     const res = await api.createPayment({
                                       profile_id: selectedProfile.id,
                                       plan_type: p.tax_type, // plan type e.g. business
-                                      payment_period: p.period === "yearly" ? "yearly" : "monthly"
+                                      payment_period: p.period === "yearly" ? "yearly" : p.period === "half_yearly" ? "half_yearly" : "monthly"
                                     });
                                     if (res.payment_required) {
-                                      setLiqpayForm(res);
+                                      if (res.pageUrl) {
+                                        window.location.href = res.pageUrl;
+                                      } else {
+                                        setLiqpayForm(res);
+                                      }
                                     }
                                   } catch (e) {
                                     alert("Не вдалося ініціювати платіж");
@@ -691,6 +845,101 @@ export default function SubscriptionPage() {
         )}
       </div>
 
+      {/* Invoice Modal Popup */}
+      {showInvoiceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-250">
+          <div className="bg-slate-905 border border-slate-800 rounded-3xl p-6 max-w-md w-full relative overflow-hidden shadow-2xl">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
+            
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-455 rounded-xl">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-white">Отримати рахунок</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Служба підписки UniTax</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInvoiceModal(false)}
+                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-350 transition-all"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed mb-6">
+              Ми згенеруємо PDF-рахунок для оплати безконтактним переказом за реквізитами ФОП на суму{" "}
+              <span className="font-bold text-white">
+                {selectedPeriod === "monthly" 
+                  ? prices.monthly 
+                  : selectedPeriod === "half_yearly" 
+                    ? prices.half_yearly 
+                    : prices.yearly} грн
+              </span>{" "}
+              ({selectedPeriod === "monthly" ? "місячний" : selectedPeriod === "half_yearly" ? "піврічний" : "річний"} тариф Business) та надішлемо його на вашу електронну адресу.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-500 tracking-wider mb-2">
+                  Email одержувача
+                </label>
+                <input
+                  type="email"
+                  value={invoiceEmail}
+                  onChange={(e) => setInvoiceEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="w-full px-4 py-3 bg-slate-950/50 border border-slate-800 hover:border-slate-750 focus:border-indigo-550 rounded-2xl text-xs text-slate-200 focus:outline-none transition-all"
+                />
+              </div>
+
+              {invoiceError && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-455 rounded-2xl text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{invoiceError}</span>
+                </div>
+              )}
+
+              {invoiceSuccess && (
+                <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-455 rounded-2xl text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 animate-bounce" />
+                  <span>{invoiceSuccess}</span>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowInvoiceModal(false)}
+                  className="flex-1 py-3 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-400 hover:text-white text-xs font-bold rounded-2xl transition-all"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendInvoice}
+                  disabled={sendingInvoice}
+                  className="flex-1 py-3 bg-gradient-to-r from-indigo-650 to-violet-650 hover:from-indigo-600 hover:to-violet-600 active:scale-[0.98] text-white text-xs font-bold rounded-2xl shadow-lg shadow-indigo-650/15 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {sendingInvoice ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Надіслати</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
+

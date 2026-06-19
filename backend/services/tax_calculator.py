@@ -245,6 +245,7 @@ class TaxCalculator:
         tax_system = str(profile.get("tax_system", "simplified-3-5%")).lower()
         is_simplified = "simplified" in tax_system or tax_system in ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"]
         is_general = "general" in tax_system or tax_system in ["zagalna", "general_tax", "fop_general", "llc_profit", "general"]
+        is_non_profit = "non_profit" in tax_system or tax_system == "non_profit"
         is_fop = profile.get("type", "fop") == "fop"
         group = profile.get("group", 3)
         rate = profile.get("rate", 5.0)
@@ -253,7 +254,9 @@ class TaxCalculator:
         
         # Розрахунок основного податку
         tax_due = 0.0
-        if is_simplified:
+        if is_non_profit:
+            tax_due = 0.0
+        elif is_simplified:
             if is_fop:
                 tax_due = self.calculate_unified_tax(taxable_income, group, num_months)
             else:
@@ -264,7 +267,9 @@ class TaxCalculator:
         
         # Розрахунок військового збору
         military_tax_due = 0.0
-        if is_fop:
+        if is_non_profit:
+            military_tax_due = 0.0
+        elif is_fop:
             military_tax_due = self.calculate_military_tax_fop(taxable_income, group, num_months)
         elif is_simplified and not is_fop:
             # ТОВ на спрощеній системі - 1% від доходу
@@ -315,12 +320,42 @@ class TaxCalculator:
         - Telegram бот
         """
         # Local imports to avoid circular dependency
-        from api.main import Profile, ParsedPayment, Payment, Employee, BankStatement, get_paid_taxes_by_type, get_profile_num_months
+        from api.main import (
+            Profile, ParsedPayment, Payment, Employee, BankStatement,
+            get_paid_taxes_by_type, get_paid_taxes_by_month, get_profile_num_months,
+            is_employee_active_in_month
+        )
         
         profile = db.query(Profile).filter(Profile.id == profile_id).first()
         if not profile:
             return {}
             
+        def local_is_simplified(tax_system_str):
+            if not tax_system_str:
+                return False
+            return str(tax_system_str).lower() in ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"]
+
+        def local_is_general(tax_system_str):
+            if not tax_system_str:
+                return False
+            return str(tax_system_str).lower() in ["zagalna", "general_tax", "fop_general", "llc_profit", "general"]
+
+        def local_is_fop(p):
+            if not p:
+                return False
+            p_type = str(getattr(p, "type", "") or "").lower()
+            p_tax = str(getattr(p, "tax_system", "") or "").lower()
+            if p_type == "fop":
+                return True
+            if p_type == "company" or p_tax == "non_profit":
+                return False
+            p_name = str(getattr(p, "name", "") or "").lower()
+            if "тов" in p_name or "llc" in p_name or "товариство" in p_name:
+                return False
+            if "фоп" in p_name or "fop" in p_name:
+                return True
+            return True
+
         # Get all parsed payments (filtered by calculation_start_date if configured)
         query_payments = db.query(ParsedPayment).filter(
             (ParsedPayment.profile_id == profile_id) |
@@ -385,6 +420,103 @@ class TaxCalculator:
             num_months=num_months
         )
         
+        # Pre-calculate months_to_gen
+        payments_months = set()
+        for p in payments:
+            if p.date:
+                payments_months.add((p.date.year, p.date.month))
+        if not payments_months:
+            if has_statements:
+                import datetime
+                curr_y = datetime.date.today().year
+                for m in range(1, datetime.date.today().month + 1):
+                    payments_months.add((curr_y, m))
+        months_to_gen = sorted(list(payments_months))
+
+        paid_by_month = get_paid_taxes_by_month(db, profile_id, start_dt=start_date_filter, end_dt=None)
+
+        # Calculate employee taxes using payment-aware historical logic
+        employee_esv_due = 0.0
+        employee_pit_due = 0.0
+        employee_mil_due = 0.0
+        
+        for y, m in months_to_gen:
+            m_payments = [p for p in payments if p.date and p.date.year == y and p.date.month == m]
+            
+            # FOP's own ESV due
+            m_esv_due_fop = 0.0
+            if local_is_fop(profile) and not getattr(profile, 'esv_paid_by_employer', False):
+                m_esv_due_fop = self.get_rate("esv_fop_monthly", year=y)
+                
+            # FOP's own military tax due
+            m_mil_due_fop = 0.0
+            m_outgoing_refunds = sum(p.amount for p in m_payments if p.direction == "out" and p.transaction_type == "refund")
+            m_taxable_income = sum(p.amount for p in m_payments if p.direction == "in" and p.taxable and p.transaction_type == "income") - m_outgoing_refunds
+            m_taxable_income = max(0.0, m_taxable_income)
+            
+            if local_is_fop(profile):
+                if local_is_simplified(profile.tax_system):
+                    if profile.group in (1, 2):
+                        m_mil_due_fop = self.get_rate("min_salary", year=y) * 0.10
+                    else:
+                        m_mil_due_fop = m_taxable_income * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
+                elif local_is_general(profile.tax_system):
+                    m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
+                    m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
+                    m_mil_due_fop = m_net_profit * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
+            elif local_is_simplified(profile.tax_system) and not local_is_fop(profile):
+                m_mil_due_fop = m_taxable_income * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
+            elif local_is_general(profile.tax_system) and not local_is_fop(profile):
+                m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
+                m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
+                m_mil_due_fop = m_net_profit * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
+                
+            # Employee taxes
+            m_emp_esv = 0.0
+            m_emp_pit = 0.0
+            m_emp_mil = 0.0
+            
+            m_paid_dict = paid_by_month.get((y, m), {})
+            m_pit_paid = m_paid_dict.get("pit", 0.0)
+            m_esv_paid = m_paid_dict.get("esv", 0.0)
+            m_mil_paid = m_paid_dict.get("military_tax", 0.0)
+            
+            m_emp_pit_paid = m_pit_paid
+            m_emp_esv_paid = max(0.0, m_esv_paid - m_esv_due_fop)
+            m_emp_mil_paid = max(0.0, m_mil_paid - m_mil_due_fop)
+            
+            has_employee_payments = (m_emp_pit_paid > 0.0 or m_emp_esv_paid > 0.0 or m_emp_mil_paid > 0.0)
+            
+            if len(profile_employees) > 0:
+                if profile.has_employees or has_employee_payments:
+                    # Calculate accruals based on employee records
+                    for emp in profile_employees:
+                        if is_employee_active_in_month(emp, y, m):
+                            c_type = getattr(emp, 'contract_type', 'permanent') or 'permanent'
+                            if c_type == 'fop':
+                                continue
+                                
+                            m_emp_pit += emp.salary * (self.get_rate("pit_employee_rate", year=y) / 100.0)
+                            m_emp_mil += emp.salary * (self.get_rate("military_tax_employee_rate", year=y) / 100.0)
+                            
+                            if not getattr(emp, 'esv_paid_by_other', False):
+                                if c_type == 'cph':
+                                    esv_base = emp.salary
+                                else: # permanent
+                                    is_main = getattr(emp, 'is_main_job', True)
+                                    if is_main is None:
+                                        is_main = True
+                                    esv_base = max(emp.salary, self.get_rate("min_salary", year=y)) if is_main else emp.salary
+                                m_emp_esv += esv_base * (self.get_rate("esv_employee_rate", year=y) / 100.0)
+            else:
+                m_emp_esv = m_emp_esv_paid
+                m_emp_pit = m_emp_pit_paid
+                m_emp_mil = m_emp_mil_paid
+                
+            employee_esv_due += m_emp_esv
+            employee_pit_due += m_emp_pit
+            employee_mil_due += m_emp_mil
+        
         # Get all paid taxes using the helper
         tax_paid_dict = get_paid_taxes_by_type(db, profile_id, start_dt=start_date_filter, end_dt=None)
         
@@ -393,15 +525,15 @@ class TaxCalculator:
         paid_edp = tax_paid_dict.get("unified_tax", 0.0)
         debt_edp = max(0.0, accrued_edp - paid_edp)
         
-        accrued_esv = taxes["esv_due"] + taxes["employee_esv_due"] + float(getattr(profile, "starting_debt_esv", 0.0) or 0.0)
+        accrued_esv = taxes["esv_due"] + employee_esv_due + float(getattr(profile, "starting_debt_esv", 0.0) or 0.0)
         paid_esv = tax_paid_dict.get("esv", 0.0)
         debt_esv = max(0.0, accrued_esv - paid_esv)
         
-        accrued_pdfo = taxes["employee_pit_due"] + float(getattr(profile, "starting_debt_pdfo", 0.0) or 0.0)
+        accrued_pdfo = employee_pit_due + float(getattr(profile, "starting_debt_pdfo", 0.0) or 0.0)
         paid_pdfo = tax_paid_dict.get("pit", 0.0)
         debt_pdfo = max(0.0, accrued_pdfo - paid_pdfo)
         
-        accrued_mil = taxes["military_tax_due"] + taxes["employee_mil_due"] + float(getattr(profile, "starting_debt_vz", 0.0) or 0.0)
+        accrued_mil = taxes["military_tax_due"] + employee_mil_due + float(getattr(profile, "starting_debt_vz", 0.0) or 0.0)
         paid_mil = tax_paid_dict.get("military_tax", 0.0)
         debt_mil = max(0.0, accrued_mil - paid_mil)
 
@@ -448,44 +580,6 @@ class TaxCalculator:
             9: "Вересень", 10: "Жовтень", 11: "Листопад", 12: "Грудень"
         }
         
-        payments_months = set()
-        for p in payments:
-            if p.date:
-                payments_months.add((p.date.year, p.date.month))
-        if not payments_months:
-            if has_statements:
-                import datetime
-                curr_y = datetime.date.today().year
-                for m in range(1, datetime.date.today().month + 1):
-                    payments_months.add((curr_y, m))
-        months_to_gen = sorted(list(payments_months))
-        
-        def local_is_simplified(tax_system_str):
-            if not tax_system_str:
-                return False
-            return str(tax_system_str).lower() in ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"]
-
-        def local_is_general(tax_system_str):
-            if not tax_system_str:
-                return False
-            return str(tax_system_str).lower() in ["zagalna", "general_tax", "fop_general", "llc_profit", "general"]
-
-        def local_is_fop(p):
-            if not p:
-                return False
-            p_type = str(getattr(p, "type", "") or "").lower()
-            p_name = str(getattr(p, "name", "") or "").lower()
-            p_tax = str(getattr(p, "tax_system", "") or "").lower()
-            if p_type == "fop":
-                return True
-            if "тов" in p_name or "llc" in p_name or "товариство" in p_name:
-                return False
-            if p_type == "company" and "llc" in p_tax:
-                return False
-            if "фоп" in p_name or "fop" in p_name:
-                return True
-            return True
-
         by_month = {}
         for y, m in months_to_gen:
             m_payments = [p for p in payments if p.date and p.date.year == y and p.date.month == m]
@@ -522,25 +616,57 @@ class TaxCalculator:
             elif local_is_simplified(profile.tax_system) and not local_is_fop(profile):
                 # ТОВ на спрощеній системі - 1% від доходу
                 m_mil_due = m_taxable_income * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
+            elif local_is_general(profile.tax_system) and not local_is_fop(profile):
+                m_taxable_expense = sum(p.amount for p in m_payments if p.direction == "out" and p.taxable)
+                m_net_profit = max(0.0, m_taxable_income - m_taxable_expense)
+                m_mil_due = m_net_profit * (self.get_rate("military_tax_fop_rate", year=y) / 100.0)
                     
             # ESV due
             m_esv_due = 0.0
             if local_is_fop(profile) and not getattr(profile, 'esv_paid_by_employer', False):
                 m_esv_due = self.get_rate("esv_fop_monthly", year=y)
                 
-            # Employee taxes
+            # Employee taxes using payment-aware historical logic
             m_emp_esv = 0.0
             m_emp_pit = 0.0
             m_emp_mil = 0.0
-            if profile.has_employees or len(profile_employees) > 0:
-                for emp in profile_employees:
-                    is_main = getattr(emp, 'is_main_job', True)
-                    if is_main is None:
-                        is_main = True
-                    esv_base = max(emp.salary, self.get_rate("min_salary", year=y)) if is_main else emp.salary
-                    m_emp_esv += esv_base * (self.get_rate("esv_employee_rate", year=y) / 100.0)
-                    m_emp_pit += emp.salary * (self.get_rate("pit_employee_rate", year=y) / 100.0)
-                    m_emp_mil += emp.salary * (self.get_rate("military_tax_employee_rate", year=y) / 100.0)
+            
+            m_paid_dict = paid_by_month.get((y, m), {})
+            m_pit_paid = m_paid_dict.get("pit", 0.0)
+            m_esv_paid = m_paid_dict.get("esv", 0.0)
+            m_mil_paid = m_paid_dict.get("military_tax", 0.0)
+            
+            m_emp_pit_paid = m_pit_paid
+            m_emp_esv_paid = max(0.0, m_esv_paid - m_esv_due)
+            m_emp_mil_paid = max(0.0, m_mil_paid - m_mil_due)
+            
+            has_employee_payments = (m_emp_pit_paid > 0.0 or m_emp_esv_paid > 0.0 or m_emp_mil_paid > 0.0)
+            
+            if len(profile_employees) > 0:
+                if profile.has_employees or has_employee_payments:
+                    # Calculate accruals based on employee records
+                    for emp in profile_employees:
+                        if is_employee_active_in_month(emp, y, m):
+                            c_type = getattr(emp, 'contract_type', 'permanent') or 'permanent'
+                            if c_type == 'fop':
+                                continue
+                                
+                            m_emp_pit += emp.salary * (self.get_rate("pit_employee_rate", year=y) / 100.0)
+                            m_emp_mil += emp.salary * (self.get_rate("military_tax_employee_rate", year=y) / 100.0)
+                            
+                            if not getattr(emp, 'esv_paid_by_other', False):
+                                if c_type == 'cph':
+                                    esv_base = emp.salary
+                                else: # permanent
+                                    is_main = getattr(emp, 'is_main_job', True)
+                                    if is_main is None:
+                                        is_main = True
+                                    esv_base = max(emp.salary, self.get_rate("min_salary", year=y)) if is_main else emp.salary
+                                m_emp_esv += esv_base * (self.get_rate("esv_employee_rate", year=y) / 100.0)
+            else:
+                m_emp_esv = m_emp_esv_paid
+                m_emp_pit = m_emp_pit_paid
+                m_emp_mil = m_emp_mil_paid
                     
             period_key = f"{y}-{m:02d}"
             by_month[period_key] = {

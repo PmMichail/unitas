@@ -1,0 +1,11 @@
+# Ignore non-mobile folders and archives for EAS builds
+backend/
+frontend/
+telegram_bot/
+samples/
+temp_uploads/
+*.zip
+*.db
+.venv/
+.next/
+node_modules/

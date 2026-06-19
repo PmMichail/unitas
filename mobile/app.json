@@ -8,21 +8,23 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-secure-store"
     ],
     "ios": {
       "bundleIdentifier": "com.unitas.app",
-      "buildNumber": "1.0.0",
+      "buildNumber": "4",
       "supportsTablet": true,
       "infoPlist": {
         "NSFaceIDUsageDescription": "UniTax використовує Face ID для безпечного входу",
         "NSPhotoLibraryUsageDescription": "UniTax потребує доступу до фото для завантаження чеків",
-        "NSCameraUsageDescription": "UniTax використовує камеру для сканування QR-кодів оплати"
+        "NSCameraUsageDescription": "UniTax використовує камеру для сканування QR-кодів оплати",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.unitas.app",
-      "versionCode": 1,
+      "versionCode": 4,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE"
@@ -38,9 +40,12 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-router",
-      "expo-secure-store"
-    ]
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "53447625-6a29-4a2b-a544-6b6fcf4b71d5"
+      }
+    },
+    "owner": "maiklmax"
   }
 }

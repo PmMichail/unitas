@@ -9,6 +9,6 @@ COPY telegram_bot/ ./telegram_bot/
 COPY backend/ ./backend/
 
 ENV PYTHONPATH=/app
-ENV TELEGRAM_BOT_TOKEN=8566492902:AAHfWmB6vXNHLZ1GTNBxo8hJGRKB3H1MzKo
 
 CMD ["python", "telegram_bot/bot.py"]
+

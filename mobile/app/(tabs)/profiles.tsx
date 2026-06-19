@@ -77,6 +77,8 @@ export default function ProfilesScreen() {
   const [startingDebtEsv, setStartingDebtEsv] = useState('');
   const [startingDebtVz, setStartingDebtVz] = useState('');
   const [startingDebtPdfo, setStartingDebtPdfo] = useState('');
+  const [organizationSubtype, setOrganizationSubtype] = useState<'osbb' | 'st' | 'go' | 'bf' | 'jbk'>('osbb');
+  const [nonProfitCode, setNonProfitCode] = useState('0046');
 
   // Employee Modal State
   const [employeesModalVisible, setEmployeesModalVisible] = useState(false);
@@ -90,6 +92,13 @@ export default function ProfilesScreen() {
   const [empName, setEmpName] = useState('');
   const [empTaxId, setEmpTaxId] = useState('');
   const [empSalary, setEmpSalary] = useState('');
+  const [empIsMainJob, setEmpIsMainJob] = useState(true);
+  const [empContractType, setEmpContractType] = useState('permanent');
+  const [empEsvPaidByOther, setEmpEsvPaidByOther] = useState(false);
+  const [empIsArchived, setEmpIsArchived] = useState(false);
+  const [empStartDate, setEmpStartDate] = useState('');
+  const [empEndDate, setEmpEndDate] = useState('');
+  const [empActiveMonths, setEmpActiveMonths] = useState<Record<string, boolean>>({});
 
   // Invoices & Acts Modal States
   const [invoicesModalVisible, setInvoicesModalVisible] = useState(false);
@@ -211,6 +220,8 @@ export default function ProfilesScreen() {
     setStartingDebtEsv('');
     setStartingDebtVz('');
     setStartingDebtPdfo('');
+    setOrganizationSubtype('osbb');
+    setNonProfitCode('0046');
     setEditingProfile(null);
   };
 
@@ -236,6 +247,8 @@ export default function ProfilesScreen() {
     setStartingDebtEsv(profile.starting_debt_esv !== undefined && profile.starting_debt_esv !== null ? String(profile.starting_debt_esv) : '');
     setStartingDebtVz(profile.starting_debt_vz !== undefined && profile.starting_debt_vz !== null ? String(profile.starting_debt_vz) : '');
     setStartingDebtPdfo(profile.starting_debt_pdfo !== undefined && profile.starting_debt_pdfo !== null ? String(profile.starting_debt_pdfo) : '');
+    setOrganizationSubtype((profile.organization_subtype as any) || 'osbb');
+    setNonProfitCode(profile.non_profit_code || '0046');
     setModalVisible(true);
   };
 
@@ -266,6 +279,8 @@ export default function ProfilesScreen() {
         starting_debt_esv: startingDebtEsv ? parseFloat(startingDebtEsv) : 0,
         starting_debt_vz: startingDebtVz ? parseFloat(startingDebtVz) : 0,
         starting_debt_pdfo: startingDebtPdfo ? parseFloat(startingDebtPdfo) : 0,
+        organization_subtype: taxSystem === 'non_profit' ? organizationSubtype : undefined,
+        non_profit_code: taxSystem === 'non_profit' ? nonProfitCode : undefined,
       };
 
       if (editingProfile) {
@@ -320,6 +335,105 @@ export default function ProfilesScreen() {
     }
   };
 
+  const isEmployeeActiveInSelectedMonth = (emp: any, monthStr: string) => {
+    if (!emp) return false;
+    
+    // Check manual override in active_months_json first
+    if (emp.active_months_json) {
+      try {
+        const overrides = JSON.parse(emp.active_months_json);
+        if (overrides[monthStr] !== undefined) {
+          return !!overrides[monthStr];
+        }
+      } catch (e) {}
+    }
+    
+    // Check start and end dates
+    const [year, month] = monthStr.split('-').map(Number);
+    const monthStart = new Date(year, month - 1, 1);
+    const monthEnd = new Date(year, month, 0);
+    
+    if (emp.start_date) {
+      const start = new Date(emp.start_date);
+      if (start > monthEnd) return false;
+    }
+    
+    if (emp.end_date) {
+      const end = new Date(emp.end_date);
+      if (end < monthStart) return false;
+    }
+    
+    if (emp.is_archived && !emp.end_date) {
+      const today = new Date();
+      const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      if (monthStart >= currentMonthStart) return false;
+    }
+    
+    return true;
+  };
+
+  const handleToggleMonthDirectly = async (emp: any, monthKey: string) => {
+    let currentOverrides: Record<string, boolean> = {};
+    if (emp.active_months_json) {
+      try {
+        currentOverrides = JSON.parse(emp.active_months_json);
+      } catch (e) {}
+    } else {
+      const year = monthKey.split('-')[0];
+      for (let m = 1; m <= 12; m++) {
+        const mStr = `${year}-${String(m).padStart(2, '0')}`;
+        currentOverrides[mStr] = isEmployeeActiveInSelectedMonth(emp, mStr);
+      }
+    }
+    
+    currentOverrides[monthKey] = !currentOverrides[monthKey];
+    
+    try {
+      await api.updateEmployee(emp.id, {
+        active_months_json: JSON.stringify(currentOverrides)
+      });
+      if (selectedProfile) {
+        fetchEmployees(selectedProfile.id);
+      }
+    } catch (err) {
+      console.error("Failed to update active months on mobile:", err);
+    }
+  };
+
+  const handleDismissEmployee = async (emp: any) => {
+    Alert.alert(
+      'Звільнення працівника',
+      `Зафіксувати звільнення працівника ${emp.name}? Його буде перенесено в архів.`,
+      [
+        { text: 'Скасувати', style: 'cancel' },
+        {
+          text: 'Звільнити',
+          style: 'destructive',
+          onPress: async () => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = today.getMonth() + 1;
+            const lastDay = new Date(year, month, 0).getDate();
+            const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+            
+            try {
+              await api.updateEmployee(emp.id, {
+                is_archived: true,
+                end_date: endDateStr
+              });
+              if (selectedProfile) {
+                fetchEmployees(selectedProfile.id);
+              }
+            } catch (err) {
+              console.error("Failed to dismiss employee on mobile:", err);
+              Alert.alert("Помилка", "Не вдалося зафіксувати звільнення");
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleOpenEmployees = (profile: ProfileData) => {
     setSelectedProfile(profile);
     setEmployeesModalVisible(true);
@@ -328,6 +442,13 @@ export default function ProfilesScreen() {
     setEmpName('');
     setEmpTaxId('');
     setEmpSalary('');
+    setEmpIsMainJob(true);
+    setEmpContractType('permanent');
+    setEmpEsvPaidByOther(false);
+    setEmpIsArchived(false);
+    setEmpStartDate('');
+    setEmpEndDate('');
+    setEmpActiveMonths({});
     fetchEmployees(profile.id);
   };
 
@@ -336,6 +457,21 @@ export default function ProfilesScreen() {
     setEmpName('');
     setEmpTaxId('');
     setEmpSalary('');
+    setEmpIsMainJob(true);
+    setEmpContractType('permanent');
+    setEmpEsvPaidByOther(false);
+    setEmpIsArchived(false);
+    
+    const d = new Date();
+    setEmpStartDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`);
+    setEmpEndDate('');
+    
+    const year = new Date().getFullYear().toString();
+    const initialMonths: Record<string, boolean> = {};
+    for (let m = 1; m <= 12; m++) {
+      initialMonths[`${year}-${String(m).padStart(2, '0')}`] = true;
+    }
+    setEmpActiveMonths(initialMonths);
     setEmployeeFormVisible(true);
   };
 
@@ -344,6 +480,26 @@ export default function ProfilesScreen() {
     setEmpName(emp.name);
     setEmpTaxId(emp.tax_id || '');
     setEmpSalary(emp.salary.toString());
+    setEmpIsMainJob(emp.is_main_job !== false);
+    setEmpContractType(emp.contract_type || 'permanent');
+    setEmpEsvPaidByOther(emp.esv_paid_by_other === true);
+    setEmpIsArchived(emp.is_archived === true);
+    setEmpStartDate(emp.start_date ? emp.start_date.split('T')[0] : '');
+    setEmpEndDate(emp.end_date ? emp.end_date.split('T')[0] : '');
+    
+    let parsedActiveMonths: Record<string, boolean> = {};
+    if (emp.active_months_json) {
+      try {
+        parsedActiveMonths = JSON.parse(emp.active_months_json);
+      } catch (e) {}
+    } else {
+      const year = new Date().getFullYear().toString();
+      for (let m = 1; m <= 12; m++) {
+        const mStr = `${year}-${String(m).padStart(2, '0')}`;
+        parsedActiveMonths[mStr] = isEmployeeActiveInSelectedMonth(emp, mStr);
+      }
+    }
+    setEmpActiveMonths(parsedActiveMonths);
     setEmployeeFormVisible(true);
   };
 
@@ -382,6 +538,13 @@ export default function ProfilesScreen() {
           name: empName.trim(),
           tax_id: cleanedTaxId,
           salary: salaryNum,
+          is_main_job: empIsMainJob,
+          contract_type: empContractType,
+          esv_paid_by_other: empEsvPaidByOther,
+          is_archived: empIsArchived,
+          start_date: empStartDate || null,
+          end_date: empEndDate || null,
+          active_months_json: JSON.stringify(empActiveMonths)
         });
         Alert.alert('Успіх', 'Дані працівника успішно оновлено');
       } else {
@@ -390,6 +553,13 @@ export default function ProfilesScreen() {
           name: empName.trim(),
           tax_id: cleanedTaxId,
           salary: salaryNum,
+          is_main_job: empIsMainJob,
+          contract_type: empContractType,
+          esv_paid_by_other: empEsvPaidByOther,
+          is_archived: empIsArchived,
+          start_date: empStartDate || null,
+          end_date: empEndDate || null,
+          active_months_json: JSON.stringify(empActiveMonths)
         });
         Alert.alert('Успіх', 'Працівника успішно додано');
       }
@@ -723,6 +893,14 @@ export default function ProfilesScreen() {
         </View>
       ) : (
         <>
+          <View style={styles.topHeader}>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>Мої профілі</Text>
+            <Button
+              title="Додати профіль"
+              onPress={handleOpenAdd}
+              style={styles.headerAddBtn}
+            />
+          </View>
           <FlatList
             data={profiles}
             keyExtractor={(item) => item.id.toString()}
@@ -774,13 +952,21 @@ export default function ProfilesScreen() {
                   <View style={styles.infoCol}>
                     <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Система</Text>
                     <Text style={[styles.infoValue, { color: colors.text }]}>
-                      {item.tax_system === 'single_tax' ? 'Єдиний податок' : 'Загальна'}
+                      {item.tax_system === 'single_tax'
+                        ? 'Єдиний податок'
+                        : item.tax_system === 'non_profit'
+                          ? 'Неприбуткова'
+                          : 'Загальна'}
                     </Text>
                   </View>
                   <View style={styles.infoCol}>
-                    <Text style={[styles.infoLabel, { color: colors.textMuted }]}>Ставка / Група</Text>
+                    <Text style={[styles.infoLabel, { color: colors.textMuted }]}>
+                      {item.tax_system === 'non_profit' ? 'Ознака' : 'Ставка / Група'}
+                    </Text>
                     <Text style={[styles.infoValue, { color: colors.text }]}>
-                      {item.rate}% {item.type === 'fop' && `(${item.group} група)`}
+                      {item.tax_system === 'non_profit'
+                        ? `${(item.organization_subtype || 'osbb').toUpperCase()} (${item.non_profit_code || '0046'})`
+                        : `${item.rate}% ${item.type === 'fop' && item.group ? `(${item.group} група)` : ''}`}
                     </Text>
                   </View>
                 </View>
@@ -1069,7 +1255,12 @@ export default function ProfilesScreen() {
                         styles.segment,
                         type === 'fop' && { backgroundColor: colors.primary },
                       ]}
-                      onPress={() => setType('fop')}
+                      onPress={() => {
+                        setType('fop');
+                        if (taxSystem === 'non_profit') {
+                          setTaxSystem('single_tax');
+                        }
+                      }}
                     >
                       <Text style={[styles.segmentText, type === 'fop' && { color: '#ffffff' }, { color: colors.text }]}>
                         ФОП
@@ -1112,7 +1303,7 @@ export default function ProfilesScreen() {
                       onPress={() => setTaxSystem('single_tax')}
                     >
                       <Text style={[styles.segmentText, taxSystem === 'single_tax' && { color: '#ffffff' }, { color: colors.text }]}>
-                        Єдиний податок
+                        Єдиний
                       </Text>
                     </Pressable>
                     <Pressable
@@ -1123,10 +1314,73 @@ export default function ProfilesScreen() {
                       onPress={() => setTaxSystem('general_tax')}
                     >
                       <Text style={[styles.segmentText, taxSystem === 'general_tax' && { color: '#ffffff' }, { color: colors.text }]}>
-                        Загальна система
+                        Загальна
                       </Text>
                     </Pressable>
+                    {type === 'company' && (
+                      <Pressable
+                        style={[
+                          styles.segment,
+                          taxSystem === 'non_profit' && { backgroundColor: colors.primary },
+                        ]}
+                        onPress={() => setTaxSystem('non_profit')}
+                      >
+                        <Text style={[styles.segmentText, taxSystem === 'non_profit' && { color: '#ffffff' }, { color: colors.text }]}>
+                          Неприбуткова
+                        </Text>
+                      </Pressable>
+                    )}
                   </View>
+
+                  {/* Non-Profit Subtypes and Code */}
+                  {taxSystem === 'non_profit' && (
+                    <View style={styles.nonProfitContainer}>
+                      <Text style={[styles.sectionLabel, { color: colors.textMuted, marginBottom: 8 }]}>
+                        Тип неприбуткової організації
+                      </Text>
+                      <View style={styles.subtypesGrid}>
+                        {[
+                          { key: 'osbb', label: 'ОСББ', code: '0046' },
+                          { key: 'st', label: 'СТ', code: '0044' },
+                          { key: 'go', label: 'ГО', code: '0036' },
+                          { key: 'bf', label: 'БФ', code: '0039' },
+                          { key: 'jbk', label: 'ЖБК', code: '0046' },
+                        ].map((item) => (
+                          <Pressable
+                            key={item.key}
+                            style={[
+                              styles.subtypeSegment,
+                              organizationSubtype === item.key && { backgroundColor: colors.primary, borderColor: colors.primary },
+                              organizationSubtype !== item.key && { borderColor: colors.cardBorder },
+                            ]}
+                            onPress={() => {
+                              setOrganizationSubtype(item.key as any);
+                              setNonProfitCode(item.code);
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.subtypeText,
+                                organizationSubtype === item.key && { color: '#ffffff' },
+                                organizationSubtype !== item.key && { color: colors.text },
+                              ]}
+                            >
+                              {item.label}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <Input
+                        label="Код ознаки неприбутковості"
+                        placeholder="Наприклад: 0046"
+                        value={nonProfitCode}
+                        onChangeText={setNonProfitCode}
+                        keyboardType="number-pad"
+                        maxLength={4}
+                      />
+                    </View>
+                  )}
 
                   {/* Specific fields for Single Tax FOP */}
                   {type === 'fop' && taxSystem === 'single_tax' && (
@@ -1317,6 +1571,142 @@ export default function ProfilesScreen() {
                       keyboardType="decimal-pad"
                     />
 
+                    <Text style={[styles.sectionLabel, { color: colors.textMuted, marginTop: 12, marginBottom: 6 }]}>Тип договору</Text>
+                    <View style={styles.segmentedContainer}>
+                      <Pressable
+                        style={[
+                          styles.segment,
+                          empContractType === 'permanent' && { backgroundColor: colors.primary },
+                        ]}
+                        onPress={() => setEmpContractType('permanent')}
+                      >
+                        <Text style={[styles.segmentText, empContractType === 'permanent' && { color: '#ffffff' }, { color: colors.text, fontSize: 12 }]}>
+                          Штатний
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.segment,
+                          empContractType === 'cph' && { backgroundColor: colors.primary },
+                        ]}
+                        onPress={() => setEmpContractType('cph')}
+                      >
+                        <Text style={[styles.segmentText, empContractType === 'cph' && { color: '#ffffff' }, { color: colors.text, fontSize: 12 }]}>
+                          ЦПХ
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.segment,
+                          empContractType === 'fop' && { backgroundColor: colors.primary },
+                        ]}
+                        onPress={() => setEmpContractType('fop')}
+                      >
+                        <Text style={[styles.segmentText, empContractType === 'fop' && { color: '#ffffff' }, { color: colors.text, fontSize: 12 }]}>
+                          Договір ФОП
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {empContractType === 'permanent' && (
+                      <>
+                        <View style={[styles.switchRow, { marginTop: 8, marginBottom: 4 }]}>
+                          <Text style={[styles.switchLabel, { color: colors.text, fontSize: 14 }]}>Основне місце роботи (не сумісництво)</Text>
+                          <Switch
+                            value={empIsMainJob}
+                            onValueChange={setEmpIsMainJob}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={empIsMainJob ? '#ffffff' : '#f4f3f4'}
+                          />
+                        </View>
+                        <View style={[styles.switchRow, { marginBottom: 12 }]}>
+                          <Text style={[styles.switchLabel, { color: colors.text, fontSize: 14, flex: 1, paddingRight: 8 }]}>
+                            ЄСВ сплачує інше підприємство (звільнення від сплати тут)
+                          </Text>
+                          <Switch
+                            value={empEsvPaidByOther}
+                            onValueChange={setEmpEsvPaidByOther}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={empEsvPaidByOther ? '#ffffff' : '#f4f3f4'}
+                          />
+                        </View>
+                      </>
+                    )}
+
+                    <Input
+                      label="Дата початку роботи (РРРР-ММ-ДД)"
+                      placeholder="Наприклад: 2026-06-01"
+                      value={empStartDate}
+                      onChangeText={setEmpStartDate}
+                    />
+
+                    <Input
+                      label="Дата звільнення (якщо є) (РРРР-ММ-ДД)"
+                      placeholder="Наприклад: 2026-06-30"
+                      value={empEndDate}
+                      onChangeText={setEmpEndDate}
+                    />
+
+                    <Text style={[styles.sectionLabel, { color: colors.textMuted, marginTop: 12, marginBottom: 6 }]}>
+                      Активні місяці роботи у {new Date().getFullYear()} році
+                    </Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                      {[
+                        { value: '01', label: 'Січ' },
+                        { value: '02', label: 'Лют' },
+                        { value: '03', label: 'Бер' },
+                        { value: '04', label: 'Кві' },
+                        { value: '05', label: 'Тра' },
+                        { value: '06', label: 'Чер' },
+                        { value: '07', label: 'Лип' },
+                        { value: '08', label: 'Сер' },
+                        { value: '09', label: 'Вер' },
+                        { value: '10', label: 'Жов' },
+                        { value: '11', label: 'Лис' },
+                        { value: '12', label: 'Гру' },
+                      ].map((m) => {
+                        const monthKey = `${new Date().getFullYear()}-${m.value}`;
+                        const isChecked = !!empActiveMonths[monthKey];
+                        return (
+                          <Pressable
+                            key={m.value}
+                            onPress={() => {
+                              setEmpActiveMonths(prev => ({
+                                ...prev,
+                                [monthKey]: !isChecked
+                              }));
+                            }}
+                            style={{
+                              paddingHorizontal: 8,
+                              paddingVertical: 6,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: isChecked ? colors.primary : colors.border,
+                              backgroundColor: isChecked ? colors.primary + '15' : 'transparent',
+                              minWidth: 50,
+                              alignItems: 'center'
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: isChecked ? '700' : '400', color: isChecked ? colors.primary : colors.textMuted }}>
+                              {m.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {editingEmployee && (
+                      <View style={[styles.switchRow, { marginBottom: 12 }]}>
+                        <Text style={[styles.switchLabel, { color: colors.text, fontSize: 14 }]}>Архівувати працівника</Text>
+                        <Switch
+                          value={empIsArchived}
+                          onValueChange={setEmpIsArchived}
+                          trackColor={{ false: '#767577', true: colors.primary }}
+                          thumbColor={empIsArchived ? '#ffffff' : '#f4f3f4'}
+                        />
+                      </View>
+                    )}
+
                     <View style={styles.formActions}>
                       <Button
                         title="Скасувати"
@@ -1366,30 +1756,91 @@ export default function ProfilesScreen() {
                         data={employees}
                         keyExtractor={(item) => item.id.toString()}
                         contentContainerStyle={[styles.empList, { paddingBottom: 100 }]}
-                        renderItem={({ item }) => (
-                          <View style={[styles.empCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
-                            <View style={styles.empInfo}>
-                              <Text style={[styles.empNameText, { color: colors.text }]}>{item.name}</Text>
-                              <Text style={[styles.empDetailsText, { color: colors.textMuted }]}>
-                                ІПН: {item.tax_id}
-                              </Text>
-                              <View style={styles.salaryBadgeContainer}>
-                                <Coins size={14} color={colors.success} style={{ marginRight: 4 }} />
-                                <Text style={[styles.empSalaryText, { color: colors.success }]}>
-                                  {item.salary.toLocaleString('uk-UA')} ₴ / міс
+                        renderItem={({ item }) => {
+                          const isArchived = item.is_archived === true;
+                          const cType = item.contract_type || 'permanent';
+                          const isMain = item.is_main_job !== false;
+                          const esvPaidByOther = item.esv_paid_by_other === true;
+
+                          return (
+                            <View style={[styles.empCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, flexDirection: 'column', alignItems: 'stretch', padding: 12, marginBottom: 10, opacity: isArchived ? 0.6 : 1 }]}>
+                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <View style={styles.empInfo}>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Text style={[styles.empNameText, { color: colors.text }]}>{item.name}</Text>
+                                    {isArchived && (
+                                      <View style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1, marginLeft: 6 }}>
+                                        <Text style={{ color: '#ef4444', fontSize: 8, fontWeight: '700' }}>АРХІВ</Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                  <Text style={[styles.empDetailsText, { color: colors.textMuted, fontSize: 11 }]}>
+                                    ІПН: {item.tax_id} | {cType === 'fop' ? 'Договір ФОП' : cType === 'cph' ? 'ЦПХ' : (isMain ? 'Штатний (Основне)' : 'Штатний (Сумісництво)')}
+                                  </Text>
+                                  {cType === 'permanent' && esvPaidByOther && (
+                                    <Text style={{ fontSize: 10, color: colors.primary, fontWeight: '700', marginTop: 2 }}>
+                                      Без ЄСВ (сплачує інший)
+                                    </Text>
+                                  )}
+                                  <View style={[styles.salaryBadgeContainer, { marginTop: 4 }]}>
+                                    <Coins size={14} color={colors.success} style={{ marginRight: 4 }} />
+                                    <Text style={[styles.empSalaryText, { color: colors.success }]}>
+                                      {item.salary.toLocaleString('uk-UA')} ₴ / міс
+                                    </Text>
+                                  </View>
+                                </View>
+                                
+                                <View style={[styles.empActions, { flexDirection: 'row', gap: 4 }]}>
+                                  {!isArchived && (
+                                    <Pressable onPress={() => handleDismissEmployee(item)} style={{ padding: 6 }}>
+                                      <X size={16} color="#f59e0b" />
+                                    </Pressable>
+                                  )}
+                                  <Pressable onPress={() => handleStartEditEmployee(item)} style={styles.empActionBtn}>
+                                    <Edit3 size={16} color={colors.primary} />
+                                  </Pressable>
+                                  <Pressable onPress={() => handleDeleteEmployee(item)} style={styles.empActionBtn}>
+                                    <Trash2 size={16} color={colors.error} />
+                                  </Pressable>
+                                </View>
+                              </View>
+
+                              {/* 12 Months row directly inside the card */}
+                              <View style={{ borderTopWidth: 1, borderTopColor: colors.border, marginTop: 10, paddingTop: 10 }}>
+                                <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: '700', marginBottom: 6 }}>
+                                  Активність по місяцях ({new Date().getFullYear()}):
                                 </Text>
+                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                                  {Array.from({ length: 12 }, (_, index) => {
+                                    const mVal = String(index + 1).padStart(2, '0');
+                                    const monthKey = `${new Date().getFullYear()}-${mVal}`;
+                                    const isMonthActive = isEmployeeActiveInSelectedMonth(item, monthKey);
+                                    return (
+                                      <Pressable
+                                        key={index}
+                                        onPress={() => handleToggleMonthDirectly(item, monthKey)}
+                                        style={{
+                                          width: 24,
+                                          height: 24,
+                                          borderRadius: 12,
+                                          justifyContent: 'center',
+                                          alignItems: 'center',
+                                          backgroundColor: isMonthActive ? colors.primary : colors.card,
+                                          borderWidth: 1,
+                                          borderColor: isMonthActive ? colors.primary : colors.border
+                                        }}
+                                      >
+                                        <Text style={{ fontSize: 9, fontWeight: '800', color: isMonthActive ? '#ffffff' : colors.textMuted }}>
+                                          {index + 1}
+                                        </Text>
+                                      </Pressable>
+                                    );
+                                  })}
+                                </View>
                               </View>
                             </View>
-                            <View style={styles.empActions}>
-                              <Pressable onPress={() => handleStartEditEmployee(item)} style={styles.empActionBtn}>
-                                <Edit3 size={16} color={colors.primary} />
-                              </Pressable>
-                              <Pressable onPress={() => handleDeleteEmployee(item)} style={styles.empActionBtn}>
-                                <Trash2 size={16} color={colors.error} />
-                              </Pressable>
-                            </View>
-                          </View>
-                        )}
+                          );
+                        }}
                       />
                     )}
                   </View>
@@ -2165,6 +2616,46 @@ export default function ProfilesScreen() {
 }
 
 const styles = StyleSheet.create({
+  nonProfitContainer: {
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  subtypesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  subtypeSegment: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subtypeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  topHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  headerAddBtn: {
+    minHeight: 36,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
   container: {
     flex: 1,
   },

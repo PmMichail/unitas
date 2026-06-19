@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import { api, legislationApi, agentApi } from "@/lib/api";
 import { useApp } from "@/context/AppContext";
 import { 
@@ -99,12 +100,15 @@ export default function Dashboard() {
   const [inputMessage, setInputMessage] = useState("");
   const [sendingChat, setSendingChat] = useState(false);
 
-  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll to bottom of chat containers when messages or state change
   useEffect(() => {
-    if (activeAiTab === "chat" && chatMessagesEndRef.current) {
-      chatMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (activeAiTab === "chat" && chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
     }
   }, [chatMessages, sendingChat, activeAiTab]);
 
@@ -404,7 +408,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#090d16] text-slate-100 font-sans selection:bg-indigo-500 selection:text-white pb-12">
+    <div className="pb-12 text-slate-850 dark:text-slate-100 font-sans selection:bg-indigo-500 selection:text-white">
       {/* Styles Injection */}
       <style dangerouslySetInnerHTML={{__html: `
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
@@ -414,24 +418,42 @@ export default function Dashboard() {
         }
 
         .glass-panel {
-          background: rgba(15, 23, 42, 0.45);
+          background: rgba(255, 255, 255, 0.65);
           backdrop-filter: blur(16px);
           -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(15, 23, 42, 0.07);
+        }
+
+        .dark .glass-panel {
+          background: rgba(15, 23, 42, 0.45);
           border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         .glass-panel:hover {
-          border-color: rgba(99, 102, 241, 0.2);
-          box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 0 0 20px -5px rgba(99, 102, 241, 0.1);
+          border-color: rgba(79, 70, 229, 0.15);
+          box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05), 0 0 20px -5px rgba(79, 70, 229, 0.03);
           transform: translateY(-2px);
         }
 
+        .dark .glass-panel:hover {
+          border-color: rgba(99, 102, 241, 0.2);
+          box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 0 0 20px -5px rgba(99, 102, 241, 0.1);
+        }
+
         .glow-button {
-          box-shadow: 0 0 15px -3px rgba(99, 102, 241, 0.5);
+          box-shadow: 0 0 15px -3px rgba(79, 70, 229, 0.25);
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
+        .dark .glow-button {
+          box-shadow: 0 0 15px -3px rgba(99, 102, 241, 0.5);
+        }
+
         .glow-button:hover {
+          box-shadow: 0 0 25px 0px rgba(79, 70, 229, 0.45);
+        }
+
+        .dark .glow-button:hover {
           box-shadow: 0 0 25px 0px rgba(99, 102, 241, 0.7);
         }
 
@@ -440,21 +462,24 @@ export default function Dashboard() {
           height: 6px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(15, 23, 42, 0.02);
+        }
+        .dark .custom-scrollbar::-webkit-scrollbar-track {
           background: rgba(15, 23, 42, 0.2);
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(99, 102, 241, 0.3);
+          background: rgba(99, 102, 241, 0.2);
           border-radius: 9999px;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(99, 102, 241, 0.6);
+          background: rgba(99, 102, 241, 0.5);
         }
       `}} />
 
       {/* Background Gradients */}
-      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-indigo-950/20 via-slate-950/0 to-transparent pointer-events-none z-0" />
-      <div className="absolute top-20 right-10 w-[300px] h-[300px] bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none z-0" />
-      <div className="absolute top-[400px] left-10 w-[300px] h-[300px] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none z-0" />
+      <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-indigo-500/5 dark:from-indigo-950/20 via-transparent to-transparent pointer-events-none z-0" />
+      <div className="absolute top-20 right-10 w-[300px] h-[300px] bg-indigo-500/5 dark:bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none z-0" />
+      <div className="absolute top-[400px] left-10 w-[300px] h-[300px] bg-emerald-500/3 dark:bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none z-0" />
 
       {/* Main Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 relative z-10">
@@ -473,17 +498,25 @@ export default function Dashboard() {
           
           <nav className="hidden md:flex space-x-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800/40">
             <button 
+              type="button"
               onClick={() => setActiveTab("dashboard")} 
               className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${activeTab === "dashboard" ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20" : "text-slate-400 hover:text-slate-200"}`}
             >
               Дашборд
             </button>
             <button 
+              type="button"
               onClick={() => setActiveTab("statements")} 
               className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${activeTab === "statements" ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20" : "text-slate-400 hover:text-slate-200"}`}
             >
               Виписки
             </button>
+            <Link 
+              href="/benefits" 
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
+            >
+              Переваги
+            </Link>
           </nav>
 
           <div className="flex items-center space-x-3">
@@ -494,7 +527,7 @@ export default function Dashboard() {
               className="flex items-center space-x-2 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-xl px-3.5 py-1.5 text-xs font-semibold shadow-md shadow-indigo-600/10 transition-all hover:scale-[1.03] active:scale-95"
             >
               <Send className="w-3.5 h-3.5 text-indigo-200" />
-              <span>Мій Telegram ID: Перейти</span>
+              <span>Мій Telegram</span>
             </a>
             <div className="flex items-center space-x-2 bg-slate-900/60 border border-slate-800/60 rounded-xl px-3.5 py-1.5">
               <span className="relative flex h-2 w-2">
@@ -520,38 +553,38 @@ export default function Dashboard() {
             {activeTab === "dashboard" && (
               <div className="mt-8 space-y-8">
                 
-                {/* Intro Card */}
-                <div className="p-6 rounded-2xl glass-panel bg-gradient-to-r from-slate-900/80 to-indigo-950/30 flex flex-col md:flex-row md:justify-between md:items-center transition-all duration-300">
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-indigo-400 tracking-wider uppercase">Особистий кабінет</span>
-                    <h2 className="text-2xl font-bold text-white">{dashboardData?.company_name}</h2>
-                    <div className="flex flex-wrap items-center gap-2 mt-2">
-                      <span className="bg-indigo-900/40 text-indigo-300 text-xs px-2.5 py-1 rounded-md border border-indigo-500/20 font-medium">
-                        {isFop 
-                          ? (isSimplified ? "ФОП Спрощена система" : "ФОП Загальна система")
-                          : (isSimplified ? "ТОВ Спрощена система" : "ТОВ Загальна система")}
-                      </span>
-                      {isFop && dashboardData?.group && (
-                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
-                          Група {dashboardData.group}
-                        </span>
-                      )}
-                      {(dashboardData?.rate !== undefined && dashboardData?.rate !== null && !(isFop && (dashboardData?.group === 1 || dashboardData?.group === 2))) ? (
-                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
-                          Ставка {dashboardData.rate}%
-                        </span>
-                      ) : (isFop && (dashboardData?.group === 1 || dashboardData?.group === 2) && (
-                        <span className="bg-slate-800 text-slate-300 text-xs px-2.5 py-1 rounded-md font-medium">
-                          Фіксована ставка
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="mt-4 md:mt-0 flex space-x-3">
-                    <button 
-                      onClick={() => setActiveTab("statements")}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-sm font-semibold transition-all flex items-center border border-slate-700/50"
-                    >
+                 {/* Intro Card */}
+                 <div className="p-6 rounded-2xl glass-panel bg-gradient-to-r from-slate-100/90 to-indigo-50/40 dark:from-slate-900/80 dark:to-indigo-950/30 flex flex-col md:flex-row md:justify-between md:items-center transition-all duration-300">
+                   <div className="space-y-1">
+                     <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 tracking-wider uppercase">Особистий кабінет</span>
+                     <h2 className="text-2xl font-bold text-slate-900 dark:text-white">{dashboardData?.company_name}</h2>
+                     <div className="flex flex-wrap items-center gap-2 mt-2">
+                       <span className="bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 text-xs px-2.5 py-1 rounded-md border border-indigo-150 dark:border-indigo-500/20 font-medium">
+                         {isFop 
+                           ? (isSimplified ? "ФОП Спрощена система" : "ФОП Загальна система")
+                           : (isSimplified ? "ТОВ Спрощена система" : "ТОВ Загальна система")}
+                       </span>
+                       {isFop && dashboardData?.group && (
+                         <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 dark:border-transparent font-medium">
+                           Група {dashboardData.group}
+                         </span>
+                       )}
+                       {(dashboardData?.rate !== undefined && dashboardData?.rate !== null && !(isFop && (dashboardData?.group === 1 || dashboardData?.group === 2))) ? (
+                         <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 dark:border-transparent font-medium">
+                           Ставка {dashboardData.rate}%
+                         </span>
+                       ) : (isFop && (dashboardData?.group === 1 || dashboardData?.group === 2) && (
+                         <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs px-2.5 py-1 rounded-md border border-slate-200/60 dark:border-transparent font-medium">
+                           Фіксована ставка
+                         </span>
+                       ))}
+                     </div>
+                   </div>
+                   <div className="mt-4 md:mt-0 flex space-x-3">
+                     <button 
+                       onClick={() => setActiveTab("statements")}
+                       className="px-4 py-2.5 rounded-xl bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-white text-sm font-semibold transition-all flex items-center border border-slate-200 dark:border-slate-700/50"
+                     >
                       <Upload className="w-4 h-4 mr-2" />
                       Завантажити виписку
                     </button>
@@ -913,7 +946,10 @@ export default function Dashboard() {
                       {activeAiTab === "chat" ? (
                         <div>
                           {/* Messages container */}
-                          <div className="space-y-4 h-[320px] overflow-y-auto custom-scrollbar pr-1 mb-4 flex flex-col gap-3">
+                          <div
+                            ref={chatContainerRef}
+                            className="space-y-4 h-[320px] overflow-y-auto custom-scrollbar pr-1 mb-4 flex flex-col gap-3"
+                          >
                             {chatMessages.map((msg, idx) => {
                               const isAgent = msg.sender === "agent";
                               return (
@@ -955,7 +991,6 @@ export default function Dashboard() {
                                 <span className="text-[10px] text-slate-500 ml-1.5">Асистент аналізує...</span>
                               </div>
                             )}
-                            <div ref={chatMessagesEndRef} />
                           </div>
 
                           {/* Message input */}
@@ -1648,7 +1683,7 @@ export default function Dashboard() {
                             </div>
 
                             {/* 4. ПДФО працівників */}
-                            {((dashboardData?.employee_pit_due || 0) > 0) && (
+                            {((dashboardData?.employee_pit_due || 0) > 0 || (dashboardData?.pit_diff || 0) > 0) && (
                               <div className="flex justify-between items-center border-t border-slate-800/60 pt-2">
                                 <div>
                                   <span className="text-slate-300 font-medium">ПДФО з зарплати працівників</span>

@@ -106,19 +106,19 @@ class AIService:
             return self._enhanced_fallback_analysis(purpose, amount)
         return self._enhanced_fallback_analysis(purpose, amount)
     
-    async def chat_assistant(self, question: str, profile: Dict) -> str:
+    async def chat_assistant(self, question: str, profile: Dict, history: Optional[List[Dict]] = None) -> str:
         """Чат-асистент для податкових питань з RAG"""
         
         # Спробуємо використати RAG якщо доступний
         if rag_service.use_gemini:
             try:
-                rag_response = await rag_service.generate_rag_response(question, profile)
+                rag_response = await rag_service.generate_rag_response(question, profile, history)
                 return rag_response
             except Exception as e:
                 print(f"RAG Error: {e}")
         
         if not self.use_gemini and not self.use_openai:
-            return self._fallback_chat(question, profile)
+            return self._fallback_chat(question, profile, history)
         
         system_prompt = f"""
         Ти — експерт з податкового законодавства України.
@@ -132,7 +132,14 @@ class AIService:
         Якщо не знаєш точної відповіді — скажи, що потрібно звернутися до ДПС.
         """
         
-        full_prompt = f"{system_prompt}\n\nКористувач: {question}\nВідповідь:"
+        history_context = ""
+        if history:
+            history_context = "\nІсторія діалогу:\n" + "\n".join([
+                f"{'Користувач' if h.get('role') == 'user' or h.get('sender') == 'user' else 'Асистент'}: {h.get('content') or h.get('text', '')}"
+                for h in history
+            ]) + "\n"
+        
+        full_prompt = f"{system_prompt}\n{history_context}\nКористувач: {question}\nВідповідь:"
         
         if self.use_gemini:
             try:
@@ -148,8 +155,8 @@ class AIService:
                 return response.text
             except Exception as e:
                 print(f"Gemini API Error: {e}")
-                return self._fallback_chat(question, profile)
-        return self._fallback_chat(question, profile)
+                return self._fallback_chat(question, profile, history)
+        return self._fallback_chat(question, profile, history)
     
     async def get_relevant_changes(self, profile: Dict, changes: List[Dict]) -> List[Dict]:
         """Отримати релевантні зміни в законодавстві"""
@@ -235,7 +242,7 @@ class AIService:
             "is_salary": is_salary
         }
     
-    def _fallback_chat(self, question: str, profile: Dict) -> str:
+    def _fallback_chat(self, question: str, profile: Dict, history: Optional[List[Dict]] = None) -> str:
         """Чат без ШІ"""
         question_lower = question.lower()
         

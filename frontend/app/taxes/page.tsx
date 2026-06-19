@@ -35,6 +35,25 @@ export default function TaxesPage() {
   // Notification states
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+
+  // Reset payments states
+  const [resetPeriodType, setResetPeriodType] = useState<"month" | "quarter">("month");
+  const [resetYear, setResetYear] = useState<number>(() => new Date().getFullYear());
+  const [resetMonth, setResetMonth] = useState<number>(() => new Date().getMonth() + 1);
+  const [resetQuarter, setResetQuarter] = useState<number>(1);
+  const [isResetting, setIsResetting] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("success") === "true") {
+        setShowSuccessBanner(true);
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      }
+    }
+  }, []);
 
   // Custom budget accounts configurations
   const [showCustomAccounts, setShowCustomAccounts] = useState(false);
@@ -209,7 +228,7 @@ export default function TaxesPage() {
     }
   };
 
-  const handleLiqPay = async (liability: any) => {
+  const handleMonoPay = async (liability: any) => {
     if (!selectedProfile) return;
     setGeneratingId(liability.id);
     setErrorMsg(null);
@@ -227,33 +246,14 @@ export default function TaxesPage() {
       
       const data = await response.json();
       
-      if (data.data && data.signature) {
-        // Create LiqPay form and submit
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = "https://www.liqpay.ua/api/3/checkout";
-        form.acceptCharset = "utf-8";
-        
-        const dataInput = document.createElement("input");
-        dataInput.type = "hidden";
-        dataInput.name = "data";
-        dataInput.value = data.data;
-        
-        const signatureInput = document.createElement("input");
-        signatureInput.type = "hidden";
-        signatureInput.name = "signature";
-        signatureInput.value = data.signature;
-        
-        form.appendChild(dataInput);
-        form.appendChild(signatureInput);
-        document.body.appendChild(form);
-        form.submit();
+      if (data.pageUrl) {
+        window.location.href = data.pageUrl;
       } else {
-        setErrorMsg("Не вдалося створити платіж LiqPay");
+        setErrorMsg("Не вдалося створити платіж Mono Pay");
       }
     } catch (err) {
-      console.error("Failed to create LiqPay payment:", err);
-      setErrorMsg("Помилка при створенні платежу LiqPay");
+      console.error("Failed to create Mono Pay payment:", err);
+      setErrorMsg("Помилка при створенні платежу Mono Pay");
     } finally {
       setGeneratingId(null);
     }
@@ -276,6 +276,7 @@ export default function TaxesPage() {
 
   const handleDirectConfirmPaid = async (liability: any) => {
     if (!selectedProfile) return;
+    if (!window.confirm("Ви впевнені, що хочете позначити це податкове зобов'язання як сплачене вручну?")) return;
     setIsConfirmingId(liability.id);
     setErrorMsg(null);
     try {
@@ -331,6 +332,37 @@ export default function TaxesPage() {
     }
   };
 
+  const handleResetPayments = async () => {
+    if (!selectedProfile) return;
+    const periodLabel = resetPeriodType === "month" 
+      ? `${String(resetMonth).padStart(2, '0')}.${resetYear}` 
+      : `Q${resetQuarter} ${resetYear}`;
+      
+    if (!window.confirm(`Ви впевнені, що хочете скинути всі ручні оплати податків за період ${periodLabel}? Це відновить розраховані суми боргів.`)) {
+      return;
+    }
+    
+    setIsResetting(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const data = await paymentsApi.resetPayments({
+        profile_id: selectedProfile.id,
+        period_type: resetPeriodType,
+        year: resetYear,
+        period_value: resetPeriodType === "month" ? resetMonth : resetQuarter
+      });
+      setSuccessMsg(data.message || "Ручні оплати успішно скинуто!");
+      fetchLiabilities();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to reset payments:", err);
+      setErrorMsg(err.response?.data?.detail || "Помилка при скиданні оплат.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const banks = [
     { id: "privat24", name: "Приват24", color: "border-green-500 text-green-500 bg-green-50/10" },
     { id: "monobank", name: "monobank", color: "border-pink-500 text-pink-500 bg-pink-50/10" },
@@ -349,6 +381,30 @@ export default function TaxesPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
+      {/* Success Notification Banner */}
+      {showSuccessBanner && (
+        <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-250 rounded-3xl flex flex-col sm:flex-row justify-between sm:items-center gap-4 animate-in fade-in duration-300">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 bg-emerald-500/20 rounded-2xl border border-emerald-500/25 shrink-0">
+              <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-base text-white">Податок успішно сплачено! 🎉</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Оплату за податковим зобов'язанням успішно проведено через Mono Pay та зараховано в системі. Дякуємо!
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowSuccessBanner(false)}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-bold rounded-xl border border-slate-800 transition-all cursor-pointer shadow shrink-0 self-end sm:self-center"
+          >
+            Зрозуміло
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
         <div>
@@ -565,6 +621,86 @@ export default function TaxesPage() {
             </div>
           </div>
 
+          {/* Reset Payments Panel */}
+          <div className="p-5 bg-white dark:bg-slate-900/30 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-slate-800/50 shadow-sm space-y-4">
+            <div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-indigo-500" />
+                Скидання та перерахунок оплат
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Якщо ви випадково позначили податок як сплачений, ви можете скинути ручні оплати за конкретний місяць чи квартал
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div className="space-y-1">
+                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Тип періоду</label>
+                <select
+                  value={resetPeriodType}
+                  onChange={(e) => setResetPeriodType(e.target.value as "month" | "quarter")}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-semibold focus:outline-none text-slate-800 dark:text-slate-200"
+                >
+                  <option value="month">Місяць</option>
+                  <option value="quarter">Квартал</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Рік</label>
+                <select
+                  value={resetYear}
+                  onChange={(e) => setResetYear(Number(e.target.value))}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-semibold focus:outline-none text-slate-800 dark:text-slate-200"
+                >
+                  <option value={2025}>2025</option>
+                  <option value={2026}>2026</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
+                  {resetPeriodType === "month" ? "Місяць" : "Квартал"}
+                </label>
+                {resetPeriodType === "month" ? (
+                  <select
+                    value={resetMonth}
+                    onChange={(e) => setResetMonth(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-semibold focus:outline-none text-slate-800 dark:text-slate-200"
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                      <option key={m} value={m}>
+                        {new Date(2020, m - 1, 1).toLocaleString("uk-UA", { month: "long" })}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={resetQuarter}
+                    onChange={(e) => setResetQuarter(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs font-semibold focus:outline-none text-slate-800 dark:text-slate-200"
+                  >
+                    <option value={1}>Q1 (Січ - Берез)</option>
+                    <option value={2}>Q2 (Квіт - Черв)</option>
+                    <option value={3}>Q3 (Лип - Верес)</option>
+                    <option value={4}>Q4 (Жовт - Груд)</option>
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  disabled={isResetting || !selectedProfile}
+                  onClick={handleResetPayments}
+                  className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+                >
+                  {isResetting ? "Скидання..." : "Скинути оплати"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Liabilities List */}
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Поточні зобов'язання</h3>
@@ -632,11 +768,11 @@ export default function TaxesPage() {
                       {item.status !== "paid" ? (
                         <>
                           <button
-                            onClick={() => handleLiqPay(item)}
+                            onClick={() => handleMonoPay(item)}
                             disabled={generatingId !== null || isConfirmingId !== null}
                             className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-semibold rounded-xl shadow-sm transition-all text-xs"
                           >
-                            {generatingId === item.id ? "Обробка..." : "LiqPay"}
+                            {generatingId === item.id ? "Обробка..." : "Mono Pay"}
                           </button>
                           
                           <button

@@ -183,7 +183,7 @@ class RAGService:
         
         return [r["item"] for r in scored_results[:top_k]]
     
-    async def generate_rag_response(self, query: str, profile: Dict) -> str:
+    async def generate_rag_response(self, query: str, profile: Dict, history: Optional[List[Dict]] = None) -> str:
         """Генерація відповіді з використанням RAG"""
         if not self.use_gemini:
             return "RAG недоступний без Gemini API"
@@ -213,7 +213,14 @@ class RAGService:
         Якщо інформації недостатньо — порад звернутися до ДПС.
         """
         
-        full_prompt = f"{system_prompt}\n\nКористувач: {query}\nВідповідь:"
+        history_context = ""
+        if history:
+            history_context = "\nІсторія діалогу:\n" + "\n".join([
+                f"{'Користувач' if h.get('role') == 'user' or h.get('sender') == 'user' else 'Асистент'}: {h.get('content') or h.get('text', '')}"
+                for h in history
+            ]) + "\n"
+        
+        full_prompt = f"{system_prompt}\n{history_context}\nКористувач: {query}\nВідповідь:"
         
         try:
             response = self.embeddings_model.generate_content(

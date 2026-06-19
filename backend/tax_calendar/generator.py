@@ -277,6 +277,21 @@ class TaxCalendarGenerator:
                         "status": "pending"
                     })
 
+            # 3b. Події для Неприбуткових організацій (ОСББ, ГО тощо)
+            elif tax_system == "non_profit":
+                if month == 2:
+                    due_date = date(year, 2, 28) # до 1 березня
+                    events.append({
+                        "due_date": due_date.strftime("%Y-%m-%d"),
+                        "title": f"Подання Звіту неприбуткових організацій за {year - 1} рік",
+                        "type": "report",
+                        "tax_name": "non_profit_report",
+                        "description": "Подання Звіту про використання доходів (прибутків) неприбуткової організації та річної фінансової звітності.",
+                        "amount_desc": "Форма J0101911",
+                        "form_code": "J0101911",
+                        "status": "pending"
+                    })
+
             # 4. Щомісячні події по працівниках (якщо вони є)
             if has_employees:
                 # Зарплатні податки сплачуються при виплаті зарплати, але крайній термін без виплати - 30 число наступного місяця

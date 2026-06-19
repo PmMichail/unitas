@@ -75,7 +75,7 @@ export default function RefundPage() {
             <ul className="list-disc pl-5 space-y-1">
               <li>Email акаунту в Сервісі.</li>
               <li>Дату та суму платежу.</li>
-              <li>Номер транзакції (Order ID або Payment ID з LiqPay).</li>
+              <li>Номер транзакції (Invoice ID або Reference з Mono Pay).</li>
               <li>Причину запиту на повернення коштів.</li>
             </ul>
             <p>
@@ -85,7 +85,7 @@ export default function RefundPage() {
             <h3 className="text-sm font-bold text-white pt-2">5. Контактна інформація</h3>
             <p>
               ФОП Повєткін М.М.<br />
-              Код ЄДРПОУ/ІПН: 2900003498<br />
+              Код ЄДРПОУ/ІПН: 2800003498<br />
               Адреса: м. Дніпро вул. Романа Самокиша 1<br />
               Email: support@unitax.pro<br />
               Тел: +38 (067) 1579211

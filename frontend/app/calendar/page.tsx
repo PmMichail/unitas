@@ -304,12 +304,12 @@ export default function CalendarPage() {
       )}
 
       {/* Header Banner */}
-      <div className="p-6 rounded-2xl glass-panel bg-gradient-to-r from-slate-900/90 to-indigo-950/20 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+      <div className="p-6 rounded-2xl glass-panel bg-gradient-to-r from-slate-100/90 to-indigo-50/40 dark:from-slate-900/90 dark:to-indigo-950/20 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
         <div>
-          <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest block">Календар подій</span>
+          <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest block">Календар подій</span>
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">Податковий календар UniTax</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Відстежуйте дедлайни звітів та сплат для профілю: <span className="font-bold text-slate-200">{selectedProfile.name}</span>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Відстежуйте дедлайни звітів та сплат для профілю: <span className="font-bold text-slate-700 dark:text-slate-200">{selectedProfile.name}</span>
           </p>
         </div>
         <button
@@ -322,7 +322,7 @@ export default function CalendarPage() {
       </div>
 
       {/* Interactive Timeline Graph */}
-      <div className="p-6 rounded-3xl glass-panel border border-slate-200/50 dark:border-slate-800/50 bg-slate-900/40 backdrop-blur-xl space-y-4">
+      <div className="p-6 rounded-3xl glass-panel border border-slate-200/50 dark:border-slate-800/50 bg-white/40 dark:bg-slate-900/40 backdrop-blur-xl space-y-4">
         <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
           <Activity className="w-4 h-4 text-indigo-500" />
           Хронологічний графік подальших подій та дедлайнів
@@ -381,9 +381,9 @@ export default function CalendarPage() {
       </div>
 
       {/* Filter Toolbar */}
-      <div className="p-4 rounded-2xl glass-panel bg-white/5 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+      <div className="p-4 rounded-2xl glass-panel bg-white/60 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mr-2 flex items-center gap-1">
+          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mr-2 flex items-center gap-1">
             <Filter className="w-3.5 h-3.5" /> Тип події:
           </span>
           {[

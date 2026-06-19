@@ -51,7 +51,7 @@ export default function Profiles() {
   const [subModalSubscription, setSubModalSubscription] = useState<any>(null);
   const [subModalUsage, setSubModalUsage] = useState({ used: 0, limit: 5 });
   const [subModalPaymentsList, setSubModalPaymentsList] = useState<any[]>([]);
-  const [subModalPeriod, setSubModalPeriod] = useState<"monthly" | "yearly">("monthly");
+  const [subModalPeriod, setSubModalPeriod] = useState<"monthly" | "half_yearly" | "yearly">("monthly");
   const [subModalLoading, setSubModalLoading] = useState(false);
   const [subModalLoadingData, setSubModalLoadingData] = useState(false);
   const [subModalRefreshingHistory, setSubModalRefreshingHistory] = useState(false);
@@ -76,7 +76,13 @@ export default function Profiles() {
       const subData = await api.getCurrentSubscription(profile.id);
       setSubModalSubscription(subData);
       if (subData.payment_period) {
-        setSubModalPeriod(subData.payment_period === "yearly" ? "yearly" : "monthly");
+        setSubModalPeriod(
+          subData.payment_period === "yearly"
+            ? "yearly"
+            : subData.payment_period === "half_yearly"
+              ? "half_yearly"
+              : "monthly"
+        );
       } else {
         setSubModalPeriod("monthly");
       }
@@ -104,7 +110,11 @@ export default function Profiles() {
       });
 
       if (res.payment_required) {
-        setSubModalLiqpayForm(res);
+        if (res.pageUrl) {
+          window.location.href = res.pageUrl;
+        } else {
+          setSubModalLiqpayForm(res);
+        }
       } else {
         alert("Тариф Business успішно активовано!");
         const subData = await api.getCurrentSubscription(subModalProfile.id);
@@ -197,9 +207,9 @@ export default function Profiles() {
     fetchPricing();
   }, []);
 
-  const getPriceVal = (period: "monthly" | "yearly") => {
+  const getPriceVal = (period: "monthly" | "half_yearly" | "yearly") => {
     const found = pricingOptions.find(p => p.plan_type === "business" && p.payment_period === period);
-    return found ? found.price : (period === "monthly" ? 499 : 4989);
+    return found ? found.price : (period === "monthly" ? 499 : period === "half_yearly" ? 2499 : 4989);
   };
 
   const handleSubscribe = async (planType: string, period: string) => {
@@ -213,7 +223,11 @@ export default function Profiles() {
         payment_period: period
       });
       if (res.payment_required) {
-        setLiqpayForm(res);
+        if (res.pageUrl) {
+          window.location.href = res.pageUrl;
+        } else {
+          setLiqpayForm(res);
+        }
       } else {
         alert("Безкоштовний тариф активовано!");
         setIsModalOpen(false);
@@ -529,6 +543,8 @@ export default function Profiles() {
   const [formStartingDebtEsv, setFormStartingDebtEsv] = useState("");
   const [formStartingDebtVz, setFormStartingDebtVz] = useState("");
   const [formStartingDebtPdfo, setFormStartingDebtPdfo] = useState("");
+  const [formOrganizationSubtype, setFormOrganizationSubtype] = useState("osbb");
+  const [formNonProfitCode, setFormNonProfitCode] = useState("0046");
 
   // Open modal for creation
   const handleOpenCreate = () => {
@@ -554,6 +570,8 @@ export default function Profiles() {
     setFormStartingDebtEsv("");
     setFormStartingDebtVz("");
     setFormStartingDebtPdfo("");
+    setFormOrganizationSubtype("osbb");
+    setFormNonProfitCode("0046");
     setError(null);
     setModalStep("details");
     setCreatedProfileId(null);
@@ -568,7 +586,13 @@ export default function Profiles() {
     setFormName(profile.name);
     setFormTaxId(profile.tax_id || "");
     const ts = profile.tax_system || "ednuy-3-5%";
-    setFormTaxSystem(["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(ts) ? "ednuy-3-5%" : "zagalna");
+    if (ts === "non_profit") {
+      setFormTaxSystem("non_profit");
+    } else if (["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(ts)) {
+      setFormTaxSystem("ednuy-3-5%");
+    } else {
+      setFormTaxSystem("zagalna");
+    }
     setFormGroup(profile.group || 3);
     setFormRate(profile.rate || 5);
     setFormHasEmployees(!!profile.has_employees);
@@ -586,6 +610,8 @@ export default function Profiles() {
     setFormStartingDebtEsv(profile.starting_debt_esv !== undefined && profile.starting_debt_esv !== null ? String(profile.starting_debt_esv) : "");
     setFormStartingDebtVz(profile.starting_debt_vz !== undefined && profile.starting_debt_vz !== null ? String(profile.starting_debt_vz) : "");
     setFormStartingDebtPdfo(profile.starting_debt_pdfo !== undefined && profile.starting_debt_pdfo !== null ? String(profile.starting_debt_pdfo) : "");
+    setFormOrganizationSubtype(profile.organization_subtype || "osbb");
+    setFormNonProfitCode(profile.non_profit_code || "0046");
     setError(null);
     setModalStep("details");
     setCreatedProfileId(null);
@@ -630,7 +656,9 @@ export default function Profiles() {
       starting_debt_edp: formStartingDebtEdp ? parseFloat(formStartingDebtEdp) : 0,
       starting_debt_esv: formStartingDebtEsv ? parseFloat(formStartingDebtEsv) : 0,
       starting_debt_vz: formStartingDebtVz ? parseFloat(formStartingDebtVz) : 0,
-      starting_debt_pdfo: formStartingDebtPdfo ? parseFloat(formStartingDebtPdfo) : 0
+      starting_debt_pdfo: formStartingDebtPdfo ? parseFloat(formStartingDebtPdfo) : 0,
+      organization_subtype: formTaxSystem === "non_profit" ? formOrganizationSubtype : undefined,
+      non_profit_code: formTaxSystem === "non_profit" ? formNonProfitCode : undefined
     };
 
     try {
@@ -768,7 +796,12 @@ export default function Profiles() {
                 <div className="flex justify-between">
                   <span>Система оподаткування:</span>
                   <span className="font-bold text-slate-700 dark:text-slate-300">
-                    {["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(profile.tax_system) ? `Єдиний податок (Гр. ${profile.group || 3})` : "Загальна система"}
+                    {profile.tax_system === "non_profit"
+                      ? `Неприбуткова (${String(profile.organization_subtype || "").toUpperCase()})`
+                      : ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(profile.tax_system)
+                        ? `Єдиний податок (Гр. ${profile.group || 3})`
+                        : "Загальна система"
+                    }
                   </span>
                 </div>
                 {["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep"].includes(profile.tax_system) && (
@@ -889,10 +922,10 @@ export default function Profiles() {
           <div className="w-full max-w-lg bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
             
             {liqpayForm ? (
-              /* LiqPay Redirect Page */
+              /* Mono Pay Redirect Page */
               <div className="text-center p-8 space-y-4">
                 <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Перенаправлення на LiqPay...</h3>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Перенаправлення на Mono Pay...</h3>
                 <p className="text-xs text-slate-500">Будь ласка, зачекайте. Ми перенаправляємо вас на захищену сторінку оплати.</p>
                 <form id="liqpay-submit-form" method="POST" action={liqpayForm.api_url}>
                   <input type="hidden" name="data" value={liqpayForm.liqpay_data} />
@@ -975,7 +1008,7 @@ export default function Profiles() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Monthly card */}
                   <button
                     type="button"
@@ -994,6 +1027,27 @@ export default function Profiles() {
                     <p className="text-[10px] text-slate-500">Сплачуйте кожен місяць за повний доступ</p>
                   </button>
 
+                  {/* Half-yearly card */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPeriod("half_yearly")}
+                    className={`p-5 rounded-2xl border text-left space-y-2 transition-all relative overflow-hidden ${
+                      selectedPeriod === "half_yearly"
+                        ? "border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/10 ring-1 ring-indigo-500"
+                        : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="absolute top-0 right-0 bg-emerald-505 text-white text-[8px] font-black uppercase px-2 py-0.5 rounded-bl-lg">
+                      Економія ~16%
+                    </div>
+                    <span className="text-[10px] uppercase font-bold text-indigo-500 tracking-wider">Пів року</span>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-extrabold text-slate-900 dark:text-white">{getPriceVal("half_yearly")} грн</span>
+                      <span className="text-[10px] text-slate-400">/6 міс</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500">Сплачуйте раз на 6 місяців зі знижкою</p>
+                  </button>
+
                   {/* Yearly card */}
                   <button
                     type="button"
@@ -1004,7 +1058,7 @@ export default function Profiles() {
                         : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
                     }`}
                   >
-                    <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[8px] font-black uppercase px-2 py-0.5 rounded-bl-lg">
+                    <div className="absolute top-0 right-0 bg-emerald-505 text-white text-[8px] font-black uppercase px-2 py-0.5 rounded-bl-lg">
                       Економія ~16%
                     </div>
                     <span className="text-[10px] uppercase font-bold text-emerald-500 tracking-wider">Річна підписка</span>
@@ -1239,6 +1293,9 @@ export default function Profiles() {
                         >
                           <option value="ednuy-3-5%">Єдиний податок</option>
                           <option value="zagalna">Загальна система</option>
+                          {formType === "company" && (
+                            <option value="non_profit">Неприбуткова організація</option>
+                          )}
                         </select>
                       </div>
 
@@ -1292,6 +1349,46 @@ export default function Profiles() {
                               <option value={5}>5%</option>
                             </select>
                           )}
+                        </div>
+                      </div>
+                    )}
+
+                    {formTaxSystem === "non_profit" && (
+                      <div className="grid grid-cols-2 gap-4 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Тип неприбуткової орг.
+                          </label>
+                          <select
+                            value={formOrganizationSubtype}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFormOrganizationSubtype(val);
+                              if (val === "osbb") setFormNonProfitCode("0046");
+                              else if (val === "st") setFormNonProfitCode("0044");
+                              else if (val === "go") setFormNonProfitCode("0036");
+                              else if (val === "bf") setFormNonProfitCode("0039");
+                            }}
+                            className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-bold"
+                          >
+                            <option value="osbb">ОСББ</option>
+                            <option value="st">Садівниче тов. (СТ)</option>
+                            <option value="go">Громадська орг. (ГО)</option>
+                            <option value="bf">Благодійний фонд (БФ)</option>
+                            <option value="jbk">ЖБК</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
+                            Код ознаки неприбутковості
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Наприклад: 0046"
+                            value={formNonProfitCode}
+                            onChange={(e) => setFormNonProfitCode(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold"
+                          />
                         </div>
                       </div>
                     )}
@@ -2084,6 +2181,18 @@ export default function Profiles() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => setSubModalPeriod("half_yearly")}
+                            className={`px-3 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
+                              subModalPeriod === "half_yearly"
+                                ? "bg-indigo-600 text-white shadow"
+                                : "text-slate-550 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                            }`}
+                          >
+                            <span>Пів року</span>
+                            <span className="bg-emerald-500/10 text-emerald-505 border border-emerald-500/20 px-1 py-0.5 rounded text-[8px] font-black">-16%</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setSubModalPeriod("yearly")}
                             className={`px-3 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
                               subModalPeriod === "yearly"
@@ -2092,7 +2201,7 @@ export default function Profiles() {
                             }`}
                           >
                             <span>Рік</span>
-                            <span className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-1 py-0.5 rounded text-[8px] font-black">-16%</span>
+                            <span className="bg-emerald-500/10 text-emerald-505 border border-emerald-500/20 px-1 py-0.5 rounded text-[8px] font-black">-16%</span>
                           </button>
                         </div>
                       </div>
@@ -2181,9 +2290,19 @@ export default function Profiles() {
                             <span className="text-[10px] text-slate-555 block mt-1 uppercase font-bold tracking-wider">ШІ-асистент без лімітів</span>
                             <div className="mt-4 flex items-baseline gap-1">
                               <span className="text-2xl font-black text-slate-900 dark:text-white">
-                                {subModalPeriod === "monthly" ? getPriceVal("monthly") : getPriceVal("yearly")}
+                                {subModalPeriod === "monthly" 
+                                  ? getPriceVal("monthly") 
+                                  : subModalPeriod === "half_yearly" 
+                                    ? getPriceVal("half_yearly") 
+                                    : getPriceVal("yearly")}
                               </span>
-                              <span className="text-xs text-slate-400">грн / {subModalPeriod === "monthly" ? "міс" : "рік"}</span>
+                              <span className="text-xs text-slate-400">
+                                грн / {subModalPeriod === "monthly" 
+                                  ? "міс" 
+                                  : subModalPeriod === "half_yearly" 
+                                    ? "пів року" 
+                                    : "рік"}
+                              </span>
                             </div>
                             <ul className="mt-4 space-y-2 text-[11px] text-slate-555 dark:text-slate-400">
                               <li className="flex items-center gap-1.5">
@@ -2204,24 +2323,15 @@ export default function Profiles() {
                               className={`w-full py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                                 subModalLoading
                                   ? "bg-amber-600/50 text-white/50 cursor-not-allowed"
-                                  : subModalSubscription?.plan === "business" && subModalSubscription?.payment_period === subModalPeriod
-                                    ? "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700"
-                                    : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white"
+                                  : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
                               }`}
                             >
                               {subModalLoading ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : subModalSubscription?.plan === "business" && subModalSubscription?.payment_period === subModalPeriod ? (
-                                <>
-                                  <RefreshCw className="w-3 h-3" />
-                                  <span>Продовжити термін</span>
-                                </>
                               ) : (
                                 <>
                                   <CreditCard className="w-3 h-3" />
-                                  <span>
-                                    {subModalSubscription?.plan === "business" ? "Змінити період" : `Оплатити підписку`}
-                                  </span>
+                                  <span>Оплатити підписку</span>
                                 </>
                               )}
                             </button>
@@ -2326,7 +2436,7 @@ export default function Profiles() {
                     <div className="flex justify-between items-center">
                       <div>
                         <h4 className="text-sm font-bold text-slate-900 dark:text-white">Історія рахунків та оплат</h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Журнал виписаних рахунків та оплат через LiqPay.</p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Журнал виписаних рахунків та оплат через Mono Pay.</p>
                       </div>
                       <button
                         onClick={handleSubModalRefreshHistory}

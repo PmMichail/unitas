@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeContext';
-import { LayoutDashboard, Briefcase, Receipt, FileText, Settings } from 'lucide-react-native';
+import { LayoutDashboard, Briefcase, Receipt, FileText, Settings, Users } from 'lucide-react-native';
 
 export default function TabLayout() {
   const { colors, isDark } = useTheme();
@@ -65,6 +65,15 @@ export default function TabLayout() {
           headerTitle: 'Рахунки (Сформувати та відправити)',
           tabBarLabel: 'Рахунки',
           tabBarIcon: ({ color, size }) => <FileText size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="billing"
+        options={{
+          title: 'Білінг',
+          headerTitle: 'Облік мешканців та внесків',
+          tabBarLabel: 'Білінг',
+          tabBarIcon: ({ color, size }) => <Users size={size} color={color} />,
         }}
       />
       <Tabs.Screen
