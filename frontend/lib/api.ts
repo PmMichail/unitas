@@ -1211,43 +1211,6 @@ export const legislationApi = {
   getCurrentSubscription: async (profileId: number) => {
     const response = await client.get(`/api/subscriptions/current/${profileId}`);
     return response.data;
-  },
-  adminLogin: async (data: Record<string, any>) => {
-    const formData = toFormData(data);
-    const response = await client.post("/api/admin/login", formData);
-    return response.data;
-  },
-  adminGetUsers: async (token: string) => {
-    const response = await client.get("/api/admin/users", {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { _t: Date.now() }
-    });
-    return response.data;
-  },
-  adminGetUserDetails: async (userId: number, token: string) => {
-    const response = await client.get(`/api/admin/users/${userId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  adminUpdateUserSubscription: async (userId: number, data: Record<string, any>, token: string) => {
-    const formData = toFormData(data);
-    const response = await client.put(`/api/admin/users/${userId}/subscription`, formData, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  adminDeleteProfile: async (profileId: number, token: string) => {
-    const response = await client.delete(`/api/admin/profiles/${profileId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  adminBlockProfile: async (profileId: number, data: { is_blocked: boolean; block_reason?: string }, token: string) => {
-    const response = await client.post(`/api/admin/profiles/${profileId}/block`, data, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
   }
 };
 

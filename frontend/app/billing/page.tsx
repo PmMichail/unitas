@@ -2580,7 +2580,7 @@ export default function BillingPage() {
                       <DollarSign className="w-5 h-5 text-indigo-600 mt-0.5" />
                       <div>
                         <div className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">
-                          Одноразова оплата
+                          Помісячна оплата
                         </div>
                         <div className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
                           Вартість: {residentCabinetStatus?.pricing?.price || 500} {residentCabinetStatus?.pricing?.currency || 'UAH'}

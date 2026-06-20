@@ -1165,8 +1165,25 @@ try:
             currency="UAH"
         )
         db_seed.add(yearly_price)
+
+    # Seed resident_cabinet monthly pricing row
+    resident_price = db_seed.query(Pricing).filter(Pricing.plan_type == "resident_cabinet", Pricing.payment_period == "monthly").first()
+    if not resident_price:
+        existing_onetime = db_seed.query(Pricing).filter(Pricing.plan_type == "resident_cabinet", Pricing.payment_period == "onetime").first()
+        if existing_onetime:
+            existing_onetime.payment_period = "monthly"
+            existing_onetime.price = 500
+        else:
+            resident_price = Pricing(
+                plan_type="resident_cabinet",
+                payment_period="monthly",
+                price=500,
+                currency="UAH"
+            )
+            db_seed.add(resident_price)
+            
     db_seed.commit()
-    print("Created default monthly (499), half-yearly (2499) and yearly (4989) pricing rows.")
+    print("Created default monthly (499), half-yearly (2499) and yearly (4989) pricing rows, and resident cabinet monthly (500) row.")
     
     # 1. Admin account (always set password to Admin2026!)
     admin_email = "admin@unitas.com"
@@ -6758,18 +6775,34 @@ def admin_login(email: str = Form(...), password: str = Form(...), db: Session =
     return {"token": token, "role": admin.role}
 
 @app.get("/api/admin/users")
-def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = Depends(get_db)):
-    profiles = db.query(Profile).order_by(Profile.id.desc()).all()
+def get_all_users(
+    search: Optional[str] = None,
+    plan: Optional[str] = None,
+    token_data: dict = Depends(verify_admin_token),
+    db: Session = Depends(get_db)
+):
+    query = db.query(Profile)
+    if search:
+        query = query.join(User, Profile.user_id == User.id).filter(
+            (Profile.name.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+        )
+    
+    profiles = query.order_by(Profile.id.desc()).all()
     result = []
     for p in profiles:
         sub = db.query(Subscription).filter(Subscription.profile_id == p.id).first()
-        plan = sub.plan if sub else "free"
+        sub_plan = sub.plan if sub else "free"
+        
+        # Filter by plan if provided
+        if plan and sub_plan != plan:
+            continue
+            
         status = sub.status if sub else "active"
         expires_at = sub.expires_at.strftime("%Y-%m-%d %H:%M:%S") if (sub and sub.expires_at) else None
         warning_sent_at = sub.warning_sent_at.strftime("%Y-%m-%d %H:%M:%S") if (sub and sub.warning_sent_at) else None
         
         free_status = None
-        if plan == "free":
+        if sub_plan == "free":
             if not sub:
                 free_status = "never_activated"
             else:
@@ -6819,7 +6852,8 @@ def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = 
                 "invoice_email_sent_at": sub.invoice_email_sent_at.isoformat() if sub.invoice_email_sent_at else None,
                 "auto_renew": sub.auto_renew,
                 "color_marker": color_marker,
-                "days_until_expiry": days_until_expiry
+                "days_until_expiry": days_until_expiry,
+                "is_member_module_active": getattr(sub, "is_member_module_active", False)
             }
                     
         result.append({
@@ -6833,7 +6867,7 @@ def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = 
             "tax_id": p.tax_id,
             "reg_date": p.reg_date.strftime("%Y-%m-%d") if p.reg_date else None,
             "registration_source": getattr(p, "registration_source", "direct"),
-            "plan": plan,
+            "plan": sub_plan,
             "status": status,
             "is_blocked": p.is_blocked,
             "block_reason": p.block_reason,
@@ -6842,7 +6876,9 @@ def get_all_users(token_data: dict = Depends(verify_admin_token), db: Session = 
             "demo_activated": getattr(sub, "demo_activated", False),
             "payment_period": getattr(sub, "payment_period", None) if sub else None,
             "free_status": free_status,
-            "subscription": sub_status
+            "subscription": sub_status,
+            "is_member_module_active": getattr(p, "is_member_module_active", False),
+            "organization_subtype": getattr(p, "organization_subtype", None)
         })
     return result
 
@@ -6938,44 +6974,7 @@ def get_user_details(user_id: int, token_data: dict = Depends(verify_admin_token
         "employees": emp_list
     }
 
-@app.put("/api/admin/users/{user_id}/subscription")
-def update_user_subscription(
-    user_id: int,
-    plan: str = Form(...),
-    action: str = Form(...),  # 'activate', 'cancel', 'extend'
-    token_data: dict = Depends(verify_admin_token),
-    db: Session = Depends(get_db)
-):
-    from datetime import datetime, timedelta
-    sub = db.query(Subscription).filter(Subscription.profile_id == user_id).first()
-    
-    if action == 'activate':
-        expires_at = datetime.utcnow() + timedelta(days=30)
-        if sub:
-            sub.plan = plan
-            sub.status = "active"
-            sub.expires_at = expires_at
-        else:
-            sub = Subscription(
-                profile_id=user_id,
-                plan=plan,
-                status="active",
-                expires_at=expires_at
-            )
-            db.add(sub)
-    elif action == 'cancel':
-        if sub:
-            sub.status = "cancelled"
-    elif action == 'extend':
-        if sub:
-            if not sub.expires_at:
-                sub.expires_at = datetime.utcnow()
-            sub.expires_at += timedelta(days=30)
-            sub.status = "active"
-            sub.plan = plan
-            
-    db.commit()
-    return {"message": f"Підписку оновлено: {action}"}
+
 
 @app.post("/api/auth/login")
 def auth_login(
@@ -14869,66 +14868,7 @@ async def get_profile_payments(profile_id: int, user_id: Optional[int] = None, d
     ]
 
 # Admin API endpoints
-@app.get("/api/admin/users")
-def get_all_users_admin(
-    search: Optional[str] = None,
-    plan: Optional[str] = None,
-    token_data: dict = Depends(verify_admin_token),
-    db: Session = Depends(get_db)
-):
-    query = db.query(Profile)
-    if search:
-        query = query.join(User, Profile.user_id == User.id).filter(
-            (Profile.name.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
-        )
-    
-    profiles = query.order_by(Profile.id.desc()).all()
-    result = []
-    for p in profiles:
-        sub = db.query(Subscription).filter(Subscription.profile_id == p.id).first()
-        sub_plan = sub.plan if sub else "free"
-        
-        # Filter by plan if provided
-        if plan and sub_plan != plan:
-            continue
-            
-        expires_at = sub.expires_at.strftime("%Y-%m-%d %H:%M:%S") if (sub and sub.expires_at) else None
-        warning_sent_at = sub.warning_sent_at.strftime("%Y-%m-%d %H:%M:%S") if (sub and sub.warning_sent_at) else None
-        
-        free_status = None
-        if sub_plan == "free":
-            if not sub:
-                free_status = "never_activated"
-            else:
-                is_expired = sub.expires_at and sub.expires_at < datetime.utcnow()
-                has_history = sub.last_payment_date is not None or sub.demo_activated
-                if sub.status == "expired" or is_expired or has_history:
-                    free_status = "downgraded_unpaid"
-                else:
-                    free_status = "never_activated"
-                    
-        result.append({
-            "id": p.id,
-            "email": p.owner.email if p.owner else None,
-            "telegram_id": p.owner.telegram_id if p.owner else None,
-            "created_at": sub.created_at.strftime("%Y-%m-%d %H:%M:%S") if (sub and getattr(sub, "created_at", None)) else (p.reg_date.strftime("%Y-%m-%d") + " 00:00:00" if p.reg_date else None),
-            "name": p.name,
-            "type": p.type,
-            "tax_system": p.tax_system,
-            "tax_id": p.tax_id,
-            "reg_date": p.reg_date.strftime("%Y-%m-%d") if p.reg_date else None,
-            "registration_source": getattr(p, "registration_source", "direct"),
-            "plan": sub_plan,
-            "status": sub.status if sub else "active",
-            "expires_at": expires_at,
-            "warning_sent_at": warning_sent_at,
-            "is_blocked": getattr(p, "is_blocked", False),
-            "block_reason": getattr(p, "block_reason", None),
-            "demo_activated": getattr(sub, "demo_activated", False),
-            "payment_period": getattr(sub, "payment_period", None) if sub else None,
-            "free_status": free_status
-        })
-    return result
+
 
 class AdminBlockProfileRequest(BaseModel):
     is_blocked: bool
@@ -14969,6 +14909,8 @@ def admin_delete_profile(
 class AdminUpdateSubscriptionRequest(BaseModel):
     plan_type: str
     expires_at: Optional[str] = None # format YYYY-MM-DD
+    is_member_module_active: Optional[bool] = False
+    payment_period: Optional[str] = "monthly"
 
 @app.put("/api/admin/users/{profile_id}/subscription")
 def admin_update_subscription(
@@ -14978,7 +14920,10 @@ def admin_update_subscription(
     db: Session = Depends(get_db)
 ):
     sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
-    
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
     expires_dt = None
     if req.expires_at:
         try:
@@ -14992,21 +14937,81 @@ def admin_update_subscription(
     if sub:
         sub.plan = req.plan_type
         sub.plan_type = req.plan_type
+        sub.payment_period = req.payment_period
         sub.expires_at = expires_dt
         sub.status = "active"
         sub.updated_at = datetime.utcnow()
+        sub.is_member_module_active = bool(req.is_member_module_active)
     else:
         sub = Subscription(
             profile_id=profile_id,
             plan=req.plan_type,
             plan_type=req.plan_type,
+            payment_period=req.payment_period,
             status="active",
-            expires_at=expires_dt
+            expires_at=expires_dt,
+            is_member_module_active=bool(req.is_member_module_active)
         )
         db.add(sub)
         
+    # Sync profile and child profile
+    profile.is_member_module_active = bool(req.is_member_module_active)
+    profile.has_resident_cabinet = bool(req.is_member_module_active)
+    
+    if req.is_member_module_active:
+        if not profile.member_module_activated_at:
+            profile.member_module_activated_at = datetime.utcnow()
+        
+        # Ensure slug is generated
+        if not profile.slug:
+            profile.slug = transliterate_ua_to_latin(profile.name or "osbb")
+            # Ensure unique slug
+            base_slug = profile.slug
+            counter = 1
+            while db.query(Profile).filter(Profile.slug == profile.slug, Profile.id != profile.id).first():
+                profile.slug = f"{base_slug}-{counter}"
+                counter += 1
+                
+        # Find or create child profile
+        child_profile = db.query(Profile).filter(
+            Profile.parent_profile_id == profile_id,
+            Profile.has_resident_cabinet == True
+        ).first()
+        if not child_profile:
+            child_profile = Profile(
+                user_id=profile.user_id,
+                name=f"{profile.name} (Кабінет мешканців)",
+                tax_id=profile.tax_id,
+                address=profile.address,
+                tax_system="non_profit",
+                slug=profile.slug,
+                mono_api_token=profile.mono_api_token,
+                color_theme=profile.color_theme or "#3b82f6",
+                has_resident_cabinet=True,
+                is_member_module_active=True,
+                member_module_activated_at=datetime.utcnow(),
+                parent_profile_id=profile.id,
+                organization_subtype="osbb"
+            )
+            db.add(child_profile)
+        else:
+            child_profile.is_blocked = False
+            child_profile.block_reason = None
+            child_profile.is_member_module_active = True
+            child_profile.slug = profile.slug
+    else:
+        # Block child profile
+        child_profile = db.query(Profile).filter(
+            Profile.parent_profile_id == profile_id,
+            Profile.has_resident_cabinet == True
+        ).first()
+        if child_profile:
+            child_profile.is_blocked = True
+            child_profile.is_member_module_active = False
+            child_profile.block_reason = "Деактивовано: модуль не оплачено в підписці"
+
     db.commit()
-    return {"message": "\xd0\x9f\xd1\x96\xd0\xb4\xd0\xbf\xd0\xb8\xd1\x81\xd0\xba\xd1\x83 \xd0\xbe\xd0\xbd\xd0\xbe\xd0\xb2\xd0\xbb\xd0\xb5\xd0\xbd\xd0\xbe \xd0\xb0\xd0\xb4\xd0\xb2\xd0\xb5\xd1\x80\xd0\xbe\xd0\xbc", "plan": sub.plan, "expires_at": sub.expires_at}
+    return {"message": "Підписку оновлено", "plan": sub.plan, "expires_at": sub.expires_at}
 
 @app.get("/api/admin/pricing")
 def admin_get_all_prices(
@@ -16746,14 +16751,14 @@ def purchase_resident_cabinet_module(
     # Get pricing for resident cabinet module
     pricing = db.query(Pricing).filter(
         Pricing.plan_type == "resident_cabinet",
-        Pricing.payment_period == "onetime"
+        Pricing.payment_period == "monthly"
     ).first()
     
     if not pricing:
         # Create default pricing if not exists
         pricing = Pricing(
             plan_type="resident_cabinet",
-            payment_period="onetime",
+            payment_period="monthly",
             price=500,  # Default price in UAH
             currency="UAH"
         )
@@ -16766,8 +16771,9 @@ def purchase_resident_cabinet_module(
     subscription = Subscription(
         profile_id=profile_id,
         plan="resident_cabinet",
+        payment_period="monthly",
         status="active",
-        expires_at=datetime.utcnow() + timedelta(days=365*10),  # 10 years for onetime purchase
+        expires_at=datetime.utcnow() + timedelta(days=30),  # 30 days for monthly purchase
         amount=pricing.price
     )
     db.add(subscription)
@@ -16851,7 +16857,7 @@ def get_resident_cabinet_status(
     # Get pricing info
     pricing = db.query(Pricing).filter(
         Pricing.plan_type == "resident_cabinet",
-        Pricing.payment_period == "onetime"
+        Pricing.payment_period == "monthly"
     ).first()
     
     return {

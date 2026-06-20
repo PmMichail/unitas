@@ -70,6 +70,7 @@ export default function AdminDashboard() {
   const [editPlanType, setEditPlanType] = useState("free");
   const [editPaymentPeriod, setEditPaymentPeriod] = useState("monthly");
   const [editExpiresAt, setEditExpiresAt] = useState("");
+  const [editIsMemberModuleActive, setEditIsMemberModuleActive] = useState(false);
 
   // Admin Profile Block & Delete states
   const [blockingProfile, setBlockingProfile] = useState<any | null>(null);
@@ -302,9 +303,11 @@ export default function AdminDashboard() {
           const monthlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "monthly");
           const halfYearlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "half_yearly");
           const yearlyObj = data.find((p: any) => p.plan_type === "business" && p.payment_period === "yearly");
+          const residentObj = data.find((p: any) => p.plan_type === "resident_cabinet" && p.payment_period === "monthly");
           if (monthlyObj) setMonthlyPriceInput(String(monthlyObj.price));
           if (halfYearlyObj) setHalfYearlyPriceInput(String(halfYearlyObj.price));
           if (yearlyObj) setYearlyPriceInput(String(yearlyObj.price));
+          if (residentObj) setResidentCabinetPriceInput(String(residentObj.price));
         } else if (activeTab === "stats") {
           const data = await api.adminGetStats(token);
           setStats(data);
@@ -477,6 +480,7 @@ export default function AdminDashboard() {
     setEditPlanType(profile.plan || "free");
     setEditPaymentPeriod(profile.payment_period || "monthly");
     setEditExpiresAt(profile.expires_at ? profile.expires_at.split(" ")[0] : "");
+    setEditIsMemberModuleActive(profile.is_member_module_active || false);
   };
 
   // Save customized subscription type/expires_at
@@ -491,7 +495,8 @@ export default function AdminDashboard() {
         {
           plan_type: editPlanType,
           payment_period: editPaymentPeriod,
-          expires_at: editExpiresAt || null
+          expires_at: editExpiresAt || null,
+          is_member_module_active: editIsMemberModuleActive
         }, 
         token
       );
@@ -520,7 +525,7 @@ export default function AdminDashboard() {
     try {
       await api.adminUpdatePricing({
         plan_type: period === "resident_cabinet" ? "resident_cabinet" : "business",
-        payment_period: period === "resident_cabinet" ? "onetime" : period,
+        payment_period: period === "resident_cabinet" ? "monthly" : period,
         price: priceVal
       }, token);
       alert("Ціну успішно оновлено!");
@@ -1040,8 +1045,8 @@ export default function AdminDashboard() {
                 <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
                   <div className="space-y-1">
                     <span className="text-[10px] text-rose-500 font-black uppercase tracking-wider block">Модуль кабінету мешканця</span>
-                    <h3 className="text-lg font-bold text-white">Одноразова оплата (Resident Cabinet)</h3>
-                    <p className="text-xs text-slate-500">Вартість активації особистого кабінету для мешканців ОСББ.</p>
+                    <h3 className="text-lg font-bold text-white">Помісячна оплата (Resident Cabinet)</h3>
+                    <p className="text-xs text-slate-500">Вартість щомісячної підписки на особистий кабінет для мешканців ОСББ.</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="relative flex-1">
@@ -1051,7 +1056,7 @@ export default function AdminDashboard() {
                         onChange={(e) => setResidentCabinetPriceInput(e.target.value)}
                         className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
                       />
-                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / одноразово</span>
+                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / міс</span>
                     </div>
                     <button
                       onClick={() => handleUpdatePrice("resident_cabinet", residentCabinetPriceInput)}
@@ -1539,17 +1544,29 @@ export default function AdminDashboard() {
             <form onSubmit={handleSaveSubscription} className="space-y-4">
               <div className="space-y-1.5">
                 <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Тарифний план</label>
-                <select
-                  value={editPlanType}
-                  onChange={(e) => setEditPlanType(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
-                >
-                  <option value="free">Free (Безкоштовно)</option>
-                  <option value="business">Business (Платний)</option>
-                </select>
+                {selectedProfileForSub.tax_system === "non_profit" || selectedProfileForSub.organization_subtype === "osbb" || selectedProfileForSub.organization_subtype === "st" ? (
+                  <select
+                    value={editPlanType}
+                    onChange={(e) => setEditPlanType(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                  >
+                    <option value="free">Безкоштовно (Free)</option>
+                    <option value="basic">Базовий (Basic) — 499 грн/міс</option>
+                    <option value="premium">Преміум (Premium) — 999 грн/міс</option>
+                  </select>
+                ) : (
+                  <select
+                    value={editPlanType}
+                    onChange={(e) => setEditPlanType(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                  >
+                    <option value="free">Free (Безкоштовно)</option>
+                    <option value="business">Business (Платний)</option>
+                  </select>
+                )}
               </div>
 
-              {editPlanType === "business" && (
+              {(editPlanType === "business" || editPlanType === "basic" || editPlanType === "premium") && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Період оплати</label>
                   <select
@@ -1561,6 +1578,21 @@ export default function AdminDashboard() {
                     <option value="half_yearly">Піврічно (6 місяців)</option>
                     <option value="yearly">Щорічно (365 днів)</option>
                   </select>
+                </div>
+              )}
+
+              {(selectedProfileForSub.tax_system === "non_profit" || selectedProfileForSub.organization_subtype === "osbb" || selectedProfileForSub.organization_subtype === "st") && (
+                <div className="flex items-center gap-2.5 py-1 select-none">
+                  <input
+                    type="checkbox"
+                    id="editIsMemberModuleActive"
+                    checked={editIsMemberModuleActive}
+                    onChange={(e) => setEditIsMemberModuleActive(e.target.checked)}
+                    className="w-4 h-4 rounded border border-slate-800 accent-indigo-650 bg-slate-950 transition-all cursor-pointer focus:ring-0"
+                  />
+                  <label htmlFor="editIsMemberModuleActive" className="text-xs font-bold text-slate-200 cursor-pointer">
+                    📱 Активований кабінет мешканців (+500 грн/міс)
+                  </label>
                 </div>
               )}
 

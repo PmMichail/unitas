@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { AppProvider, useApp } from "@/context/AppContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -88,7 +89,7 @@ function SubscriptionLockedView() {
           </Link>
           <Link
             href="/dashboard"
-            className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-805 bg-white dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+            className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
           >
             <LayoutDashboard className="w-4 h-4" /> На дашборд
           </Link>
@@ -128,6 +129,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [theme, setThemeState] = useState<"dark" | "light">("dark");
+  const { theme: nextTheme, setTheme } = useTheme();
 
   // Polling for blocked status
   useEffect(() => {
@@ -197,20 +199,15 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
 
   // Sync theme with next-themes/document element
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains("dark");
-    setThemeState(isDark ? "dark" : "light");
-  }, []);
+    if (nextTheme) {
+      setThemeState(nextTheme as "dark" | "light");
+    }
+  }, [nextTheme]);
 
   const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setThemeState(nextTheme);
-    if (nextTheme === "dark") {
-      document.documentElement.classList.add("dark");
-      document.documentElement.classList.remove("light");
-    } else {
-      document.documentElement.classList.add("light");
-      document.documentElement.classList.remove("dark");
-    }
+    const targetTheme = theme === "dark" ? "light" : "dark";
+    setTheme(targetTheme);
+    setThemeState(targetTheme);
   };
 
   const navItems = [
@@ -436,7 +433,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
         {/* Footer info & theme toggle */}
         <div className="p-4 border-t border-slate-200 dark:border-slate-800/60 space-y-2.5">
           {telegramId && (
-            <div className="px-2 py-1.5 bg-slate-100 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-805 rounded-xl text-[10px] text-slate-400 dark:text-slate-500 truncate">
+            <div className="px-2 py-1.5 bg-slate-100 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl text-[10px] text-slate-400 dark:text-slate-500 truncate">
               Telegram ID: <span className="font-bold text-slate-600 dark:text-slate-400">{telegramId}</span>
             </div>
           )}
@@ -511,7 +508,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                     router.push("/dashboard");
                   }
                 }}
-                className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-905 text-xs font-semibold"
+                className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
               >
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>

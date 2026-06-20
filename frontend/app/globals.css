@@ -7,7 +7,7 @@
 :root {
   --background: #edf1f6;
   --foreground: #0f172a;
-  --border: rgba(99, 102, 241, 0.08);
+  --border: rgba(99, 102, 241, 0.14);
   --card: rgba(255, 255, 255, 0.95);
   --accent: #4f46e5;
   --font-sans: 'Outfit', sans-serif;
@@ -91,9 +91,10 @@ body {
 .light .bg-slate-950\/95,
 .light .bg-slate-950\/80,
 .light .bg-slate-950\/40,
+.light .bg-slate-900\/95,
 .light .bg-slate-900\/40 {
   background-color: #ffffff !important;
-  border-color: rgba(99, 102, 241, 0.08) !important;
+  border-color: rgba(99, 102, 241, 0.14) !important;
   box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 8px -1px rgba(99, 102, 241, 0.02) !important;
 }
 
@@ -150,7 +151,7 @@ body {
 .light .border-slate-950\/20,
 .light .border-slate-950\/40,
 .light .border-slate-950\/80 {
-  border-color: rgba(15, 23, 42, 0.08) !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
 }
 
 /* Text overrides in light theme panels */
@@ -230,7 +231,7 @@ body {
 /* Layout sidebar corrections in light theme */
 .light aside {
   background-color: rgba(255, 255, 255, 0.9) !important;
-  border-right-color: rgba(99, 102, 241, 0.08) !important;
+  border-right-color: rgba(99, 102, 241, 0.14) !important;
 }
 
 .light aside a:not(.bg-indigo-600),
@@ -242,4 +243,31 @@ body {
 .light aside button:hover:not(.bg-indigo-600) {
   color: #0f172a !important;
   background-color: rgba(15, 23, 42, 0.04) !important;
+}
+
+/* Custom styling for app badges and chat items in light mode */
+.light a.bg-slate-950,
+.light a.bg-slate-955 {
+  background-color: #f1f5f9 !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+.light a.bg-slate-955:hover,
+.light a.bg-slate-950:hover {
+  background-color: #e2e8f0 !important;
+  border-color: rgba(15, 23, 42, 0.2) !important;
+}
+.light a.bg-slate-950 svg,
+.light a.bg-slate-955 svg {
+  color: #0f172a !important;
+  fill: #0f172a !important;
+}
+.light a.bg-slate-950 div,
+.light a.bg-slate-955 div,
+.light a.bg-slate-950 span,
+.light a.bg-slate-955 span {
+  color: #0f172a !important;
+}
+.light a.bg-slate-950 .text-slate-400,
+.light a.bg-slate-955 .text-slate-400 {
+  color: #475569 !important;
 }

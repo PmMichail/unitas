@@ -24,9 +24,29 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="uk" className="dark">
+    <html lang="uk" suppressHydrationWarning>
       <head>
         <link rel="icon" href="/icon.png" type="image/png" />
+        {/* Google tag (gtag.js) */}
+        <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18255140291"></script>
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'AW-18255140291');
+          `
+        }} />
+        {/* Event snippet for Просмотр страницы conversion page */}
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            gtag('event', 'conversion', {
+                'send_to': 'AW-18255140291/RQYLCLLjrcIcEMOr3YBE',
+                'value': 1.0,
+                'currency': 'UAH'
+            });
+          `
+        }} />
       </head>
       <body>
         <ClientLayout>{children}</ClientLayout>
