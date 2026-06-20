@@ -34,6 +34,10 @@ interface Profile {
   custom_iban_vz?: string;
   organization_subtype?: string;
   non_profit_code?: string;
+  parent_profile_id?: number | null;
+  has_resident_cabinet?: boolean;
+  slug?: string;
+  color_theme?: string;
 }
 
 interface SubscriptionInfo {

@@ -362,25 +362,52 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
           </button>
 
           {profileDropdownOpen && (
-            <div className="absolute left-4 right-4 mt-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-30 p-1.5 space-y-1">
-              {profiles.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setSelectedProfile(p);
-                    setProfileDropdownOpen(false);
-                    router.push("/dashboard");
-                  }}
-                  className={`w-full flex items-center justify-between p-2 rounded-lg text-xs font-semibold transition-all ${
-                    selectedProfile?.id === p.id
-                      ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
-                      : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-900/50 hover:text-slate-800 dark:hover:text-slate-200"
-                  }`}
-                >
-                  <span className="truncate pr-1">{p.name}</span>
-                  {selectedProfile?.id === p.id && <Check className="w-3.5 h-3.5 shrink-0" />}
-                </button>
-              ))}
+            <div className="absolute left-4 right-4 mt-1 bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-30 p-1.5 space-y-1 max-h-[300px] overflow-y-auto custom-scrollbar">
+              {(() => {
+                const parentProfiles = profiles.filter(p => !p.parent_profile_id);
+                return parentProfiles.map((parent) => {
+                  const child = profiles.find((c) => c.parent_profile_id === parent.id);
+                  return (
+                    <div key={parent.id} className="space-y-1">
+                      <button
+                        onClick={() => {
+                          setSelectedProfile(parent);
+                          setProfileDropdownOpen(false);
+                          router.push("/dashboard");
+                        }}
+                        className={`w-full flex items-center justify-between p-2 rounded-lg text-xs font-semibold transition-all ${
+                          selectedProfile?.id === parent.id
+                            ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-900/50 hover:text-slate-800 dark:hover:text-slate-200"
+                        }`}
+                      >
+                        <span className="truncate pr-1">{parent.name}</span>
+                        {selectedProfile?.id === parent.id && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                      {child && (
+                        <button
+                          onClick={() => {
+                            setSelectedProfile(child);
+                            setProfileDropdownOpen(false);
+                            router.push("/dashboard");
+                          }}
+                          className={`w-full flex items-center justify-between p-2 pl-6 rounded-lg text-[11px] font-medium transition-all ${
+                            selectedProfile?.id === child.id
+                              ? "bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400"
+                              : "text-slate-500 dark:text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-900/50 hover:text-slate-700 dark:hover:text-slate-350"
+                          }`}
+                        >
+                          <span className="truncate pr-1 flex items-center gap-1.5">
+                            <span className="text-slate-400 dark:text-slate-600 font-bold">↳</span>
+                            {child.name.includes("Кабінет") ? "Кабінет мешканців" : child.name}
+                          </span>
+                          {selectedProfile?.id === child.id && <Check className="w-3 h-3 shrink-0" />}
+                        </button>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
               <div className="border-t border-slate-100 dark:border-slate-850 my-1.5" />
               <Link
                 href="/profiles"
@@ -510,11 +537,24 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                 }}
                 className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
               >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+                {(() => {
+                  const parentProfiles = profiles.filter(p => !p.parent_profile_id);
+                  return parentProfiles.map((p) => {
+                    const child = profiles.find((c) => c.parent_profile_id === p.id);
+                    return (
+                      <React.Fragment key={p.id}>
+                        <option value={p.id}>
+                          {p.name}
+                        </option>
+                        {child && (
+                          <option value={child.id}>
+                              ↳ Кабінет мешканців
+                          </option>
+                        )}
+                      </React.Fragment>
+                    );
+                  });
+                })()}
                 <option value="" disabled>
                   {profiles.length === 0 ? "Немає профілів" : "Оберіть профіль"}
                 </option>

@@ -5019,6 +5019,24 @@ def delete_profile_endpoint(profile_id: int, user_id: Optional[int] = None, db: 
     db.commit()
     return {"message": "Профіль успішно видалено"}
 
+def sync_child_profile(db: Session, parent: Profile):
+    child = db.query(Profile).filter(
+        Profile.parent_profile_id == parent.id,
+        Profile.has_resident_cabinet == True
+    ).first()
+    if child:
+        child.tax_id = parent.tax_id
+        child.bank_name = parent.bank_name
+        child.mfo = parent.mfo
+        child.iban = parent.iban
+        child.address = parent.address
+        child.phone = parent.phone
+        child.director_name = parent.director_name
+        child.mono_api_token = parent.mono_api_token
+        child.color_theme = parent.color_theme or "#3b82f6"
+        child.slug = parent.slug
+        db.flush()
+
 @app.put("/api/profiles/{profile_id}")
 def update_profile_endpoint(
     profile_id: int,
@@ -5066,7 +5084,16 @@ def update_profile_endpoint(
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
 
     if tax_id is not None and tax_id.strip():
-        existing = db.query(Profile).filter(Profile.tax_id == tax_id.strip(), Profile.id != profile_id).first()
+        related_ids = [profile_id]
+        if profile.parent_profile_id:
+            related_ids.append(profile.parent_profile_id)
+        children_ids = [p.id for p in db.query(Profile.id).filter(Profile.parent_profile_id == profile_id).all()]
+        related_ids.extend(children_ids)
+        
+        existing = db.query(Profile).filter(
+            Profile.tax_id == tax_id.strip(),
+            ~Profile.id.in_(related_ids)
+        ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
         
@@ -5182,6 +5209,7 @@ def update_profile_endpoint(
         except ValueError:
             pass
             
+    sync_child_profile(db, profile)
     db.commit()
     sync_user_profiles_by_tax_id(db, profile.user_id)
     sync_profile_calendar(profile.id, db)
@@ -7840,14 +7868,32 @@ def admin_activate_module(
             tax_system="non_profit",
             slug=slug_clean,
             mono_api_token=profile.mono_api_token,
-            color_theme=profile.color_theme,
+            color_theme=profile.color_theme or "#3b82f6",
             has_resident_cabinet=True,
             is_member_module_active=True,
             member_module_activated_at=datetime.utcnow(),
             parent_profile_id=profile.id,
-            organization_subtype="osbb"
+            organization_subtype="osbb",
+            bank_name=profile.bank_name,
+            mfo=profile.mfo,
+            iban=profile.iban,
+            phone=profile.phone,
+            director_name=profile.director_name
         )
         db.add(osbb_enterprise)
+    else:
+        osbb_enterprise.slug = slug_clean
+        osbb_enterprise.color_theme = color_theme or "#3b82f6"
+        osbb_enterprise.tax_id = profile.tax_id
+        osbb_enterprise.address = profile.address
+        osbb_enterprise.bank_name = profile.bank_name
+        osbb_enterprise.mfo = profile.mfo
+        osbb_enterprise.iban = profile.iban
+        osbb_enterprise.phone = profile.phone
+        osbb_enterprise.director_name = profile.director_name
+        osbb_enterprise.is_member_module_active = True
+        osbb_enterprise.is_blocked = False
+        osbb_enterprise.block_reason = None
         
     db.commit()
     return {"status": "success", "message": "Модуль активовано"}
@@ -14991,7 +15037,12 @@ def admin_update_subscription(
                 is_member_module_active=True,
                 member_module_activated_at=datetime.utcnow(),
                 parent_profile_id=profile.id,
-                organization_subtype="osbb"
+                organization_subtype="osbb",
+                bank_name=profile.bank_name,
+                mfo=profile.mfo,
+                iban=profile.iban,
+                phone=profile.phone,
+                director_name=profile.director_name
             )
             db.add(child_profile)
         else:
@@ -14999,6 +15050,13 @@ def admin_update_subscription(
             child_profile.block_reason = None
             child_profile.is_member_module_active = True
             child_profile.slug = profile.slug
+            child_profile.tax_id = profile.tax_id
+            child_profile.address = profile.address
+            child_profile.bank_name = profile.bank_name
+            child_profile.mfo = profile.mfo
+            child_profile.iban = profile.iban
+            child_profile.phone = profile.phone
+            child_profile.director_name = profile.director_name
     else:
         # Block child profile
         child_profile = db.query(Profile).filter(
@@ -15072,6 +15130,40 @@ def admin_update_pricing(
             
     db.commit()
     return {"message": "Ціну оновлено", "plan_type": pricing.plan_type, "payment_period": pricing.payment_period, "price": pricing.price}
+
+class BusinessPriceUpdateRequest(BaseModel):
+    price: int
+
+@app.put("/api/admin/pricing/business")
+def admin_update_business_price(
+    req: BusinessPriceUpdateRequest,
+    token_data: dict = Depends(verify_admin_token),
+    db: Session = Depends(get_db)
+):
+    pricing = db.query(Pricing).filter(
+        Pricing.plan_type == "business",
+        Pricing.payment_period == "monthly"
+    ).first()
+    
+    if not pricing:
+        pricing = Pricing(
+            plan_type="business",
+            payment_period="monthly",
+            price=req.price,
+            currency="UAH"
+        )
+        db.add(pricing)
+    else:
+        pricing.price = req.price
+        pricing.updated_at = datetime.utcnow()
+        
+    # Sync with SubscriptionPlan for OSBB/ST
+    basic_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 1).first()
+    if basic_plan:
+        basic_plan.price = req.price
+        
+    db.commit()
+    return {"message": "Ціну оновлено", "plan_type": "business", "payment_period": "monthly", "price": pricing.price}
 
 @app.get("/api/admin/payments")
 def get_admin_payments(
@@ -16985,7 +17077,12 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
             color_theme=profile.color_theme or "#3b82f6",
             has_resident_cabinet=True,
             parent_profile_id=profile.id,
-            organization_subtype="osbb"
+            organization_subtype="osbb",
+            bank_name=profile.bank_name,
+            mfo=profile.mfo,
+            iban=profile.iban,
+            phone=profile.phone,
+            director_name=profile.director_name
         )
         db.add(osbb_enterprise)
         db.flush()
@@ -16994,6 +17091,11 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
         osbb_enterprise.name = f"{profile.name} (Кабінет мешканців)"
         osbb_enterprise.tax_id = profile.tax_id
         osbb_enterprise.address = profile.address
+        osbb_enterprise.bank_name = profile.bank_name
+        osbb_enterprise.mfo = profile.mfo
+        osbb_enterprise.iban = profile.iban
+        osbb_enterprise.phone = profile.phone
+        osbb_enterprise.director_name = profile.director_name
         
     db.commit()
     db.refresh(profile)

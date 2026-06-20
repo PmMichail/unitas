@@ -695,7 +695,9 @@ export const api = {
     return response.data;
   },
   getPricing: async () => {
-    const response = await client.get("/api/pricing");
+    const response = await client.get("/api/pricing", {
+      params: { _t: Date.now() }
+    });
     return response.data;
   },
   createPayment: async (data: { profile_id: number; plan_type: string; payment_period: string }) => {
@@ -809,7 +811,9 @@ export const api = {
   },
 
   getSubscriptionPlans: async () => {
-    const response = await client.get("/api/subscription/plans");
+    const response = await client.get("/api/subscription/plans", {
+      params: { _t: Date.now() }
+    });
     return response.data;
   },
 

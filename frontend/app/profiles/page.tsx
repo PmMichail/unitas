@@ -741,9 +741,10 @@ export default function Profiles() {
 
       {/* Profiles list */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {profiles.map((profile) => {
+        {profiles.filter(p => !p.parent_profile_id).map((profile) => {
           const isFop = profile.type === "fop";
           const isActive = selectedProfile?.id === profile.id;
+          const child = profiles.find((c) => c.parent_profile_id === profile.id);
 
           return (
             <div
@@ -873,6 +874,13 @@ export default function Profiles() {
                   </button>
                 )}
               </div>
+
+              {/* Resident Cabinet status */}
+              {child && (
+                <div className="mt-3 px-3 py-2 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs rounded-xl border border-amber-500/20 font-bold flex items-center gap-1.5 justify-center">
+                  <span>📱 Кабінет мешканців активовано</span>
+                </div>
+              )}
 
               {/* Quick activate button */}
               {!isActive && (

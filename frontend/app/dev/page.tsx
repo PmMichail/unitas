@@ -421,13 +421,17 @@ export default function DevPage() {
   const updatePrice = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/admin/pricing/business`, {
+      const res = await fetch(`${API_BASE_URL}/api/admin/pricing`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": apiKey
         },
-        body: JSON.stringify({ price: newPrice })
+        body: JSON.stringify({
+          plan_type: "business",
+          payment_period: "monthly",
+          price: newPrice
+        })
       });
       const data = await res.json();
       if (res.ok) {
