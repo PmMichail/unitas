@@ -15060,6 +15060,16 @@ def admin_update_pricing(
         pricing.price = req.price
         pricing.updated_at = datetime.utcnow()
         
+    # Sync with SubscriptionPlan for OSBB/ST
+    if req.plan_type == "business" and req.payment_period == "monthly":
+        basic_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 1).first()
+        if basic_plan:
+            basic_plan.price = req.price
+    elif req.plan_type == "resident_cabinet" and req.payment_period == "monthly":
+        premium_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 2).first()
+        if premium_plan:
+            premium_plan.member_module_price = req.price
+            
     db.commit()
     return {"message": "Ціну оновлено", "plan_type": pricing.plan_type, "payment_period": pricing.payment_period, "price": pricing.price}
 
@@ -16645,6 +16655,21 @@ def migrate_database():
                     db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Преміум', 999.00, 1, 500.00)"))
                 db.commit()
                 print("Inserted default subscription plans")
+            
+            # Sync SubscriptionPlan with current Pricing table values on startup
+            try:
+                monthly_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'business' AND payment_period = 'monthly'")).scalar()
+                if monthly_pricing is not None:
+                    db.execute(text("UPDATE subscription_plans SET price = :price WHERE id = 1"), {"price": monthly_pricing})
+                
+                module_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'resident_cabinet' AND payment_period = 'monthly'")).scalar()
+                if module_pricing is not None:
+                    db.execute(text("UPDATE subscription_plans SET member_module_price = :price WHERE id = 2"), {"price": module_pricing})
+                db.commit()
+                print("Synced subscription_plans with pricing table values on startup")
+            except Exception as e:
+                print(f"Error syncing subscription_plans on startup: {e}")
+                db.rollback()
         except Exception as e:
             print(f"Error checking/seeding subscription_plans: {e}")
             db.rollback()

@@ -217,22 +217,38 @@ export default function SubscriptionPage() {
     if (!selectedProfile) return;
     setLoading(true);
     try {
-      const res = await api.createPayment({
-        profile_id: selectedProfile.id,
-        plan_type: "business",
-        payment_period: selectedPeriod
-      });
-
-      if (res.payment_required) {
-        if (res.pageUrl) {
-          window.location.href = res.pageUrl;
+      const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
+      if (isOSBBOrST) {
+        const res = await api.createSubscription({
+          plan_id: selectedPlanId,
+          enable_member_module: enableMemberModule,
+          profile_id: selectedProfile.id
+        });
+        if (res.payment_url) {
+          window.location.href = res.payment_url;
         } else {
-          setLiqpayForm(res);
+          alert("Тариф успішно активовано!");
+          await loadData();
+          await refreshProfiles();
         }
       } else {
-        alert("Тариф Business успішно активовано!");
-        await loadData();
-        await refreshProfiles();
+        const res = await api.createPayment({
+          profile_id: selectedProfile.id,
+          plan_type: "business",
+          payment_period: selectedPeriod
+        });
+
+        if (res.payment_required) {
+          if (res.pageUrl) {
+            window.location.href = res.pageUrl;
+          } else {
+            setLiqpayForm(res);
+          }
+        } else {
+          alert("Тариф Business успішно активовано!");
+          await loadData();
+          await refreshProfiles();
+        }
       }
     } catch (error) {
       console.error("Error creating subscription payment:", error);
