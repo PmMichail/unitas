@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
 import {
@@ -28,11 +29,14 @@ import {
   Cpu,
   ArrowRight,
   ChevronRight,
+  Copy,
   ChevronDown,
   ChevronUp,
   Lock,
   Unlock,
-  Eye
+  Eye,
+  Crown,
+  Clock
 } from "lucide-react";
 
 interface Member {
@@ -81,6 +85,7 @@ interface Meter {
 
 export default function BillingPage() {
   const { selectedProfile } = useApp();
+  const router = useRouter();
   
   // State
   const [members, setMembers] = useState<Member[]>([]);
@@ -1071,98 +1076,227 @@ export default function BillingPage() {
         {activeTab === "resident_cabinet" && (
           <div className="space-y-6">
             {rcLoading ? (
-              <div className="text-center py-12 text-slate-400">Завантаження...</div>
+              <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                <div className="w-8 h-8 border-b-2 border-indigo-500 rounded-full animate-spin"></div>
+                <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider animate-pulse">Завантаження інформації...</p>
+              </div>
             ) : (
               <>
-                {/* Status Card */}
-                <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl">
-                  <div className="flex items-center justify-between mb-6">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${residentCabinetStatus?.is_active ? 'bg-emerald-500/10' : 'bg-slate-500/10'}`}>
+                {/* Subscription Details & Cabinet Status Card */}
+                <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-6 relative overflow-hidden">
+                  <div className="absolute top-[-10%] right-[-10%] w-48 h-48 bg-indigo-500/5 rounded-full blur-[85px] pointer-events-none" />
+                  
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100 dark:border-slate-800/40">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${residentCabinetStatus?.is_active ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-rose-500/10 border border-rose-500/20'}`}>
                         {residentCabinetStatus?.is_active ? (
-                          <CheckCircle className="w-6 h-6 text-emerald-600" />
+                          <CheckCircle className="w-6 h-6 text-emerald-500" />
                         ) : (
-                          <Lock className="w-6 h-6 text-slate-400" />
+                          <Lock className="w-6 h-6 text-rose-500" />
                         )}
                       </div>
                       <div>
-                        <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                          Кабінет мешканця
+                        <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                          Кабінет мешканців
                         </h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
-                          {residentCabinetStatus?.is_active ? 'Модуль активовано' : 'Модуль не активовано'}
-                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                            residentCabinetStatus?.is_active 
+                              ? 'bg-emerald-500/10 text-emerald-450 border border-emerald-500/20' 
+                              : 'bg-rose-500/10 text-rose-455 border border-rose-500/20'
+                          }`}>
+                            {residentCabinetStatus?.is_active ? 'Модуль активовано' : 'Модуль неактивний'}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    {!residentCabinetStatus?.is_active && (
+
+                    <div className="flex items-center gap-3">
                       <button
-                        onClick={handleOpenResidentCabinetModal}
-                        className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                        onClick={() => router.push("/settings/subscription")}
+                        className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-xl text-xs font-bold transition-all hover:scale-[1.01]"
                       >
-                        <Plus className="w-4 h-4" />
-                        Активувати модуль
+                        <Settings className="w-4 h-4" />
+                        <span>📋 Скасувати модуль</span>
                       </button>
-                    )}
+                      <button
+                        onClick={() => router.push("/settings/subscription")}
+                        className="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/10 hover:scale-[1.01]"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        <span>🔄 Змінити тариф</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {residentCabinetStatus?.is_active && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200 dark:border-slate-800/60">
-                      <div className="bg-slate-50 dark:bg-slate-900/40 rounded-xl p-4">
-                        <div className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold mb-1">Slug</div>
-                        <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  {/* Pricing and tier details */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-100 dark:border-slate-800/40 rounded-2xl p-5 space-y-1">
+                      <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 dark:text-slate-500">Тарифний план</p>
+                      <p className="text-base font-extrabold text-slate-900 dark:text-white capitalize">
+                        {(() => {
+                          const plan = residentCabinetStatus?.subscription?.plan;
+                          if (plan === "premium") return "Преміум";
+                          if (plan === "basic") return "Базовий";
+                          if (plan === "business") return "Бізнес";
+                          return "Безкоштовний";
+                        })()}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Оновлення та техпідтримка</p>
+                    </div>
+
+                    <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-100 dark:border-slate-800/40 rounded-2xl p-5 space-y-1">
+                      <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 dark:text-slate-500">Статус кабінету</p>
+                      <p className="text-base font-extrabold text-slate-900 dark:text-white">
+                        {residentCabinetStatus?.is_active ? (
+                          <span className="text-emerald-500">Активний (+500 грн/міс)</span>
+                        ) : (
+                          <span className="text-rose-500">Неактивний</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        {residentCabinetStatus?.is_active ? "Додано до поточної підписки" : "Модуль не підключений"}
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-100 dark:border-slate-800/40 rounded-2xl p-5 space-y-1">
+                      <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 dark:text-slate-500">Наступна оплата</p>
+                      <p className="text-base font-extrabold text-slate-900 dark:text-white">
+                        {residentCabinetStatus?.subscription?.expires_at ? (
+                          new Date(residentCabinetStatus.subscription.expires_at).toLocaleDateString("uk-UA")
+                        ) : (
+                          "Не вимагається"
+                        )}
+                      </p>
+                      {residentCabinetStatus?.subscription?.expires_at && (
+                        <p className="text-xs text-indigo-500 dark:text-indigo-400 font-bold mt-1">
+                          Загальна сума: {(() => {
+                            const plan = residentCabinetStatus?.subscription?.plan;
+                            const hasModule = residentCabinetStatus?.subscription?.is_member_module_active;
+                            if (plan === "premium") {
+                              return hasModule ? "1499 UAH/міс" : "999 UAH/міс";
+                            }
+                            if (plan === "basic") return "499 UAH/міс";
+                            return "0 UAH";
+                          })()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Resident statistics Card */}
+                <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-5">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-indigo-500" />
+                    <h3 className="text-sm font-black text-slate-400 dark:text-slate-400 uppercase tracking-wider">
+                      Статистика особових рахунків мешканців
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                        Всього особових рахунків
+                      </div>
+                      <div className="text-3xl font-black text-slate-900 dark:text-white">
+                        {moderationMembers.length}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">Кількість заведених об'єктів</div>
+                    </div>
+
+                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                        Зареєстровано кабінетів
+                      </div>
+                      <div className="text-3xl font-black text-indigo-500 dark:text-indigo-400">
+                        {moderationMembers.filter(m => m.account_number).length}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">Створили акаунт та пароль</div>
+                    </div>
+
+                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                        Очікують підтвердження
+                      </div>
+                      <div className="text-3xl font-black text-amber-500 dark:text-amber-400">
+                        {moderationMembers.filter(m => m.account_number && m.status === "pending").length}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">Потребують схвалення головою</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Configuration and Domain Section */}
+                {residentCabinetStatus?.is_active && (
+                  <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-6">
+                    <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                      Доступ та налаштування кабінету
+                    </h3>
+
+                    <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-2xl p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-extrabold text-indigo-850 dark:text-indigo-300">
+                            Адреса входу для мешканців
+                          </div>
+                          <div className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
+                            Мешканці вашого будинку можуть зареєструватись або авторизуватись за цією адресою:
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const url = `https://unitax.pro/osbb/${residentCabinetStatus.slug}`;
+                            navigator.clipboard.writeText(url);
+                            showToast("Посилання скопійовано!", "success");
+                          }}
+                          className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 shrink-0 hover:scale-[1.01]"
+                        >
+                          <Copy className="w-4 h-4" />
+                          <span>Копіювати посилання</span>
+                        </button>
+                      </div>
+
+                      <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                        <div className="text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 break-all">
+                          https://unitax.pro/osbb/{residentCabinetStatus.slug}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-105 dark:border-slate-800/20">
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                          Slug організації
+                        </div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-white">
                           {residentCabinetStatus.slug}
                         </div>
                         <div className="text-xs text-slate-400 mt-1">
-                          unitax.pro/osbb/{residentCabinetStatus.slug}
+                          Використовується в унікальному URL вашого кабінету
                         </div>
                       </div>
-                      <div className="bg-slate-50 dark:bg-slate-900/40 rounded-xl p-4">
-                        <div className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold mb-1">Колір теми</div>
-                        <div className="flex items-center gap-2">
+
+                      <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-105 dark:border-slate-800/20">
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                          Колір інтерфейсу
+                        </div>
+                        <div className="flex items-center gap-3">
                           <div
-                            className="w-6 h-6 rounded-lg border border-slate-200 dark:border-slate-700"
+                            className="w-6 h-6 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm shrink-0"
                             style={{ backgroundColor: residentCabinetStatus.color_theme }}
                           />
-                          <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                            {residentCabinetStatus.color_theme}
+                          <div className="text-sm font-bold text-slate-900 dark:text-white">
+                            {residentCabinetStatus.color_theme || "Не встановлено"}
                           </div>
                         </div>
-                      </div>
-                      <div className="bg-slate-50 dark:bg-slate-900/40 rounded-xl p-4">
-                        <div className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold mb-1">Підписка</div>
-                        <div className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                          Активна
-                        </div>
-                        {residentCabinetStatus.subscription?.expires_at && (
-                          <div className="text-xs text-slate-400 mt-1">
-                            До {new Date(residentCabinetStatus.subscription.expires_at).toLocaleDateString('uk-UA')}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {!residentCabinetStatus?.is_active && (
-                    <div className="pt-4 border-t border-slate-200 dark:border-slate-800/60">
-                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-                        <div className="flex items-start gap-3">
-                          <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                              Модуль кабінету мешканця
-                            </div>
-                            <div className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                              Активуйте модуль, щоб надати мешканцям доступ до особистого кабінету для перегляду балансу, показників лічильників та оплати послуг через Monobank.
-                            </div>
-                            <div className="text-xs text-amber-700 dark:text-amber-400 mt-2">
-                              <strong>Вартість:</strong> {residentCabinetStatus?.pricing?.price || 500} {residentCabinetStatus?.pricing?.currency || 'UAH'} (одноразова оплата)
-                            </div>
-                          </div>
+                        <div className="text-xs text-slate-400 mt-1">
+                          Основний бренд-колір кабінету мешканця
                         </div>
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </>
             )}
           </div>

@@ -47,7 +47,7 @@ export const api = {
     return response.data;
   },
 
-  memberRegister: async (data: { slug: string; account_number: string; password: string }) => {
+  memberRegister: async (data: { slug: string; account_number: string; password: string; full_name?: string; phone?: string; email?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/auth/member/register`, formData);
     return response.data;
@@ -805,6 +805,99 @@ export const api = {
     const response = await client.get(`/api/profiles/${profileId}/resident-cabinet-status`, {
       params: userId ? { user_id: userId } : undefined,
     });
+    return response.data;
+  },
+
+  getSubscriptionPlans: async () => {
+    const response = await client.get("/api/subscription/plans");
+    return response.data;
+  },
+
+  createSubscription: async (data: {
+    plan_id: number;
+    enable_member_module: boolean;
+    profile_id: number;
+  }) => {
+    const response = await client.post("/api/subscription/create", data);
+    return response.data;
+  },
+  getNearbyOsbb: async (lat: number, lon: number) => {
+    const response = await client.get("/api/osbb/nearby", { params: { lat, lon } });
+    return response.data;
+  },
+  resetMemberPassword: async (data: { slug: string; account_number: string; password_string: string }) => {
+    const formData = new FormData();
+    formData.append("slug", data.slug);
+    formData.append("account_number", data.account_number);
+    formData.append("password", data.password_string);
+    const response = await client.post("/api/auth/member/reset-password", formData);
+    return response.data;
+  },
+  getPendingMembers: async (profileId: number) => {
+    const response = await client.get("/api/admin/members/pending", { params: { profile_id: profileId } });
+    return response.data;
+  },
+  verifyMember: async (memberId: number, userId?: number) => {
+    const formData = new FormData();
+    if (userId) formData.append("user_id", String(userId));
+    const response = await client.post(`/api/admin/members/${memberId}/verify`, formData);
+    return response.data;
+  },
+  rejectMember: async (memberId: number) => {
+    const response = await client.post(`/api/admin/members/${memberId}/reject`);
+    return response.data;
+  },
+  getModuleStatus: async (profileId: number) => {
+    const response = await client.get("/api/admin/module/status", { params: { profile_id: profileId } });
+    return response.data;
+  },
+  generateModuleSlug: async (profileId: number, name: string) => {
+    const formData = new FormData();
+    formData.append("profile_id", String(profileId));
+    formData.append("name", name);
+    const response = await client.post("/api/admin/module/generate-slug", formData);
+    return response.data;
+  },
+  activateModule: async (profileId: number, slug: string, colorTheme?: string) => {
+    const formData = new FormData();
+    formData.append("profile_id", String(profileId));
+    formData.append("slug", slug);
+    if (colorTheme) formData.append("color_theme", colorTheme);
+    const response = await client.post("/api/admin/module/activate", formData);
+    return response.data;
+  },
+  updateTicketStatus: async (ticketId: number, status: string) => {
+    const formData = new FormData();
+    formData.append("status", status);
+    const response = await client.post(`/api/admin/tickets/${ticketId}/status`, formData);
+    return response.data;
+  },
+  createMemberPayment: async (amount: number, chargeType: string = "regular", description: string = "Оплата внеску") => {
+    const formData = new FormData();
+    formData.append("amount", String(amount));
+    formData.append("charge_type", chargeType);
+    formData.append("description", description);
+    const response = await client.post("/api/member/billing/invoice", formData);
+    return response.data;
+  },
+  getMemberNeighbors: async (token: string) => {
+    const response = await client.get("/api/member/neighbors", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  downloadMemberReceiptPdf: async (token?: string) => {
+    const response = await client.get("/api/member/receipt/pdf", {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      params: token ? { token } : undefined,
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+  getAdminProfileDetail: async (profileId: number) => {
+    const response = await client.get(`/api/admin/profile/${profileId}`);
+    return response.data;
+  },
+  getMonobankAuthorizeUrl: async (profileId: number) => {
+    const response = await client.get("/api/monobank/oauth/authorize", { params: { profile_id: profileId } });
     return response.data;
   },
 };

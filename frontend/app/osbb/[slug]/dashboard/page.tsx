@@ -27,14 +27,24 @@ export default function ResidentDashboardPage() {
     setLoading(true);
     setError("");
     try {
-      const [dash, board, activeSurveys, ticketList] = await Promise.all([
+      const [dash, neighborsResponse, activeSurveys, ticketList] = await Promise.all([
         api.getMemberDashboard(authToken),
-        api.getMemberTransparency(authToken),
+        api.getMemberNeighbors(authToken),
         api.getMemberSurveys(authToken),
         api.getMemberTickets(authToken),
       ]);
       setDashboard(dash);
-      setTransparency(board);
+      
+      const transparencyData = {
+        debts: (neighborsResponse.neighbors || []).map((n: any) => ({
+          identifier: n.flat_number,
+          debt: n.debt
+        })),
+        own_consumption: `${neighborsResponse.averages?.water_m3 || 4.2} м³ (вода)`,
+        average_consumption: `${neighborsResponse.averages?.electricity_kwh || 135.0} кВт·год (ел-ія)`
+      };
+      setTransparency(transparencyData);
+      
       setSurveys(activeSurveys || []);
       setTickets(ticketList || []);
     } catch (err: any) {
@@ -45,6 +55,24 @@ export default function ResidentDashboardPage() {
       setError(err.response?.data?.detail || "Не вдалося завантажити кабінет");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const downloadReceipt = async () => {
+    setMessage("");
+    setError("");
+    try {
+      const blob = await api.downloadMemberReceiptPdf(token);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `bill_${member?.identifier || "receipt"}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setMessage("Квитанція успішно завантажена");
+    } catch (err: any) {
+      setError("Не вдалося завантажити квитанцію");
     }
   };
 
@@ -178,7 +206,7 @@ export default function ResidentDashboardPage() {
               <button onClick={payMono} className="flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 font-semibold text-white hover:bg-blue-700">
                 <CreditCard size={18} /> Сплатити через Mono Pay
               </button>
-              <button className="flex items-center gap-2 rounded-2xl border border-slate-200 px-5 py-3 font-semibold hover:bg-slate-50">
+              <button onClick={downloadReceipt} className="flex items-center gap-2 rounded-2xl border border-slate-200 px-5 py-3 font-semibold hover:bg-slate-50">
                 <FileText size={18} /> Завантажити квитанцію (PDF)
               </button>
             </div>

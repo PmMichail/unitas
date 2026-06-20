@@ -30,6 +30,14 @@ export default function SubscriptionPage() {
   const [usage, setUsage] = useState({ used: 0, limit: 5 });
   const [paymentsList, setPaymentsList] = useState<any[]>([]);
   
+  // OSBB Plans States
+  const [plans, setPlans] = useState<any[]>([
+    { id: 1, name: "Базовий", price: 499, has_member_module: false, member_module_price: 0 },
+    { id: 2, name: "Преміум", price: 999, has_member_module: true, member_module_price: 500 }
+  ]);
+  const [selectedPlanId, setSelectedPlanId] = useState<number>(2);
+  const [enableMemberModule, setEnableMemberModule] = useState<boolean>(true);
+  
   // UI States
   const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "half_yearly" | "yearly">("monthly");
   const [loading, setLoading] = useState(false);
@@ -120,12 +128,34 @@ export default function SubscriptionPage() {
         fetchSubscriptionDetails(),
         fetchPricingDetails(),
         fetchUsageDetails(),
-        fetchPaymentsHistory()
+        fetchPaymentsHistory(),
+        fetchPlans()
       ]);
     } catch (error) {
       console.error("Error loading subscription data:", error);
     } finally {
       setLoadingData(false);
+    }
+  };
+
+  const fetchPlans = async () => {
+    try {
+      const data = await api.getSubscriptionPlans();
+      if (data && data.plans && data.plans.length > 0) {
+        setPlans(data.plans);
+        const premium = data.plans.find((p: any) => p.has_member_module);
+        if (premium) {
+          setSelectedPlanId(premium.id);
+        } else {
+          setSelectedPlanId(data.plans[0].id);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load subscription plans:", e);
+      setPlans([
+        { id: 1, name: "Базовий", price: 499, has_member_module: false, member_module_price: 0 },
+        { id: 2, name: "Преміум", price: 999, has_member_module: true, member_module_price: 500 }
+      ]);
     }
   };
 
@@ -428,212 +458,328 @@ export default function SubscriptionPage() {
             </div>
 
             {/* Plans Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              
-              {/* 1. Free plan option */}
-              <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 ${
-                !isActiveBusiness 
-                  ? "bg-slate-900/40 border-indigo-500/30" 
-                  : "bg-slate-950/20 border-slate-800/60 opacity-60 hover:opacity-85"
-              }`}>
-                <div>
-                  <div className="flex justify-between items-start">
-                    <h3 className="text-base font-bold text-slate-200">Тариф Free</h3>
-                    {!isActiveBusiness && (
-                      <span className="bg-indigo-500/10 text-indigo-450 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Базовий функціонал</p>
-                  
-                  <div className="mt-4 flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-white">0</span>
-                    <span className="text-xs text-slate-400">грн / назавжди</span>
-                  </div>
-                  
-                  <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Інтерактивний дашборд</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Імпорт до 5 виписок на місяць</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Історія транзакцій за 30 днів</span>
-                    </li>
-                  </ul>
-                </div>
-                
-                <div className="mt-6">
-                  {!isActiveBusiness ? (
-                    <button
-                      disabled
-                      className="w-full py-2.5 rounded-xl border border-indigo-500/20 bg-indigo-550/10 text-indigo-400 text-xs font-bold cursor-default"
-                    >
-                      Поточний тариф
-                    </button>
-                  ) : (
-                    <button
-                      onClick={async () => {
-                        const hasActiveBusiness = subscription?.plan === "business" && subscription?.status === "active";
-                        const expiresDate = subscription?.expires_at ? new Date(subscription.expires_at).toLocaleDateString("uk-UA") : null;
+            {(() => {
+              const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
+              if (isOSBBOrST) {
+                return (
+                  <div className="space-y-6">
+                    <div className="space-y-4">
+                      {plans.map((p) => {
+                        const isSelected = selectedPlanId === p.id;
+                        const isPremium = p.has_member_module;
                         
-                        let confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф?";
-                        if (hasActiveBusiness && expiresDate) {
-                          confirmMessage = `ℹ️ Ви вже оплатили Business-тариф до ${expiresDate}. Ви можете продовжувати користуватися всіма перевагами Business до кінця цього терміну. Після цієї дати підписка автоматично зміниться на Безкоштовну, а нових списань з картки не буде. Підтверджуєте скасування автоматичного подовження?`;
-                        } else {
-                          confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф? Ваш сплачений Business буде скасовано.";
-                        }
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => setSelectedPlanId(p.id)}
+                            className={`p-5 rounded-2xl border transition-all duration-300 cursor-pointer relative overflow-hidden ${
+                              isSelected
+                                ? "bg-slate-900/60 border-indigo-500/40 shadow-lg shadow-indigo-500/5"
+                                : "bg-slate-950/20 border-slate-800/60 hover:border-slate-700/60"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                                  isSelected ? "border-indigo-500" : "border-slate-600"
+                                }`}>
+                                  {isSelected && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-black text-slate-200">{p.name}</h4>
+                                  <p className="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">
+                                    {isPremium ? "Повний функціонал ОСББ" : "Стартовий тариф"}
+                                  </p>
+                                </div>
+                              </div>
+                              
+                              <div className="text-right">
+                                <span className="text-xl font-black text-white">{p.price}</span>
+                                <span className="text-xs text-slate-400"> грн/міс</span>
+                              </div>
+                            </div>
 
-                        if (confirm(confirmMessage)) {
-                          setLoading(true);
-                          try {
-                            const res = await api.createPayment({
-                              profile_id: selectedProfile.id,
-                              plan_type: "free",
-                              payment_period: "monthly"
-                            });
-                            
-                            if (res.deferred) {
-                              alert(`Автопродовження підписки скасовано. Ваш тариф Business діятиме до ${expiresDate}.`);
-                            } else {
-                              alert("Перехід на безкоштовний тариф активовано!");
-                            }
-                            loadData();
-                          } catch (e) {
-                            alert("Помилка при зміні тарифу");
-                          } finally {
-                            setLoading(false);
-                          }
-                        }
-                      }}
-                      className="w-full py-2.5 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-900/60 hover:bg-slate-900 text-slate-350 text-xs font-semibold transition-all"
-                    >
-                      Перейти на Free
-                    </button>
-                  )}
-
-                </div>
-              </div>
-
-              {/* 2. Business plan option */}
-              <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 relative ${
-                isActiveBusiness 
-                  ? "bg-slate-900/40 border-amber-500/30" 
-                  : "bg-slate-950/20 border-slate-800/60 hover:border-slate-700/60"
-              }`}>
-                {selectedPeriod === "yearly" && (
-                  <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
-                    Економія {yearlySavings} грн
-                  </div>
-                )}
-                {selectedPeriod === "half_yearly" && (
-                  <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
-                    Економія {halfYearlySavings} грн
-                  </div>
-                )}
-                
-                <div>
-                  <div className="flex justify-between items-start">
-                    <div className="flex items-center gap-1.5">
-                      <Crown className="w-4 h-4 text-amber-400" />
-                      <h3 className="text-base font-bold text-slate-200">Тариф Business</h3>
+                            <ul className="mt-4 pl-8 space-y-2 text-xs text-slate-400">
+                              <li className="flex items-center gap-2">
+                                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span>Білінг-панель</span>
+                              </li>
+                              <li className="flex items-center gap-2">
+                                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span>{isPremium ? "Необмежена кількість мешканців" : "До 100 мешканців"}</span>
+                              </li>
+                              {isPremium && (
+                                <>
+                                  <li className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-900" onClick={(e) => e.stopPropagation()}>
+                                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        checked={enableMemberModule}
+                                        onChange={(e) => setEnableMemberModule(e.target.checked)}
+                                        className="w-4 h-4 rounded border border-slate-700 accent-indigo-650 bg-slate-900 transition-all cursor-pointer focus:ring-0"
+                                      />
+                                      <span className="font-bold text-slate-200 flex items-center gap-1">
+                                        📱 Кабінет мешканців <span className="text-indigo-400 font-extrabold">(+{p.member_module_price} грн/міс)</span>
+                                      </span>
+                                    </label>
+                                  </li>
+                                  <li className="flex items-center gap-2">
+                                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span>Опитування та голосування</span>
+                                  </li>
+                                  <li className="flex items-center gap-2">
+                                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span>Диспетчер заявок</span>
+                                  </li>
+                                </>
+                              )}
+                            </ul>
+                          </div>
+                        );
+                      })}
                     </div>
-                    {isActiveBusiness && (
-                      <span className="bg-amber-500/10 text-amber-450 border border-amber-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Безлімітний AI доступ</p>
-                  
-                  <div className="mt-4 flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-white">
-                      {selectedPeriod === "monthly" 
-                        ? prices.monthly 
-                        : selectedPeriod === "half_yearly" 
-                          ? prices.half_yearly 
-                          : prices.yearly}
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      грн / {selectedPeriod === "monthly" 
-                        ? "міс" 
-                        : selectedPeriod === "half_yearly" 
-                          ? "пів року" 
-                          : "рік"}
-                    </span>
-                  </div>
-                  
-                  <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Всі функції Free без лімітів</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>AI генерація та авто-заповнення звітів</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Управління найманими працівниками</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Автоматична банківська синхронізація</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Експорт даних в Excel/CSV</span>
-                    </li>
-                  </ul>
-                </div>
-                
-                <div className="mt-6 space-y-2">
-                  <button
-                    onClick={handleCheckout}
-                    disabled={loading}
-                    className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-1.5 ${
-                      loading 
-                        ? "bg-amber-600/50 text-white/50 cursor-not-allowed" 
-                        : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
-                    }`}
-                  >
-                    {loading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <>
-                        <CreditCard className="w-3.5 h-3.5" />
-                        <span>
-                          Оплатити підписку ({selectedPeriod === "monthly" ? prices.monthly : selectedPeriod === "half_yearly" ? prices.half_yearly : prices.yearly} грн)
+
+                    <div className="pt-4 border-t border-slate-800/80 space-y-3">
+                      <div className="flex justify-between items-center px-2">
+                        <span className="text-xs font-bold text-slate-400">Загальна сума до сплати:</span>
+                        <span className="text-2xl font-black text-indigo-400">
+                          {selectedPlanId === 2 && enableMemberModule 
+                            ? ((plans.find(p => p.id === 2)?.price || 0) + (plans.find(p => p.id === 2)?.member_module_price || 0)) 
+                            : (plans.find(p => p.id === selectedPlanId)?.price || 0)
+                          } грн<span className="text-xs text-slate-400 font-normal"> / міс</span>
                         </span>
-                      </>
+                      </div>
+                      
+                      <button
+                        onClick={handleCheckout}
+                        disabled={loading}
+                        className={`w-full py-3 rounded-xl text-xs font-black transition-all shadow-lg flex items-center justify-center gap-2 hover:scale-[1.01] ${
+                          loading
+                            ? "bg-indigo-700/50 text-white/50 cursor-not-allowed"
+                            : "bg-gradient-to-r from-indigo-650 to-indigo-700 hover:from-indigo-600 hover:to-indigo-650 text-white shadow-indigo-600/10"
+                        }`}
+                      >
+                        {loading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <>
+                            <CreditCard className="w-4 h-4" />
+                            <span>Перейти до оплати тарифу</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* 1. Free plan option */}
+                  <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 ${
+                    !isActiveBusiness 
+                      ? "bg-slate-900/40 border-indigo-500/30" 
+                      : "bg-slate-950/20 border-slate-800/60 opacity-60 hover:opacity-85"
+                  }`}>
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <h3 className="text-base font-bold text-slate-200">Тариф Free</h3>
+                        {!isActiveBusiness && (
+                          <span className="bg-indigo-500/10 text-indigo-450 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Базовий функціонал</p>
+                      
+                      <div className="mt-4 flex items-baseline gap-1">
+                        <span className="text-3xl font-black text-white">0</span>
+                        <span className="text-xs text-slate-400">грн / назавжди</span>
+                      </div>
+                      
+                      <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Інтерактивний дашборд</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Імпорт до 5 виписок на місяць</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Історія транзакцій за 30 днів</span>
+                        </li>
+                      </ul>
+                    </div>
+                    
+                    <div className="mt-6">
+                      {!isActiveBusiness ? (
+                        <button
+                          disabled
+                          className="w-full py-2.5 rounded-xl border border-indigo-500/20 bg-indigo-550/10 text-indigo-400 text-xs font-bold cursor-default"
+                        >
+                          Поточний тариф
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            const hasActiveBusiness = subscription?.plan === "business" && subscription?.status === "active";
+                            const expiresDate = subscription?.expires_at ? new Date(subscription.expires_at).toLocaleDateString("uk-UA") : null;
+                            
+                            let confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф?";
+                            if (hasActiveBusiness && expiresDate) {
+                              confirmMessage = `ℹ️ Ви вже оплатили Business-тариф до ${expiresDate}. Ви можете продовжувати користуватися всіма перевагами Business до кінця цього терміну. Після цієї дати підписка автоматично зміниться на Безкоштовну, а нових списань з картки не буде. Підтверджуєте скасування автоматичного подовження?`;
+                            } else {
+                              confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф? Ваш сплачений Business буде скасовано.";
+                            }
+
+                            if (confirm(confirmMessage)) {
+                              setLoading(true);
+                              try {
+                                const res = await api.createPayment({
+                                  profile_id: selectedProfile.id,
+                                  plan_type: "free",
+                                  payment_period: "monthly"
+                                });
+                                
+                                if (res.deferred) {
+                                  alert(`Автопродовження підписки скасовано. Ваш тариф Business діятиме до ${expiresDate}.`);
+                                } else {
+                                  alert("Перехід на безкоштовний тариф активовано!");
+                                }
+                                loadData();
+                              } catch (e) {
+                                alert("Помилка при зміні тарифу");
+                              } finally {
+                                setLoading(false);
+                              }
+                            }
+                          }}
+                          className="w-full py-2.5 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-900/60 hover:bg-slate-900 text-slate-350 text-xs font-semibold transition-all"
+                        >
+                          Перейти на Free
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 2. Business plan option */}
+                  <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 relative ${
+                    isActiveBusiness 
+                      ? "bg-slate-900/40 border-amber-500/30" 
+                      : "bg-slate-950/20 border-slate-800/60 hover:border-slate-700/60"
+                  }`}>
+                    {selectedPeriod === "yearly" && (
+                      <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
+                        Економія {yearlySavings} грн
+                      </div>
                     )}
-                  </button>
+                    {selectedPeriod === "half_yearly" && (
+                      <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
+                        Економія {halfYearlySavings} грн
+                      </div>
+                    )}
+                    
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-1.5">
+                          <Crown className="w-4 h-4 text-amber-400" />
+                          <h3 className="text-base font-bold text-slate-200">Тариф Business</h3>
+                        </div>
+                        {isActiveBusiness && (
+                          <span className="bg-amber-500/10 text-amber-450 border border-amber-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Безлімітний AI доступ</p>
+                      
+                      <div className="mt-4 flex items-baseline gap-1">
+                        <span className="text-3xl font-black text-white">
+                          {selectedPeriod === "monthly" 
+                            ? prices.monthly 
+                            : selectedPeriod === "half_yearly" 
+                              ? prices.half_yearly 
+                              : prices.yearly}
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          грн / {selectedPeriod === "monthly" 
+                            ? "міс" 
+                            : selectedPeriod === "half_yearly" 
+                              ? "пів року" 
+                              : "рік"}
+                        </span>
+                      </div>
+                      
+                      <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Всі функції Free без лімітів</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>AI генерація та авто-заповнення звітів</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Управління найманими працівниками</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Автоматична банківська синхронізація</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Експорт даних в Excel/CSV</span>
+                        </li>
+                      </ul>
+                    </div>
+                    
+                    <div className="mt-6 space-y-2">
+                      <button
+                        onClick={handleCheckout}
+                        disabled={loading}
+                        className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-1.5 ${
+                          loading 
+                            ? "bg-amber-600/50 text-white/50 cursor-not-allowed" 
+                            : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
+                        }`}
+                      >
+                        {loading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <>
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>
+                              Оплатити підписку ({selectedPeriod === "monthly" ? prices.monthly : selectedPeriod === "half_yearly" ? prices.half_yearly : prices.yearly} грн)
+                            </span>
+                          </>
+                        )}
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={handleOpenInvoiceModal}
-                    disabled={loading}
-                    className="w-full py-2.5 rounded-xl border border-slate-700 hover:border-slate-650 bg-slate-900/40 hover:bg-slate-900 text-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Mail className="w-3.5 h-3.5" />
-                    <span>Отримати рахунок на email</span>
-                  </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenInvoiceModal}
+                        disabled={loading}
+                        className="w-full py-2.5 rounded-xl border border-slate-700 hover:border-slate-650 bg-slate-900/40 hover:bg-slate-900 text-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Отримати рахунок на email</span>
+                      </button>
 
-                  {/* Direct Demo Upgrader */}
-                  <button
-                    onClick={handleUpgradeToBusinessDemo}
-                    disabled={loading}
-                    className="w-full py-2 rounded-xl text-[10px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/5 border border-indigo-500/10 hover:bg-indigo-500/10 transition-all flex items-center justify-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3 text-indigo-400" />
-                    <span>Швидка демо-активація (без оплат)</span>
-                  </button>
+                      {/* Direct Demo Upgrader */}
+                      <button
+                        onClick={handleUpgradeToBusinessDemo}
+                        disabled={loading}
+                        className="w-full py-2 rounded-xl text-[10px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/5 border border-indigo-500/10 hover:bg-indigo-500/10 transition-all flex items-center justify-center gap-1"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Швидка демо-активація (без оплат)</span>
+                      </button>
+                    </div>
+
+                  </div>
+
                 </div>
-
-              </div>
-
-            </div>
+              );
+            })()}
 
           </div>
         </div>

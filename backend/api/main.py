@@ -2,21 +2,72 @@ import os
 import json
 import hashlib
 import uuid
+import math
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc, UniqueConstraint, LargeBinary, or_
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 from io import BytesIO
+import redis
+from cryptography.fernet import Fernet
 
 load_dotenv()
 
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api.main")
+
+# Encryption Setup for Monobank Tokens
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    ENCRYPTION_KEY = "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=" # 32 bytes of 'a' base64 encoded
+try:
+    fernet_cipher = Fernet(ENCRYPTION_KEY.encode('utf-8'))
+except Exception as e:
+    logger.error(f"Invalid ENCRYPTION_KEY, falling back to default: {e}")
+    fernet_cipher = Fernet(b"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
+
+def encrypt_token(token: str) -> str:
+    if not token:
+        return ""
+    return fernet_cipher.encrypt(token.encode('utf-8')).decode('utf-8')
+
+def decrypt_token(encrypted_token: str) -> str:
+    if not encrypted_token:
+        return ""
+    try:
+        return fernet_cipher.decrypt(encrypted_token.encode('utf-8')).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Failed to decrypt token: {e}")
+        return ""
+
+# Redis Caching Setup for Autocomplete OSBB Search
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = None
+try:
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    redis_client.ping()
+    logger.info("Connected to Redis successfully")
+except Exception as e:
+    logger.warning(f"Redis connection failed, caching will be disabled: {e}")
+    redis_client = None
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    # R is Earth's radius in kilometers
+    R = 6371.0
+    try:
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_lambda = math.radians(lon2 - lon1)
+        val = math.sin(phi1) * math.sin(phi2) + math.cos(phi1) * math.cos(phi2) * math.cos(delta_lambda)
+        val = max(-1.0, min(1.0, val))
+        return math.acos(val) * R
+    except Exception:
+        return 99999.0
 
 # Database Setup
 import os.path
@@ -273,6 +324,11 @@ class Profile(Base):
     slug = Column(String(255), unique=True, nullable=True) # Unique identifier for URLs (e.g. 'osbb-zelenyi-kurhan')
     color_theme = Column(String(7), default='#3b82f6') # Color theme for UI
     has_resident_cabinet = Column(Boolean, default=False) # Whether resident cabinet module is active for this profile
+    parent_profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True) # Parent profile for resident cabinet profiles
+    is_member_module_active = Column(Boolean, default=False) # For Phase 2 compatibility
+    member_module_activated_at = Column(DateTime, nullable=True) # Activation timestamp
+    lat = Column(Float, nullable=True) # Geolocation latitude
+    lon = Column(Float, nullable=True) # Geolocation longitude
     
     owner = relationship("User", back_populates="profiles")
     employees = relationship("Employee", back_populates="profile")
@@ -379,6 +435,8 @@ class Survey(Base):
     status = Column(String(20), default='active') # active, closed
     created_at = Column(DateTime, default=datetime.utcnow)
     ends_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("units_or_members.id"), nullable=True)
+
 
 class SurveyVote(Base):
     __tablename__ = "survey_votes"
@@ -411,6 +469,16 @@ class ResidentPushToken(Base):
     platform = Column(String(30), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"))
+    endpoint = Column(String(500), nullable=False)
+    p256dh = Column(String(200), nullable=False)
+    auth = Column(String(200), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class TaxEvent(Base):
     __tablename__ = "tax_events"
@@ -612,6 +680,7 @@ class Subscription(Base):
     # Email tracking fields
     reminder_email_sent_at = Column(DateTime, nullable=True)
     invoice_email_sent_at = Column(DateTime, nullable=True)
+    is_member_module_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -625,6 +694,14 @@ class Pricing(Base):
     price = Column(Integer, nullable=False) # in UAH
     currency = Column(String, default="UAH")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class SubscriptionPlan(Base):
+    __tablename__ = "subscription_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    price = Column(Float, nullable=False)
+    has_member_module = Column(Boolean, default=False)
+    member_module_price = Column(Float, default=0.0)
 
 class StatementUsage(Base):
     __tablename__ = "statement_usage"
@@ -1716,6 +1793,65 @@ def check_subscription_expirations_and_notify():
     finally:
         db.close()
 
+def deactivate_expired_modules():
+    """Check subscriptions daily and deactivate resident cabinet module if expired"""
+    db = SessionLocal()
+    try:
+        from datetime import datetime
+        from sqlalchemy import or_
+        
+        # Find active/pending subscriptions with member module active that have expired
+        expired_subs = db.query(Subscription).filter(
+            Subscription.is_member_module_active == True,
+            or_(
+                Subscription.status != "active",
+                Subscription.expires_at < datetime.utcnow()
+            )
+        ).all()
+        
+        for sub in expired_subs:
+            sub.is_member_module_active = False
+            
+            # Deactivate module on main profile
+            profile = db.query(Profile).filter(Profile.id == sub.profile_id).first()
+            if profile:
+                profile.has_resident_cabinet = False
+                
+                # Block the child resident cabinet profile if it exists
+                child_profile = db.query(Profile).filter(
+                    Profile.parent_profile_id == profile.id,
+                    Profile.has_resident_cabinet == True
+                ).first()
+                if child_profile:
+                    child_profile.is_blocked = True
+                    child_profile.block_reason = "Деактивовано через несплату підписки"
+                    
+                # Send notification to head
+                owner = db.query(User).filter(User.id == profile.user_id).first()
+                if owner:
+                    message_text = f"⚠️ *Модуль мешканців деактивовано*\n\nДля вашого ОСББ '{profile.name}' модуль кабінету мешканців було деактивовано через закінчення терміну або несплату підписки."
+                    try:
+                        if owner.telegram_id:
+                            send_telegram_async(owner.telegram_id, message_text)
+                        if owner.email:
+                            send_email_with_attachments(
+                                owner.email,
+                                "UniTax: Деактивація модуля мешканців",
+                                message_text.replace("*", ""),
+                                []
+                            )
+                    except Exception as notify_err:
+                        print(f"[SCHEDULER ERROR] Failed to notify owner {owner.id}: {notify_err}")
+                        
+            db.commit()
+            print(f"[SCHEDULER] Deactivated expired resident module for profile {sub.profile_id}")
+            
+    except Exception as e:
+        print(f"[SCHEDULER ERROR] deactivate_expired_modules failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
 def run_periodic_scheduler():
     import time
     # Sleep on startup to let DB/API initialize and migrations complete
@@ -1729,6 +1865,10 @@ def run_periodic_scheduler():
             check_subscription_expirations_and_notify()
         except Exception as e:
             print(f"[SCHEDULER LOOP ERROR EXPIRATIONS] {e}")
+        try:
+            deactivate_expired_modules()
+        except Exception as e:
+            print(f"[SCHEDULER LOOP ERROR DEACTIVATION] {e}")
         # Run checks every 12 hours (43200 seconds)
         time.sleep(43200)
 
@@ -4455,7 +4595,7 @@ def create_billing_invoice(
     if not member:
         raise HTTPException(status_code=404, detail="Мешканця/об'єкт не знайдено")
         
-    mono_token = (getattr(profile, "mono_api_token", None) or "").strip()
+    mono_token = decrypt_token((getattr(profile, "mono_api_token", None) or "").strip())
     if not mono_token:
         raise HTTPException(status_code=400, detail="Monobank API token for this ОСББ/СТ is not configured")
         
@@ -5009,7 +5149,7 @@ def update_profile_endpoint(
     if starting_debt_pdfo is not None:
         profile.starting_debt_pdfo = starting_debt_pdfo
     if mono_api_token is not None:
-        profile.mono_api_token = mono_api_token.strip() or None
+        profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
     if slug is not None:
         profile.slug = slug.strip().lower() or None
     if color_theme is not None:
@@ -7021,9 +7161,19 @@ def auth_reset_password(
 
 @app.get("/api/osbb/search")
 def search_osbb(query: str = Query(..., min_length=2), db: Session = Depends(get_db)):
-    """Search OSBB/ST by name, address, or tax_id (EDRPOU) with autocomplete"""
+    """Search OSBB/ST by name, address, or tax_id (EDRPOU) with autocomplete and Redis caching"""
     query_clean = query.strip().lower()
     
+    cache_key = f"osbb_search:{query_clean}"
+    if redis_client:
+        try:
+            cached = redis_client.get(cache_key)
+            if cached:
+                logger.info(f"Redis cache hit for query: {query_clean}")
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Error reading from Redis: {e}")
+            
     # Search in profiles for non-profit organizations (OSBB, ST, etc.)
     profiles = db.query(Profile).filter(
         Profile.organization_subtype.in_(['osbb', 'st', 'go', 'bf', 'jbk']),
@@ -7045,7 +7195,42 @@ def search_osbb(query: str = Query(..., min_length=2), db: Session = Depends(get
             "color_theme": p.color_theme,
             "organization_subtype": p.organization_subtype
         })
+        
+    response_data = {"results": results}
+    if redis_client:
+        try:
+            redis_client.setex(cache_key, 3600, json.dumps(response_data))
+        except Exception as e:
+            logger.warning(f"Error writing to Redis: {e}")
+            
+    return response_data
+
+@app.get("/api/osbb/nearby")
+def get_nearby_osbb(lat: float, lon: float, radius: float = 10.0, db: Session = Depends(get_db)):
+    """Find active non-profit profiles inside specified radius using spherical law of cosines"""
+    profiles = db.query(Profile).filter(
+        Profile.organization_subtype.in_(['osbb', 'st', 'go', 'bf', 'jbk']),
+        Profile.lat.isnot(None),
+        Profile.lon.isnot(None)
+    ).all()
     
+    results = []
+    for p in profiles:
+        dist = calculate_distance(lat, lon, p.lat, p.lon)
+        if dist <= radius:
+            results.append({
+                "id": p.id,
+                "name": p.name,
+                "address": p.address,
+                "tax_id": p.tax_id,
+                "slug": p.slug,
+                "color_theme": p.color_theme,
+                "organization_subtype": p.organization_subtype,
+                "lat": p.lat,
+                "lon": p.lon,
+                "distance_km": round(dist, 2)
+            })
+    results.sort(key=lambda x: x["distance_km"])
     return {"results": results}
 
 @app.get("/api/osbb/by-slug/{slug}")
@@ -7074,9 +7259,12 @@ def member_register(
     slug: str = Form(...),
     account_number: str = Form(...),
     password: str = Form(...),
+    full_name: str = Form(...),
+    phone: str = Form(...),
+    email: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Register a resident account - sets password and creates pending status"""
+    """Register a resident account - sets password, details, and creates pending status"""
     # Find OSBB by slug
     profile = db.query(Profile).filter(
         Profile.slug == slug,
@@ -7085,6 +7273,13 @@ def member_register(
     
     if not profile:
         raise HTTPException(status_code=404, detail="ОСББ не знайдено")
+        
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile.id).first()
+    if not subscription or subscription.status != "active" or (subscription.expires_at and subscription.expires_at < datetime.utcnow()):
+        raise HTTPException(status_code=403, detail="Підписка неактивна. Зверніться до голови ОСББ.")
+    
+    if not getattr(subscription, "is_member_module_active", False):
+        raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
     
     # Find member by account_number
     member = db.query(UnitOrMember).filter(
@@ -7099,12 +7294,16 @@ def member_register(
     if member.password_hash:
         raise HTTPException(status_code=400, detail="Акаунт вже зареєстровано. Використовуйте логін.")
     
-    # Hash password and set pending status
+    # Hash password and set details & pending status
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
     member.password_hash = hashed
+    member.owner_name = full_name.strip()
+    member.phone = phone.strip()
+    member.email = email.strip().lower()
     member.status = "pending"
     member.account_number = f"{slug.upper()}-{account_number}"  # Generate unique account number
     db.commit()
+    
     if member.email:
         import threading
         threading.Thread(
@@ -7124,6 +7323,43 @@ def member_register(
         "account_number": member.account_number
     }
 
+@app.post("/api/auth/member/reset-password")
+def member_reset_password(
+    slug: str = Form(...),
+    account_number: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Reset member password - sets password and returns to pending status for safety"""
+    profile = db.query(Profile).filter(
+        Profile.slug == slug,
+        Profile.organization_subtype.in_(['osbb', 'st', 'go', 'bf', 'jbk'])
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="ОСББ не знайдено")
+        
+    member = db.query(UnitOrMember).filter(
+        UnitOrMember.profile_id == profile.id,
+        or_(
+            UnitOrMember.identifier == account_number,
+            UnitOrMember.account_number == account_number
+        )
+    ).first()
+    
+    if not member:
+        raise HTTPException(status_code=404, detail="Особовий рахунок не знайдено")
+        
+    hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
+    member.password_hash = hashed
+    member.status = "pending"
+    db.commit()
+    
+    return {
+        "status": "pending",
+        "message": "Пароль змінено. Очікуйте на повторне підтвердження головою правління."
+    }
+
 @app.post("/api/auth/member/login")
 def member_login(
     slug: str = Form(...),
@@ -7140,6 +7376,13 @@ def member_login(
     
     if not profile:
         raise HTTPException(status_code=404, detail="ОСББ не знайдено")
+        
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile.id).first()
+    if not subscription or subscription.status != "active" or (subscription.expires_at and subscription.expires_at < datetime.utcnow()):
+        raise HTTPException(status_code=403, detail="Підписка неактивна. Зверніться до голови ОСББ.")
+    
+    if not getattr(subscription, "is_member_module_active", False):
+        raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
     
     # Find member by account_number
     member = db.query(UnitOrMember).filter(
@@ -7197,10 +7440,19 @@ def member_login(
         }
     }
 
-def verify_member_token(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    if not authorization or not authorization.startswith("Bearer "):
+def verify_member_token(
+    authorization: Optional[str] = Header(None),
+    token_query: Optional[str] = Query(None, alias="token"),
+    db: Session = Depends(get_db)
+):
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "", 1).strip()
+    elif token_query:
+        token = token_query.strip()
+        
+    if not token:
         raise HTTPException(status_code=401, detail="Member authorization required")
-    token = authorization.replace("Bearer ", "", 1).strip()
     try:
         import jwt
         JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "unitas-secret-key-2024")
@@ -7209,15 +7461,24 @@ def verify_member_token(authorization: Optional[str] = Header(None), db: Session
         raise HTTPException(status_code=401, detail="Invalid member token")
     if payload.get("role") != "member":
         raise HTTPException(status_code=403, detail="Member access required")
+        
+    profile_id = payload.get("profile_id")
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if not subscription or subscription.status != "active" or (subscription.expires_at and subscription.expires_at < datetime.utcnow()):
+        raise HTTPException(status_code=403, detail="Підписка неактивна. Зверніться до голови ОСББ.")
+    
+    if not getattr(subscription, "is_member_module_active", False):
+        raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
+
     member = db.query(UnitOrMember).filter(
         UnitOrMember.id == payload.get("member_id"),
-        UnitOrMember.profile_id == payload.get("profile_id")
+        UnitOrMember.profile_id == profile_id
     ).first()
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     if member.status != "approved":
         raise HTTPException(status_code=403, detail="Member account is not approved")
-    return {"member": member, "profile_id": payload.get("profile_id"), "member_id": payload.get("member_id")}
+    return {"member": member, "profile_id": profile_id, "member_id": payload.get("member_id")}
 
 def notify_resident(db: Session, member: UnitOrMember, subject: str, body: str):
     if member.email:
@@ -7272,7 +7533,7 @@ def create_member_billing_invoice(
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
     member = auth["member"]
-    mono_token = (getattr(profile, "mono_api_token", None) or "").strip()
+    mono_token = decrypt_token((getattr(profile, "mono_api_token", None) or "").strip())
     if not mono_token:
         raise HTTPException(status_code=400, detail="Monobank API token for this ОСББ/СТ is not configured")
     if amount <= 0:
@@ -7294,6 +7555,445 @@ def create_member_billing_invoice(
         logger.error(f"Error creating member Monobank invoice: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     return {"pageUrl": page_url}
+
+@app.get("/api/member/neighbors")
+def get_member_neighbors(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    """Neighbors Board - transparency flat numbers & debts, consumption averages"""
+    profile_id = auth["profile_id"]
+    members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id).all()
+    
+    neighbors_data = []
+    for m in members:
+        debt = -m.balance if m.balance < 0 else 0.0
+        neighbors_data.append({
+            "flat_number": m.identifier,
+            "debt": round(debt, 2),
+            "is_current": m.id == auth["member_id"]
+        })
+        
+    avg_water = 4.2
+    avg_electricity = 135.0
+    avg_gas = 8.5
+    
+    return {
+        "neighbors": neighbors_data,
+        "averages": {
+            "water_m3": avg_water,
+            "electricity_kwh": avg_electricity,
+            "gas_m3": avg_gas
+        }
+    }
+
+@app.get("/api/member/receipt/pdf")
+def get_member_receipt_pdf(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    """Generate professional PDF bill receipt with a login QR code for the member"""
+    import qrcode
+    from io import BytesIO
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    
+    member = auth["member"]
+    profile = db.query(Profile).filter(Profile.id == auth["profile_id"]).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    font_name = get_cyrillic_font()
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontName=font_name,
+        fontSize=14,
+        leading=18,
+        alignment=1,
+        textColor=colors.HexColor('#1f2937')
+    )
+    normal_style = ParagraphStyle(
+        'NormalStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor('#4b5563')
+    )
+    bold_style = ParagraphStyle(
+        'BoldStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor('#111827')
+    )
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    story = []
+    
+    current_month_name = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"][datetime.utcnow().month - 1]
+    year = datetime.utcnow().year
+    story.append(Paragraph(f"КВИТАНЦІЯ ПРО ОПЛАТУ ЗА {current_month_name.upper()} {year}", title_style))
+    story.append(Spacer(1, 12))
+    
+    details_data = [
+        [
+            Paragraph(f"<b>Отримувач:</b> {profile.name}<br/><b>Адреса:</b> {profile.address or ''}<br/><b>ЄДРПОУ:</b> {profile.tax_id or ''}<br/><b>IBAN:</b> {profile.iban or ''}", normal_style),
+            Paragraph(f"<b>Платник:</b> {member.owner_name or 'Мешканець'}<br/><b>Особовий рахунок:</b> {member.account_number or member.identifier}<br/><b>Квартира:</b> {member.identifier}<br/><b>Баланс:</b> {member.balance:.2f} грн", normal_style)
+        ]
+    ]
+    t_details = Table(details_data, colWidths=[270, 270])
+    t_details.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('PADDING', (0,0), (-1,-1), 6),
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f9fafb')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+    ]))
+    story.append(t_details)
+    story.append(Spacer(1, 12))
+    
+    charges_header = [Paragraph("<b>Послуга</b>", bold_style), Paragraph("<b>Показник</b>", bold_style), Paragraph("<b>Тариф</b>", bold_style), Paragraph("<b>Нараховано (грн)</b>", bold_style)]
+    charges_rows = []
+    
+    maintenance_fee = member.fixed_monthly_fee or 0.0
+    if member.area and member.rate_per_sqm:
+        maintenance_fee = member.area * member.rate_per_sqm
+        desc = f"Утримання будинку ({member.area} кв.м * {member.rate_per_sqm:.2f} грн)"
+    else:
+        desc = "Утримання будинку (фіксований внесок)"
+        
+    charges_rows.append([Paragraph(desc, normal_style), Paragraph("-", normal_style), Paragraph(f"{member.rate_per_sqm or 0.0:.2f}", normal_style), Paragraph(f"{maintenance_fee:.2f}", normal_style)])
+    
+    total_accrued = maintenance_fee
+    
+    meters = db.query(Meter).filter(Meter.member_id == member.id).all()
+    for m in meters:
+        last_reading = db.query(MeterReading).filter(MeterReading.meter_id == m.id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).first()
+        prev_val = m.initial_reading
+        curr_val = last_reading.reading_value if last_reading else m.initial_reading
+        consumption = max(0.0, curr_val - prev_val)
+        meter_amount = consumption * m.tariff
+        total_accrued += meter_amount
+        
+        type_ua = {"electricity": "Електроенергія", "water": "Водопостачання", "gas": "Газ", "heat": "Опалення"}.get(m.type, m.name)
+        charges_rows.append([
+            Paragraph(f"{type_ua} (Лічильник: {m.name})", normal_style),
+            Paragraph(f"{curr_val} (спож. {consumption})", normal_style),
+            Paragraph(f"{m.tariff:.2f}", normal_style),
+            Paragraph(f"{meter_amount:.2f}", normal_style)
+        ])
+        
+    table_data = [charges_header] + charges_rows
+    table_data.append([Paragraph("<b>ВСЬОГО ДО ОПЛАТИ:</b>", bold_style), "", "", Paragraph(f"<b>{total_accrued:.2f}</b>", bold_style)])
+    
+    t_charges = Table(table_data, colWidths=[240, 100, 100, 100])
+    t_charges.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('PADDING', (0,0), (-1,-1), 5),
+        ('GRID', (0,0), (-1,-2), 0.5, colors.HexColor('#e5e7eb')),
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f3f4f6')),
+        ('SPAN', (0,-1), (2,-1)),
+        ('ALIGN', (3,0), (3,-1), 'RIGHT'),
+        ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor('#9ca3af')),
+    ]))
+    story.append(t_charges)
+    story.append(Spacer(1, 15))
+    
+    frontend_url = os.getenv("FRONTEND_URL", "https://unitax.pro")
+    login_url = f"{frontend_url}/osbb/{profile.slug}/login?account={member.account_number or member.identifier}"
+    
+    qr = qrcode.QRCode(version=1, box_size=5, border=1)
+    qr.add_data(login_url)
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="black", back_color="white")
+    
+    qr_buffer = BytesIO()
+    qr_img.save(qr_buffer, format="PNG")
+    qr_buffer.seek(0)
+    
+    rl_qr_image = RLImage(qr_buffer, width=80, height=80)
+    
+    footer_data = [
+        [
+            rl_qr_image,
+            Paragraph(f"<b>Швидкий вхід до кабінету мешканця</b><br/>Скануйте QR-код для переходу в особистий кабінет, передачі показників лічильників та миттєвої онлайн-оплати без комісії.<br/><font color='#3b82f6'><b>{login_url}</b></font>", normal_style)
+        ]
+    ]
+    t_footer = Table(footer_data, colWidths=[100, 440])
+    t_footer.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('PADDING', (0,0), (-1,-1), 8),
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#eff6ff')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#bfdbfe')),
+    ]))
+    story.append(t_footer)
+    
+    doc.build(story)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    
+    filename = f"bill_{member.identifier}.pdf"
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/api/admin/profile/{profile_id}")
+def get_admin_profile_detail(profile_id: int, db: Session = Depends(get_db)):
+    """Return active profile detail card"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "address": profile.address,
+        "tax_id": profile.tax_id,
+        "iban": profile.iban,
+        "is_member_module_active": profile.is_member_module_active,
+        "slug": profile.slug
+    }
+
+def transliterate_ua_to_latin(text: str) -> str:
+    rules = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'h', 'ґ': 'g', 'д': 'd', 'е': 'e', 'є': 'ye',
+        'ж': 'zh', 'з': 'z', 'и': 'y', 'і': 'i', 'ї': 'yi', 'й': 'y', 'к': 'k', 'л': 'l',
+        'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ь': '', 'ю': 'yu', 'я': 'ya',
+        'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'H', 'Ґ': 'G', 'Д': 'D', 'Е': 'E', 'Є': 'Ye',
+        'Ж': 'Zh', 'З': 'Z', 'И': 'Y', 'І': 'I', 'Ї': 'Yi', 'Й': 'Y', 'К': 'K', 'Л': 'L',
+        'М': 'M', 'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
+        'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Shch', 'Ь': '', 'Ю': 'Yu', 'Я': 'Ya'
+    }
+    translit = "".join(rules.get(c, c) for c in text)
+    translit = translit.lower()
+    import re
+    translit = re.sub(r'[^a-z0-9\-]', '-', translit)
+    translit = re.sub(r'-+', '-', translit)
+    return translit.strip('-')
+
+@app.post("/api/admin/module/generate-slug")
+def admin_generate_slug(profile_id: int = Form(...), name: str = Form(...), db: Session = Depends(get_db)):
+    """Generate a unique Latin transliterated slug based on OSBB name"""
+    base_slug = transliterate_ua_to_latin(name)
+    if not base_slug:
+        base_slug = "osbb"
+    slug = base_slug
+    counter = 1
+    while True:
+        existing = db.query(Profile).filter(Profile.slug == slug, Profile.id != profile_id).first()
+        if not existing:
+            break
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    return {"slug": slug}
+
+@app.post("/api/admin/module/activate")
+def admin_activate_module(
+    profile_id: int = Form(...),
+    slug: str = Form(...),
+    color_theme: Optional[str] = Form("#3b82f6"),
+    db: Session = Depends(get_db)
+):
+    """Activate member module and spawn child profile"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    slug_clean = slug.strip().lower()
+    existing = db.query(Profile).filter(Profile.slug == slug_clean, Profile.id != profile_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Цей URL-адрес (slug) вже зайнятий іншим ОСББ")
+        
+    profile.is_member_module_active = True
+    profile.member_module_activated_at = datetime.utcnow()
+    profile.has_resident_cabinet = True
+    profile.slug = slug_clean
+    profile.color_theme = color_theme or "#3b82f6"
+    
+    sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if not sub:
+        sub = Subscription(
+            profile_id=profile_id,
+            plan="premium",
+            status="active",
+            expires_at=datetime.utcnow() + timedelta(days=365*10),
+            amount=500.0,
+            is_member_module_active=True
+        )
+        db.add(sub)
+    else:
+        sub.is_member_module_active = True
+        sub.status = "active"
+        
+    osbb_enterprise = db.query(Profile).filter(
+        Profile.parent_profile_id == profile.id,
+        Profile.has_resident_cabinet == True
+    ).first()
+    if not osbb_enterprise:
+        osbb_enterprise = Profile(
+            user_id=profile.user_id,
+            name=f"{profile.name} (Кабінет мешканців)",
+            tax_id=profile.tax_id,
+            address=profile.address,
+            tax_system="non_profit",
+            slug=slug_clean,
+            mono_api_token=profile.mono_api_token,
+            color_theme=profile.color_theme,
+            has_resident_cabinet=True,
+            is_member_module_active=True,
+            member_module_activated_at=datetime.utcnow(),
+            parent_profile_id=profile.id,
+            organization_subtype="osbb"
+        )
+        db.add(osbb_enterprise)
+        
+    db.commit()
+    return {"status": "success", "message": "Модуль активовано"}
+
+@app.get("/api/admin/module/status")
+def admin_module_status(profile_id: int = Query(...), db: Session = Depends(get_db)):
+    """Retrieve activation and Monobank sync status"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    return {
+        "is_active": bool(profile.is_member_module_active),
+        "activated_at": profile.member_module_activated_at.isoformat() if profile.member_module_activated_at else None,
+        "slug": profile.slug,
+        "has_monobank": bool(profile.mono_api_token)
+    }
+
+@app.post("/api/admin/tickets/{ticket_id}/status")
+def admin_update_ticket_status(ticket_id: int, status: str = Form(...), db: Session = Depends(get_db)):
+    """Allow managers to update ticket status"""
+    if status not in ["new", "in_progress", "done", "rejected"]:
+        raise HTTPException(status_code=400, detail="Невірний статус")
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Заявку не знайдено")
+    ticket.status = status
+    ticket.updated_at = datetime.utcnow()
+    db.commit()
+    
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == ticket.member_id).first()
+    if member:
+        status_ua = {"new": "Нова", "in_progress": "В роботі", "done": "Виконано", "rejected": "Відхилено"}.get(status, status)
+        notify_resident(
+            db,
+            member,
+            "Статус заявки змінено",
+            f"Статус вашої заявки '{ticket.title}' було змінено на: {status_ua}."
+        )
+    return {"status": "success", "ticket_id": ticket.id, "ticket_status": ticket.status}
+
+@app.get("/api/monobank/oauth/authorize")
+def monobank_oauth_authorize(profile_id: int):
+    """Redirect to Monobank merchant oauth authorization page"""
+    client_id = os.getenv("MONOBANK_CLIENT_ID", "default_client_id")
+    api_base_url = os.getenv("API_BASE_URL", "https://api.unitax.pro")
+    redirect_uri = f"{api_base_url}/api/monobank/oauth/callback"
+    state = str(profile_id)
+    authorize_url = f"https://web.monobank.ua/signin?client_id={client_id}&redirect_uri={redirect_uri}&state={state}"
+    return {"authorize_url": authorize_url}
+
+@app.get("/api/monobank/oauth/callback")
+def monobank_oauth_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """Receive code and exchange it with Monobank for the access token"""
+    profile_id = int(state)
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    client_id = os.getenv("MONOBANK_CLIENT_ID", "default_client_id")
+    client_secret = os.getenv("MONOBANK_CLIENT_SECRET", "default_client_secret")
+    
+    if client_id == "default_client_id":
+        access_token = f"mock_mono_token_{uuid.uuid4().hex}"
+    else:
+        token_url = "https://api.monobank.ua/api/merchant/token"
+        payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "grant_type": "authorization_code"
+        }
+        try:
+            import requests
+            res = requests.post(token_url, json=payload)
+            if res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Monobank OAuth failed: {res.text}")
+            access_token = res.json().get("access_token")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Monobank OAuth connection failed: {str(e)}")
+            
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Token not received from Monobank")
+        
+    profile.mono_api_token = encrypt_token(access_token)
+    db.commit()
+    
+    frontend_url = os.getenv("FRONTEND_URL", "https://www.unitax.pro")
+    return RedirectResponse(url=f"{frontend_url}/admin/module/4?success=true&profile_id={profile_id}")
+
+@app.get("/api/admin/members/pending")
+def get_admin_members_pending(profile_id: int = Query(...), db: Session = Depends(get_db)):
+    """Retrieve pending registrants for active profile"""
+    members = db.query(UnitOrMember).filter(
+        UnitOrMember.profile_id == profile_id,
+        UnitOrMember.status == "pending"
+    ).order_by(UnitOrMember.id.desc()).all()
+    
+    return [{
+        "id": m.id,
+        "identifier": m.identifier,
+        "owner_name": m.owner_name,
+        "email": m.email,
+        "phone": m.phone,
+        "account_number": m.account_number,
+        "status": m.status,
+        "property_type": m.property_type
+    } for m in members]
+
+@app.post("/api/admin/members/{member_id}/verify")
+def verify_admin_member(member_id: int, user_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
+    """Approve a member"""
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Мешканця не знайдено")
+    profile = db.query(Profile).filter(Profile.id == member.profile_id).first()
+    member.status = "approved"
+    member.verified_at = datetime.utcnow()
+    member.verified_by = user_id
+    db.commit()
+    
+    notify_resident(
+        db,
+        member,
+        f"{profile.name if profile else 'UniTax'}: доступ до кабінету підтверджено",
+        f"Ваш доступ до кабінету мешканця підтверджено. Тепер ви можете увійти та користуватись кабінетом."
+    )
+    return {"status": "success", "member_status": member.status}
+
+@app.post("/api/admin/members/{member_id}/reject")
+def reject_admin_member(member_id: int, db: Session = Depends(get_db)):
+    """Reject/Block a member"""
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Мешканця не знайдено")
+    profile = db.query(Profile).filter(Profile.id == member.profile_id).first()
+    member.status = "blocked"
+    db.commit()
+    
+    notify_resident(
+        db,
+        member,
+        f"{profile.name if profile else 'UniTax'}: доступ до кабінету заблоковано",
+        f"Ваш доступ до кабінету мешканця заблоковано. Зверніться до голови правління для уточнення."
+    )
+    return {"status": "success", "member_status": member.status}
 
 @app.get("/api/profiles/{profile_id}/members/moderation")
 def get_members_moderation(profile_id: int, status: Optional[str] = None, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -12827,7 +13527,8 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
         if len(parts) >= 3:
             try:
                 profile_for_signature = db.query(Profile).filter(Profile.id == int(parts[2])).first()
-                signature_token = (getattr(profile_for_signature, "mono_api_token", None) or "").strip() if profile_for_signature else None
+                enc_token = (getattr(profile_for_signature, "mono_api_token", None) or "").strip() if profile_for_signature else None
+                signature_token = decrypt_token(enc_token) if enc_token else None
             except Exception:
                 signature_token = None
 
@@ -12971,6 +13672,30 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
             subscription.last_payment_date = datetime.utcnow()
             subscription.liqpay_order_id = invoice_id
             subscription.auto_renew = True
+
+            # Enable/disable member module and update profiles based on reference
+            enable_module = False
+            if len(parts) >= 8 and parts[6] == "member":
+                enable_module = (parts[7] == "1")
+            
+            subscription.is_member_module_active = enable_module
+            
+            profile = db.query(Profile).filter(Profile.id == profile_id).first()
+            if profile:
+                profile.has_resident_cabinet = enable_module
+                
+                # Check child resident cabinet profile
+                child_profile = db.query(Profile).filter(
+                    Profile.parent_profile_id == profile_id,
+                    Profile.has_resident_cabinet == True
+                ).first()
+                if child_profile:
+                    if enable_module:
+                        child_profile.is_blocked = False
+                        child_profile.block_reason = None
+                    else:
+                        child_profile.is_blocked = True
+                        child_profile.block_reason = "Деактивовано: модуль не оплачено в підписці"
             
             # Send payment success email
             profile = subscription.profile
@@ -13001,6 +13726,8 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
 
 FEATURES = {
     "free": ["dashboard", "upload_statement", "settings", "taxes"],
+    "basic": ["dashboard", "upload_statement", "settings", "taxes"],
+    "premium": ["dashboard", "upload_statement", "settings", "taxes", "reports", "employees", "bank_sync", "api", "liqpay"],
     "business": ["dashboard", "upload_statement", "settings", "taxes", "reports", "employees", "bank_sync", "api", "liqpay"]
 }
 
@@ -13016,6 +13743,22 @@ def check_feature_access(profile_id: int, feature: str, db: Session) -> bool:
     else:
         plan = subscription.plan or "free"
     return feature in FEATURES.get(plan, [])
+
+@app.get("/api/subscription/plans")
+def get_subscription_plans(db: Session = Depends(get_db)):
+    plans = db.query(SubscriptionPlan).all()
+    return {
+        "plans": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "price": float(p.price),
+                "has_member_module": bool(p.has_member_module),
+                "member_module_price": float(p.member_module_price)
+            }
+            for p in plans
+        ]
+    }
 
 @app.get("/api/subscription/{profile_id}")
 def get_subscription(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -15722,6 +16465,185 @@ def migrate_database():
         else:
             print("invoice_email_sent_at column already exists")
         
+        # Check and add columns to profiles table for OSBB Resident Cabinet
+        profiles_columns = [col['name'] for col in inspector.get_columns('profiles')]
+        print(f"Existing columns in profiles table: {profiles_columns}")
+        
+        if 'mono_api_token' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN mono_api_token VARCHAR(255)"))
+                db.commit()
+                print("Added mono_api_token column to profiles table")
+            except Exception as e:
+                print(f"Error adding mono_api_token: {e}")
+                db.rollback()
+                
+        if 'slug' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN slug VARCHAR(255) UNIQUE"))
+                db.commit()
+                print("Added slug column to profiles table")
+            except Exception as e:
+                print(f"Error adding slug: {e}")
+                db.rollback()
+                
+        if 'color_theme' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN color_theme VARCHAR(7) DEFAULT '#3b82f6'"))
+                db.commit()
+                print("Added color_theme column to profiles table")
+            except Exception as e:
+                print(f"Error adding color_theme: {e}")
+                db.rollback()
+                
+        if 'has_resident_cabinet' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN has_resident_cabinet BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added has_resident_cabinet column to profiles table")
+            except Exception as e:
+                print(f"Error adding has_resident_cabinet: {e}")
+                db.rollback()
+                
+        if 'parent_profile_id' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN parent_profile_id INTEGER REFERENCES profiles(id)"))
+                db.commit()
+                print("Added parent_profile_id column to profiles table")
+            except Exception as e:
+                print(f"Error adding parent_profile_id: {e}")
+                db.rollback()
+
+        if 'is_member_module_active' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN is_member_module_active BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added is_member_module_active column to profiles table")
+            except Exception as e:
+                print(f"Error adding is_member_module_active: {e}")
+                db.rollback()
+
+        if 'member_module_activated_at' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN member_module_activated_at TIMESTAMP"))
+                db.commit()
+                print("Added member_module_activated_at column to profiles table")
+            except Exception as e:
+                print(f"Error adding member_module_activated_at: {e}")
+                db.rollback()
+
+        if 'lat' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN lat FLOAT"))
+                db.commit()
+                print("Added lat column to profiles table")
+            except Exception as e:
+                print(f"Error adding lat: {e}")
+                db.rollback()
+
+        if 'lon' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN lon FLOAT"))
+                db.commit()
+                print("Added lon column to profiles table")
+            except Exception as e:
+                print(f"Error adding lon: {e}")
+                db.rollback()
+
+        # Add is_member_module_active column to subscriptions table if not present
+        subscriptions_columns = [col['name'] for col in inspector.get_columns('subscriptions')]
+        if 'is_member_module_active' not in subscriptions_columns:
+            try:
+                db.execute(text("ALTER TABLE subscriptions ADD COLUMN is_member_module_active BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added is_member_module_active column to subscriptions table")
+            except Exception as e:
+                print(f"Error adding is_member_module_active: {e}")
+                db.rollback()
+
+        # Add created_by column to surveys table if not present
+        surveys_columns = [col['name'] for col in inspector.get_columns('surveys')]
+        if 'created_by' not in surveys_columns:
+            try:
+                db.execute(text("ALTER TABLE surveys ADD COLUMN created_by INTEGER REFERENCES units_or_members(id)"))
+                db.commit()
+                print("Added created_by column to surveys table")
+            except Exception as e:
+                print(f"Error adding created_by to surveys: {e}")
+                db.rollback()
+
+        # Create push_subscriptions table if it doesn't exist
+        if not inspector.has_table('push_subscriptions'):
+            try:
+                if db.bind.dialect.name == 'postgresql':
+                    db.execute(text("""
+                        CREATE TABLE push_subscriptions (
+                            id SERIAL PRIMARY KEY,
+                            member_id INT REFERENCES units_or_members(id) ON DELETE CASCADE,
+                            endpoint VARCHAR(500) NOT NULL,
+                            p256dh VARCHAR(200) NOT NULL,
+                            auth VARCHAR(200) NOT NULL,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """))
+                else:
+                    db.execute(text("""
+                        CREATE TABLE push_subscriptions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            member_id INTEGER REFERENCES units_or_members(id) ON DELETE CASCADE,
+                            endpoint TEXT NOT NULL,
+                            p256dh TEXT NOT NULL,
+                            auth TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                db.commit()
+                print("Created push_subscriptions table")
+            except Exception as e:
+                print(f"Error creating push_subscriptions: {e}")
+                db.rollback()
+
+        # Create subscription_plans table if it doesn't exist
+        try:
+            if not inspector.has_table('subscription_plans'):
+                if db.bind.dialect.name == 'postgresql':
+                    db.execute(text("""
+                        CREATE TABLE subscription_plans (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            price DECIMAL(10,2) NOT NULL,
+                            has_member_module BOOLEAN DEFAULT FALSE,
+                            member_module_price DECIMAL(10,2) DEFAULT 0
+                        )
+                    """))
+                else:
+                    db.execute(text("""
+                        CREATE TABLE subscription_plans (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT NOT NULL,
+                            price DECIMAL(10,2) NOT NULL,
+                            has_member_module BOOLEAN DEFAULT FALSE,
+                            member_module_price DECIMAL(10,2) DEFAULT 0
+                        )
+                    """))
+                db.commit()
+                print("Created subscription_plans table")
+            
+            # Seed default plans if table is empty
+            count = db.execute(text("SELECT COUNT(*) FROM subscription_plans")).scalar()
+            if count == 0:
+                if db.bind.dialect.name == 'postgresql':
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Базовий', 499.00, FALSE, 0.00)"))
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Преміум', 999.00, TRUE, 500.00)"))
+                else:
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Базовий', 499.00, 0, 0.00)"))
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Преміум', 999.00, 1, 500.00)"))
+                db.commit()
+                print("Inserted default subscription plans")
+        except Exception as e:
+            print(f"Error checking/seeding subscription_plans: {e}")
+            db.rollback()
+        
         print("Database migration completed successfully")
     except Exception as e:
         print(f"Migration error: {e}")
@@ -15731,6 +16653,7 @@ def migrate_database():
 
 # Run migration on startup
 migrate_database()
+
 
 @app.get("/api/support/messages/{profile_id}")
 def get_support_messages(profile_id: int, db: Session = Depends(get_db)):
@@ -15852,11 +16775,28 @@ def purchase_resident_cabinet_module(
     # Update profile with resident cabinet settings
     profile.has_resident_cabinet = True
     profile.slug = slug.strip().lower()
-    profile.mono_api_token = mono_api_token.strip()
+    profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
     profile.color_theme = color_theme.strip() or "#3b82f6"
+    
+    # Create OSBB enterprise for residents (separate from the main profile)
+    # This will be used for resident payments and access
+    osbb_enterprise = Profile(
+        user_id=profile.user_id,
+        name=f"{profile.name} (Кабінет мешканців)",
+        tax_id=profile.tax_id,  # Same EDRPOU as main profile
+        address=profile.address,  # Same address as main profile
+        tax_system="non_profit",  # OSBBs are typically non-profit
+        slug=slug.strip().lower(),  # Same slug for resident access
+        mono_api_token=encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None,  # Same token for payments
+        color_theme=color_theme.strip() or "#3b82f6",
+        has_resident_cabinet=True,  # This is the resident cabinet profile
+        parent_profile_id=profile.id  # Link to main profile
+    )
+    db.add(osbb_enterprise)
     
     db.commit()
     db.refresh(profile)
+    db.refresh(osbb_enterprise)
     
     return {
         "status": "success",
@@ -15866,6 +16806,12 @@ def purchase_resident_cabinet_module(
             "has_resident_cabinet": profile.has_resident_cabinet,
             "slug": profile.slug,
             "color_theme": profile.color_theme
+        },
+        "osbb_enterprise": {
+            "id": osbb_enterprise.id,
+            "name": osbb_enterprise.name,
+            "slug": osbb_enterprise.slug,
+            "access_url": f"unitax.pro/osbb/{osbb_enterprise.slug}"
         },
         "subscription": {
             "plan": subscription.plan,
@@ -15892,10 +16838,16 @@ def get_resident_cabinet_status(
     
     # Get subscription info
     subscription = db.query(Subscription).filter(
-        Subscription.profile_id == profile_id,
-        Subscription.plan == "resident_cabinet"
+        Subscription.profile_id == profile_id
     ).first()
     
+    # Determine if resident cabinet module is active
+    is_active = False
+    if subscription and subscription.status == "active" and getattr(subscription, "is_member_module_active", False):
+        is_active = True
+        if subscription.expires_at and subscription.expires_at < datetime.utcnow():
+            is_active = False
+            
     # Get pricing info
     pricing = db.query(Pricing).filter(
         Pricing.plan_type == "resident_cabinet",
@@ -15903,18 +16855,184 @@ def get_resident_cabinet_status(
     ).first()
     
     return {
-        "is_active": profile.has_resident_cabinet or False,
+        "is_active": is_active,
         "slug": profile.slug,
         "color_theme": profile.color_theme,
         "subscription": {
             "status": subscription.status if subscription else None,
             "expires_at": subscription.expires_at.isoformat() if subscription and subscription.expires_at else None,
-            "amount": subscription.amount if subscription else None
+            "amount": getattr(subscription, "amount", None) or getattr(subscription, "last_payment_amount", None),
+            "plan": subscription.plan if subscription else "free",
+            "is_member_module_active": getattr(subscription, "is_member_module_active", False) if subscription else False
         } if subscription else None,
         "pricing": {
             "price": pricing.price if pricing else 500,
             "currency": pricing.currency if pricing else "UAH"
         } if pricing else {"price": 500, "currency": "UAH"}
+    }
+
+
+# --- Dynamic Subscription Plans and Module Selection ---
+
+class CreateSubscriptionPlanRequest(BaseModel):
+    plan_id: int
+    enable_member_module: bool
+    profile_id: int
+
+def slugify(text: str) -> str:
+    cyrillic_map = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'h', 'ґ': 'g', 'д': 'd', 'е': 'e', 'є': 'ye', 'ж': 'zh', 'з': 'z',
+        'и': 'y', 'і': 'i', 'ї': 'yi', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p',
+        'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
+        'ь': '', 'ю': 'yu', 'я': 'ya',
+        'A': 'a', 'B': 'b', 'V': 'v', 'H': 'h', 'G': 'g', 'D': 'd', 'E': 'e', 'Ye': 'ye', 'Zh': 'zh', 'Z': 'z',
+        'Y': 'y', 'I': 'i', 'Yi': 'yi', 'Y': 'y', 'K': 'k', 'L': 'l', 'M': 'm', 'N': 'n', 'O': 'o', 'P': 'p',
+        'R': 'r', 'S': 's', 'T': 't', 'U': 'u', 'F': 'f', 'Kh': 'kh', 'Ts': 'ts', 'Ch': 'ch', 'Sh': 'sh', 'Shch': 'shch',
+        'Yu': 'yu', 'Ya': 'ya'
+    }
+    res = []
+    for char in text:
+        res.append(cyrillic_map.get(char, char.lower()))
+    text = "".join(res)
+    import re
+    text = re.sub(r'[^a-z0-9\s-]', '', text)
+    text = re.sub(r'[\s_-]+', '-', text)
+    return text.strip('-')
+
+# plans endpoint moved above get_subscription
+
+@app.post("/api/subscription/create")
+def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == req.plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Тариф не знайдено")
+        
+    total_price = float(plan.price)
+    enable_module = False
+    if req.enable_member_module and plan.has_member_module:
+        total_price += float(plan.member_module_price)
+        enable_module = True
+        
+    # Slug generation
+    slug = profile.slug
+    if not slug:
+        base_slug = slugify(profile.name)
+        if not base_slug:
+            base_slug = f"osbb-{profile.id}"
+        slug = base_slug
+        counter = 1
+        while True:
+            existing = db.query(Profile).filter(Profile.slug == slug).first()
+            if not existing or existing.id == profile.id:
+                break
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+        profile.slug = slug
+        
+    # Create or update child resident cabinet profile
+    osbb_enterprise = db.query(Profile).filter(
+        Profile.parent_profile_id == profile.id,
+        Profile.has_resident_cabinet == True
+    ).first()
+    
+    if not osbb_enterprise:
+        osbb_enterprise = Profile(
+            user_id=profile.user_id,
+            name=f"{profile.name} (Кабінет мешканців)",
+            tax_id=profile.tax_id,
+            address=profile.address,
+            tax_system="non_profit",
+            slug=slug,
+            mono_api_token=profile.mono_api_token,
+            color_theme=profile.color_theme or "#3b82f6",
+            has_resident_cabinet=True,
+            parent_profile_id=profile.id,
+            organization_subtype="osbb"
+        )
+        db.add(osbb_enterprise)
+        db.flush()
+    else:
+        osbb_enterprise.slug = slug
+        osbb_enterprise.name = f"{profile.name} (Кабінет мешканців)"
+        osbb_enterprise.tax_id = profile.tax_id
+        osbb_enterprise.address = profile.address
+        
+    db.commit()
+    db.refresh(profile)
+    db.refresh(osbb_enterprise)
+    
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile.id).first()
+    plan_code = "premium" if plan.id == 2 else "basic"
+    
+    if subscription:
+        subscription.plan = plan_code
+        subscription.plan_type = plan_code
+        subscription.payment_period = "monthly"
+        subscription.status = "pending"
+        subscription.is_member_module_active = enable_module
+    else:
+        subscription = Subscription(
+            profile_id=profile.id,
+            plan=plan_code,
+            plan_type=plan_code,
+            payment_period="monthly",
+            status="pending",
+            is_member_module_active=enable_module
+        )
+        db.add(subscription)
+        
+    db.flush()
+    
+    payment = Payment(
+        profile_id=profile.id,
+        tax_type=plan_code,
+        amount=float(total_price),
+        period="monthly",
+        status="pending",
+        payment_type="subscription"
+    )
+    db.add(payment)
+    db.flush()
+    
+    import time
+    reference = f"sub_{profile.id}_{plan_code}_monthly_{payment.id}_{int(time.time())}_member_{1 if enable_module else 0}"
+    
+    subscription.liqpay_order_id = reference
+    payment.liqpay_order_id = reference
+    
+    api_base_url = os.getenv("API_BASE_URL", "https://api.unitax.pro")
+    frontend_url = os.getenv("FRONTEND_URL", "https://www.unitax.pro")
+    
+    webhook_url = f"{api_base_url}/api/billing/webhook/mono"
+    redirect_url = f"{frontend_url}/settings/subscription?success=true"
+    
+    try:
+        payment_url = monobank_service.create_invoice(
+            amount_uah=float(total_price),
+            reference=reference,
+            redirect_url=redirect_url,
+            webhook_url=webhook_url
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to create Monobank invoice: {str(e)}")
+        
+    db.commit()
+    
+    return {
+        "subscription_id": subscription.id,
+        "total_price": total_price,
+        "payment_url": payment_url,
+        "member_module_active": enable_module,
+        "member_profile_id": osbb_enterprise.id,
+        "member_login_url": f"{frontend_url}/osbb/{slug}"
     }
 
 

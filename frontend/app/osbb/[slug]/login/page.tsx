@@ -13,7 +13,10 @@ export default function OsbbMemberLoginPage() {
   const [profile, setProfile] = useState<any>(null);
   const [accountNumber, setAccountNumber] = useState(searchParams.get("account") || "");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "reset">("login");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -35,7 +38,23 @@ export default function OsbbMemberLoginPage() {
     setError("");
     try {
       if (mode === "register") {
-        await api.memberRegister({ slug, account_number: accountNumber, password });
+        await api.memberRegister({
+          slug,
+          account_number: accountNumber,
+          password,
+          full_name: fullName,
+          phone,
+          email
+        });
+        router.push(`/osbb/${slug}/pending`);
+        return;
+      }
+      if (mode === "reset") {
+        await api.resetMemberPassword({
+          slug,
+          account_number: accountNumber,
+          password_string: password
+        });
         router.push(`/osbb/${slug}/pending`);
         return;
       }
@@ -48,7 +67,7 @@ export default function OsbbMemberLoginPage() {
       localStorage.setItem("member_profile_slug", slug);
       router.push(`/osbb/${slug}/dashboard`);
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Помилка входу");
+      setError(err.response?.data?.detail || "Помилка");
     } finally {
       setLoading(false);
     }
@@ -66,10 +85,14 @@ export default function OsbbMemberLoginPage() {
         </div>
 
         <form onSubmit={submit} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-5 flex rounded-2xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode("login")} className={`flex-1 rounded-xl py-2 text-sm font-semibold ${mode === "login" ? "bg-white shadow-sm" : "text-slate-500"}`}>Вхід</button>
-            <button type="button" onClick={() => setMode("register")} className={`flex-1 rounded-xl py-2 text-sm font-semibold ${mode === "register" ? "bg-white shadow-sm" : "text-slate-500"}`}>Перша реєстрація</button>
-          </div>
+          {mode !== "reset" ? (
+            <div className="mb-5 flex rounded-2xl bg-slate-100 p-1">
+              <button type="button" onClick={() => setMode("login")} className={`flex-1 rounded-xl py-2 text-sm font-semibold ${mode === "login" ? "bg-white shadow-sm" : "text-slate-500"}`}>Вхід</button>
+              <button type="button" onClick={() => setMode("register")} className={`flex-1 rounded-xl py-2 text-sm font-semibold ${mode === "register" ? "bg-white shadow-sm" : "text-slate-500"}`}>Перша реєстрація</button>
+            </div>
+          ) : (
+            <div className="mb-5 text-center font-semibold text-slate-700">Відновлення паролю</div>
+          )}
 
           <label className="mb-2 block text-sm font-medium text-slate-700">Особовий рахунок / № квартири</label>
           <div className="relative mb-4">
@@ -77,18 +100,54 @@ export default function OsbbMemberLoginPage() {
             <input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} required className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Наприклад: 45 або ZK-045" />
           </div>
 
-          <label className="mb-2 block text-sm font-medium text-slate-700">Пароль</label>
+          {mode === "register" && (
+            <>
+              <label className="mb-2 block text-sm font-medium text-slate-700">Повне ім'я (ПІБ)</label>
+              <div className="relative mb-4">
+                <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input value={fullName} onChange={(e) => setFullName(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Іванов Іван Іванович" />
+              </div>
+
+              <label className="mb-2 block text-sm font-medium text-slate-700">Телефон</label>
+              <div className="relative mb-4">
+                <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="+380991234567" />
+              </div>
+
+              <label className="mb-2 block text-sm font-medium text-slate-700">Електронна пошта (Email)</label>
+              <div className="relative mb-4">
+                <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="your@email.com" />
+              </div>
+            </>
+          )}
+
+          <label className="mb-2 block text-sm font-medium text-slate-700">
+            {mode === "reset" ? "Новий пароль" : "Пароль"}
+          </label>
           <div className="relative mb-4">
             <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Ваш пароль" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="w-full rounded-2xl border border-slate-200 py-3 pl-11 pr-4 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Введіть пароль" />
           </div>
+
+          {mode === "login" && (
+            <div className="mb-4 text-right">
+              <button type="button" onClick={() => { setMode("reset"); setPassword(""); }} className="text-xs font-semibold text-blue-600 hover:underline">Забули пароль?</button>
+            </div>
+          )}
 
           {error && <div className="mb-4 rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
           <button disabled={loading} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60">
-            {loading ? "Зачекайте..." : mode === "login" ? "Увійти" : "Надіслати заявку"}
+            {loading ? "Зачекайте..." : mode === "login" ? "Увійти" : mode === "reset" ? "Змінити пароль" : "Надіслати заявку"}
             <ArrowRight size={18} />
           </button>
+
+          {mode === "reset" && (
+            <div className="mt-4 text-center">
+              <button type="button" onClick={() => { setMode("login"); setPassword(""); }} className="text-xs font-semibold text-slate-500 hover:underline">Повернутися до входу</button>
+            </div>
+          )}
         </form>
       </div>
     </main>

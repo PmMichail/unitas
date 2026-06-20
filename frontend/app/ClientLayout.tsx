@@ -175,6 +175,17 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Register PWA service worker
+  useEffect(() => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js")
+          .then((reg) => console.log("Service Worker registered successfully:", reg.scope))
+          .catch((err) => console.error("Service Worker registration failed:", err));
+      });
+    }
+  }, []);
+
   // Redirect to profiles if logged in but has no profiles to prevent infinite loading spinners
   useEffect(() => {
     const isExempt = ["/", "/login", "/register", "/privacy", "/terms", "/refund", "/benefits"].includes(pathname) || pathname.startsWith("/admin");

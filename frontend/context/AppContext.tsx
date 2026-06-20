@@ -80,7 +80,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         localStorage.setItem("telegram_id", finalId);
       } else {
         const path = window.location.pathname;
-        const isExempt = path.startsWith("/admin") || ["/", "/login", "/register", "/privacy", "/terms", "/refund", "/benefits"].includes(path);
+        const isExempt = path.startsWith("/admin") || path.startsWith("/osbb") || ["/", "/login", "/register", "/privacy", "/terms", "/refund", "/benefits"].includes(path);
         if (!isExempt) {
           window.location.href = "/login";
         }
