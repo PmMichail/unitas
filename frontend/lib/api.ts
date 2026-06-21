@@ -488,6 +488,11 @@ export const api = {
     return response.data;
   },
 
+  splitTransaction: async (paymentId: number, splits: { member_id: number; amount: number }[]) => {
+    const response = await client.post(`/api/transactions/${paymentId}/split`, { splits });
+    return response.data;
+  },
+
   clearStatements: async (profileId: number) => {
     const response = await client.post(`/api/profiles/${profileId}/clear-statements`);
     return response.data;

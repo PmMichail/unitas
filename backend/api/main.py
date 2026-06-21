@@ -5704,6 +5704,78 @@ def edit_transaction(
         "direction": payment.direction
     }
 
+from pydantic import BaseModel
+from typing import List
+
+class SplitPaymentItem(BaseModel):
+    member_id: int
+    amount: float
+
+class SplitTransactionRequest(BaseModel):
+    splits: List[SplitPaymentItem]
+
+@app.post("/api/transactions/{payment_id}/split")
+def split_transaction(payment_id: int, req: SplitTransactionRequest, db: Session = Depends(get_db)):
+    payment = db.query(ParsedPayment).filter(ParsedPayment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Транзакцію не знайдено")
+        
+    if not req.splits:
+        raise HTTPException(status_code=400, detail="Не вказано жодного розподілення")
+        
+    for item in req.splits:
+        if item.amount <= 0:
+            raise HTTPException(status_code=400, detail="Сума розподілу повинна бути більше 0")
+            
+    total_split_amount = sum(item.amount for item in req.splits)
+    if total_split_amount > payment.amount + 0.01:
+        raise HTTPException(status_code=400, detail="Загальна сума розподілу перевищує суму транзакції")
+        
+    # If the parent payment had an assigned member, subtract split amount from their balance
+    if payment.member_id is not None:
+        parent_member = db.query(UnitOrMember).filter(UnitOrMember.id == payment.member_id).first()
+        if parent_member:
+            parent_member.balance -= total_split_amount
+            
+    # Reduce parent payment's amount
+    payment.amount -= total_split_amount
+    
+    # If parent payment amount is 0, clear member_id since it's fully split
+    if abs(payment.amount) < 0.01:
+        payment.amount = 0.0
+        payment.member_id = None
+        
+    # Create the split payments
+    for item in req.splits:
+        member = db.query(UnitOrMember).filter(UnitOrMember.id == item.member_id).first()
+        if not member:
+            raise HTTPException(status_code=404, detail=f"Мешканця з ID {item.member_id} не знайдено")
+            
+        # Increase member's balance
+        member.balance += item.amount
+        
+        # Create a parsed payment record
+        split_pay = ParsedPayment(
+            statement_id=payment.statement_id,
+            date=payment.date,
+            amount=item.amount,
+            direction=payment.direction,
+            purpose=f"[Розподілено] Частина платежу: {payment.purpose}",
+            contragent=payment.contragent,
+            type=payment.type,
+            tax_type=payment.tax_type,
+            profile_id=payment.profile_id,
+            employee_id=payment.employee_id,
+            member_id=member.id,
+            taxable=payment.taxable,
+            transaction_type=payment.transaction_type
+        )
+        db.add(split_pay)
+        
+    db.commit()
+    return {"message": "Транзакцію успішно розподілено"}
+
+
 @app.post("/api/profiles/{profile_id}/clear-statements")
 def clear_statements(profile_id: int, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
