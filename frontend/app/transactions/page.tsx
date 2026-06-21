@@ -47,6 +47,19 @@ export default function Transactions() {
   const [editDirection, setEditDirection] = useState("in");
   const [submittingEdit, setSubmittingEdit] = useState(false);
 
+  // Manual Transaction State
+  const [isAddingManualTx, setIsAddingManualTx] = useState(false);
+  const [manualDate, setManualDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [manualAmount, setManualAmount] = useState("");
+  const [manualDirection, setManualDirection] = useState<"in" | "out">("in");
+  const [manualPurpose, setManualPurpose] = useState("");
+  const [manualContragent, setManualContragent] = useState("");
+  const [manualMemberId, setManualMemberId] = useState<number>(0);
+  const [manualTaxable, setManualTaxable] = useState(true);
+  const [manualTxType, setManualTxType] = useState("income");
+  const [submittingManual, setSubmittingManual] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
+
   // Members & Splitting State
   const [members, setMembers] = useState<any[]>([]);
   const [splittingTx, setSplittingTx] = useState<any>(null);
@@ -149,13 +162,83 @@ export default function Transactions() {
     }
   };
 
+  const openManualModal = () => {
+    setIsAddingManualTx(true);
+    setManualDate(new Date().toISOString().split("T")[0]);
+    setManualAmount("");
+    setManualDirection("in");
+    setManualPurpose("");
+    setManualContragent("");
+    setManualMemberId(0);
+    setManualTaxable(true);
+    setManualTxType("income");
+    setManualError(null);
+  };
+
+  const handleManualMemberChange = (memberIdVal: number) => {
+    setManualMemberId(memberIdVal);
+    if (memberIdVal > 0) {
+      const selectedMember = members.find(m => m.id === memberIdVal);
+      if (selectedMember) {
+        const name = selectedMember.owner_name || selectedMember.identifier || "";
+        const property = selectedMember.property_type || "кв.";
+        const ident = selectedMember.identifier || "";
+        setManualContragent(`${property} ${ident} ${name}`.trim());
+      }
+    } else {
+      setManualContragent("");
+    }
+  };
+
+  const handleSaveManual = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProfileId) return;
+
+    const amt = parseFloat(manualAmount);
+    if (isNaN(amt) || amt <= 0) {
+      setManualError("Сума повинна бути більшою за 0");
+      return;
+    }
+
+    if (!manualPurpose.trim()) {
+      setManualError("Призначення платежу обов'язкове");
+      return;
+    }
+
+    setSubmittingManual(true);
+    setManualError(null);
+
+    try {
+      await api.addManualTransaction({
+        profile_id: activeProfileId,
+        date: manualDate,
+        amount: amt,
+        direction: manualDirection,
+        purpose: manualPurpose,
+        contragent: manualContragent || undefined,
+        transaction_type: manualTxType,
+        taxable: manualTaxable,
+        member_id: manualMemberId > 0 ? manualMemberId : undefined
+      });
+      setIsAddingManualTx(false);
+      fetchTransactions();
+    } catch (err: any) {
+      console.error(err);
+      setManualError(err.response?.data?.detail || "Не вдалося зберегти транзакцію");
+    } finally {
+      setSubmittingManual(false);
+    }
+  };
+
   // Dropzone setup
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
       "application/pdf": [".pdf"],
       "text/csv": [".csv"],
       "text/html": [".html", ".htm"],
-      "text/plain": [".txt"]
+      "text/plain": [".txt"],
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+      "application/vnd.ms-excel": [".xls"]
     },
     maxFiles: 1,
     onDrop: async (acceptedFiles) => {
@@ -372,6 +455,13 @@ export default function Transactions() {
                 <span>{uploadError}</span>
               </div>
             )}
+
+            <button
+              onClick={openManualModal}
+              className="w-full py-2 px-4 rounded-xl border border-indigo-500/25 bg-indigo-500/5 hover:bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+            >
+              + Додати транзакцію вручну
+            </button>
 
             {transactions.length > 0 && (
               <button
@@ -838,6 +928,207 @@ export default function Transactions() {
                 {submittingSplit ? "Збереження..." : "Підтвердити розподіл"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Manual Transaction Modal */}
+      {isAddingManualTx && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="w-full max-w-xl bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-start shrink-0">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Додати транзакцію вручну</h3>
+                <p className="text-xs text-slate-400 mt-1">Створіть новий запис про платіж та оновіть баланси.</p>
+              </div>
+              <button
+                onClick={() => setIsAddingManualTx(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm font-semibold"
+              >
+                Закрити
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveManual} className="flex-1 overflow-y-auto space-y-4 pr-1 min-h-[150px]">
+              <div className="grid grid-cols-2 gap-4">
+                {/* Direction */}
+                <div className="col-span-2">
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Напрямок платежу
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualDirection("in");
+                        if (["expense", "tax_payment", "salary_payment"].includes(manualTxType)) {
+                          setManualTxType("income");
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                        manualDirection === "in"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                          : "border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-400"
+                      }`}
+                    >
+                      Вхідний платіж (Дохід)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualDirection("out");
+                        if (manualTxType === "income") {
+                          setManualTxType("expense");
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                        manualDirection === "out"
+                          ? "border-rose-500/30 bg-rose-500/10 text-rose-500"
+                          : "border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-400"
+                      }`}
+                    >
+                      Вихідний платіж (Витрата)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Amount */}
+                <div>
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Сума (грн)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    placeholder="0.00"
+                    value={manualAmount}
+                    onChange={(e) => setManualAmount(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  />
+                </div>
+
+                {/* Date */}
+                <div>
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Дата платежу
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={manualDate}
+                    onChange={(e) => setManualDate(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  />
+                </div>
+
+                {/* Resident / Member dropdown */}
+                <div className="col-span-2">
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Мешканець / Об'єкт (Оновлює баланс)
+                  </label>
+                  <select
+                    value={manualMemberId}
+                    onChange={(e) => handleManualMemberChange(parseInt(e.target.value) || 0)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  >
+                    <option value={0}>Не вказано (загальний платіж)</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.property_type || "кв."} {m.identifier} — {m.owner_name || "Невідомо"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Contragent text input */}
+                <div className="col-span-2">
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Контрагент / Одержувач
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Введіть назву контрагента або ПІБ"
+                    value={manualContragent}
+                    onChange={(e) => setManualContragent(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  />
+                </div>
+
+                {/* Purpose */}
+                <div className="col-span-2">
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Призначення платежу
+                  </label>
+                  <textarea
+                    required
+                    rows={2}
+                    placeholder="Наприклад: Внески за утримання будинку за червень 2026"
+                    value={manualPurpose}
+                    onChange={(e) => setManualPurpose(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  />
+                </div>
+
+                {/* Category Type */}
+                <div>
+                  <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block mb-1.5">
+                    Категорія
+                  </label>
+                  <select
+                    value={manualTxType}
+                    onChange={(e) => setManualTxType(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-250"
+                  >
+                    {manualDirection === "in" ? (
+                      <>
+                        <option value="income">Дохід</option>
+                        <option value="own_funds">Власні кошти / Поповнення</option>
+                        <option value="refund">Повернення</option>
+                        <option value="loan">Позики / Кредити</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="expense">Витрата</option>
+                        <option value="tax_payment">Сплата податків</option>
+                        <option value="salary_payment">Виплата зарплати</option>
+                        <option value="own_funds">Власні кошти / Вилучення</option>
+                        <option value="refund">Повернення</option>
+                        <option value="loan">Позики / Кредити</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                {/* Taxable Checkbox */}
+                <div className="flex items-center pt-5 pl-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={manualTaxable}
+                      onChange={(e) => setManualTaxable(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 bg-slate-50 dark:bg-slate-900"
+                    />
+                    Оподатковуваний платіж
+                  </label>
+                </div>
+              </div>
+
+              {manualError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs font-bold text-red-500 flex items-start gap-1.5 shrink-0">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{manualError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={submittingManual}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-lg disabled:opacity-50 shrink-0"
+              >
+                {submittingManual ? "Створення..." : "Зберегти транзакцію"}
+              </button>
+            </form>
           </div>
         </div>
       )}

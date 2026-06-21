@@ -6,6 +6,8 @@ import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
 import pypdf
+import pandas as pd
+import numpy as np
 
 class UniversalParser:
     def __init__(self, ollama_url="http://localhost:11434"):
@@ -97,6 +99,8 @@ class UniversalParser:
             transactions = self._parse_pdf(file_path)
         elif ext == ".txt":
             transactions = self._parse_txt(file_path)
+        elif ext in (".xlsx", ".xls"):
+            transactions = self._parse_excel(file_path)
         else:
             transactions = self._parse_with_ai(file_path, "Невідомий формат файлу")
 
@@ -813,6 +817,206 @@ class UniversalParser:
             return self._parse_with_ai(file_path, "Не знайдено транзакцій у TXT")
         except Exception as e:
             return self._parse_with_ai(file_path, f"Помилка парсингу TXT: {str(e)}")
+
+    def _parse_excel(self, file_path):
+        """Парсинг Excel виписок за допомогою pandas та openpyxl"""
+        import pandas as pd
+        import numpy as np
+        transactions = []
+        try:
+            # Load the excel file
+            xl = pd.ExcelFile(file_path)
+            # Parse first sheet
+            sheet_name = xl.sheet_names[0]
+            df = xl.parse(sheet_name, header=None)
+            
+            # Convert all values to string for analysis, drop completely empty rows
+            df = df.dropna(how='all')
+            if df.empty:
+                return []
+                
+            # Find the header row by looking for key headers in the first 20 rows
+            header_row_idx = 0
+            col_mapping = {}
+            
+            keywords = {
+                "date": ["дата", "date", "час", "time"],
+                "amount": ["сума", "amount", "грн", "дебет", "кредит", "debit", "credit", "надходження", "витрати"],
+                "purpose": ["призначення", "purpose", "деталі", "опис", "description", "коментар"],
+                "contragent": ["контрагент", "одержувач", "платник", "назва", "client", "recipient", "payer", "кореспондент"],
+                "edrpou": ["єдрпоу", "рнокпп", "код", "edrpou", "okpo", "окпо"],
+                "iban": ["рахунок", "iban", "iban/номер", "account"]
+            }
+            
+            # Check rows to find the one with the most matches for keywords
+            max_matches = 0
+            for r_idx in range(min(20, len(df))):
+                row_vals = [str(x).lower().strip() for x in df.iloc[r_idx] if pd.notna(x)]
+                matches = 0
+                temp_mapping = {}
+                for col_type, keys in keywords.items():
+                    for c_idx, val in enumerate(df.iloc[r_idx]):
+                         if pd.isna(val):
+                             continue
+                         val_str = str(val).lower().strip()
+                         if any(k in val_str for k in keys):
+                             if col_type not in temp_mapping:  # prioritize first match
+                                 temp_mapping[col_type] = c_idx
+                                 matches += 1
+                                 break
+                if matches > max_matches:
+                    max_matches = matches
+                    header_row_idx = r_idx
+                    col_mapping = temp_mapping
+            
+            # Check for separate debit and credit columns
+            debit_col = None
+            credit_col = None
+            if max_matches >= 2:
+                for c_idx, val in enumerate(df.iloc[header_row_idx]):
+                    if pd.isna(val):
+                        continue
+                    val_str = str(val).lower().strip()
+                    if "дебет" in val_str or "debit" in val_str or "витрат" in val_str:
+                        debit_col = c_idx
+                    elif "кредит" in val_str or "credit" in val_str or "надходж" in val_str:
+                        credit_col = c_idx
+            
+            # If we couldn't find a good header row, try a default heuristic
+            if max_matches < 2:
+                col_mapping = {}
+                for c_idx in range(df.shape[1]):
+                    col_data = df.iloc[:, c_idx].dropna().astype(str).tolist()
+                    has_date = any(re.match(r"^\d{2}[\./-]\d{2}[\./-]\d{2,4}$", x.strip()) for x in col_data[:20])
+                    numeric_count = 0
+                    for x in col_data[:20]:
+                        try:
+                            float(x.replace(" ", "").replace(",", ".").replace("грн", ""))
+                            numeric_count += 1
+                        except ValueError:
+                            pass
+                    if has_date and "date" not in col_mapping:
+                        col_mapping["date"] = c_idx
+                    elif numeric_count > 5 and "amount" not in col_mapping:
+                        col_mapping["amount"] = c_idx
+                        
+                for c_idx in range(df.shape[1]):
+                    if c_idx not in col_mapping.values():
+                        col_data = df.iloc[:, c_idx].dropna().astype(str).tolist()
+                        is_long_text = any(len(x) > 25 for x in col_data[:20])
+                        if is_long_text and "purpose" not in col_mapping:
+                            col_mapping["purpose"] = c_idx
+                        elif "contragent" not in col_mapping:
+                            col_mapping["contragent"] = c_idx
+            
+            start_row = header_row_idx + 1 if max_matches >= 2 else 0
+            for r_idx in range(start_row, len(df)):
+                row = df.iloc[r_idx]
+                
+                # Check for valid date
+                date_val = ""
+                if "date" in col_mapping:
+                    raw_date = row[col_mapping["date"]]
+                    if pd.notna(raw_date):
+                        if isinstance(raw_date, (datetime, date)):
+                            date_val = raw_date.strftime("%Y-%m-%d")
+                        else:
+                            date_val = self._clean_date(str(raw_date))
+                            
+                if not date_val or not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
+                     continue
+                     
+                # Get amount (with debit/credit support)
+                amount_val = 0.0
+                if debit_col is not None or credit_col is not None:
+                    raw_debit = row[debit_col] if debit_col is not None else None
+                    raw_credit = row[credit_col] if credit_col is not None else None
+                    
+                    debit_val = 0.0
+                    if pd.notna(raw_debit):
+                        try:
+                            debit_val = float(raw_debit) if isinstance(raw_debit, (int, float)) else self._clean_number(str(raw_debit))
+                        except ValueError:
+                            pass
+                            
+                    credit_val = 0.0
+                    if pd.notna(raw_credit):
+                        try:
+                            credit_val = float(raw_credit) if isinstance(raw_credit, (int, float)) else self._clean_number(str(raw_credit))
+                        except ValueError:
+                            pass
+                            
+                    if abs(credit_val) > 0.01:
+                        amount_val = credit_val
+                    elif abs(debit_val) > 0.01:
+                        amount_val = -debit_val
+                elif "amount" in col_mapping:
+                    raw_amount = row[col_mapping["amount"]]
+                    if pd.notna(raw_amount):
+                        if isinstance(raw_amount, (int, float)):
+                            amount_val = float(raw_amount)
+                        else:
+                            amount_val = self._clean_number(str(raw_amount))
+                            
+                # Get purpose
+                purpose_val = ""
+                if "purpose" in col_mapping:
+                    raw_purpose = row[col_mapping["purpose"]]
+                    if pd.notna(raw_purpose):
+                        purpose_val = str(raw_purpose).strip()
+                        
+                # Get contragent
+                contragent_val = ""
+                if "contragent" in col_mapping:
+                    raw_contragent = row[col_mapping["contragent"]]
+                    if pd.notna(raw_contragent):
+                        contragent_val = str(raw_contragent).strip()
+                if not contragent_val:
+                    contragent_val = self._extract_contragent(purpose_val) or "Невідомий Контрагент"
+                    
+                # Extract edrpou
+                edrpou_val = None
+                if "edrpou" in col_mapping:
+                    raw_edrpou = row[col_mapping["edrpou"]]
+                    if pd.notna(raw_edrpou):
+                        match = re.search(r"(\d{8,10})", str(raw_edrpou))
+                        if match:
+                            edrpou_val = match.group(1)
+                if not edrpou_val:
+                    match = re.search(r"(?:єдрпоу|рнокпп|код|okpo)\s*:?\s*(\d{8,10})", purpose_val, re.IGNORECASE)
+                    if match:
+                        edrpou_val = match.group(1)
+                        
+                # Extract iban
+                iban_val = None
+                if "iban" in col_mapping:
+                    raw_iban = row[col_mapping["iban"]]
+                    if pd.notna(raw_iban):
+                        match = re.search(r"(UA\d{27})", str(raw_iban).replace(" ", "").upper())
+                        if match:
+                             iban_val = match.group(1)
+                if not iban_val:
+                    match = re.search(r"(UA\d{27})", purpose_val.replace(" ", "").upper())
+                    if match:
+                        iban_val = match.group(1)
+                        
+                tx_dict = self._create_transaction_dict(
+                    date=date_val,
+                    amount=amount_val,
+                    purpose=purpose_val,
+                    contragent=contragent_val.upper(),
+                    bank_name=self.bank_name or "Excel"
+                )
+                tx_dict["edrpou"] = edrpou_val
+                tx_dict["iban"] = iban_val
+                
+                transactions.append(tx_dict)
+                
+            self.bank_name = self.bank_name or "Excel Import"
+            return transactions
+        except Exception as e:
+            print(f"[Excel Parser Error] {e}")
+            return self._parse_with_ai(file_path, f"Помилка парсингу Excel: {str(e)}")
 
     def _parse_with_ai(self, file_path, reason):
         """
