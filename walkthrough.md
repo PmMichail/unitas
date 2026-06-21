@@ -1,54 +1,70 @@
-# Walkthrough - Subscription, Theme, and Light Mode Styling Fixes
+# Walkthrough - Bank PDF Statement Parser & Payment Fixes
 
-This document walks through the modifications applied to resolve subscription saving issues, pricing alignment, theme transitions, and light mode aesthetics.
+This document walks through the modifications applied to resolve transaction amount and counterparty parsing issues when importing A-Bank and Monobank PDF statements, and clean up unnecessary payment buttons for accountants/admins.
 
-## Changes Made
+---
 
-### 1. Database & Seeding (`backend/api/main.py`)
-- Adjusted `migrate_database()` to handle missing database columns and default configuration fields.
-- Added database startup logic to migrate any existing `resident_cabinet` pricing with `"onetime"` to `"monthly"` period, setting it to 500 UAH.
-- Created/verified the `"monthly"` pricing record for `resident_cabinet` module to keep backend lookups aligned with the admin dashboard.
+## 1. A-Bank PDF Statement Parser Fix
 
-### 2. Admin APIs (`backend/api/main.py`)
-- **Deduplication**: Removed the duplicate `GET /api/admin/users` and `PUT /api/admin/users/{user_id}/subscription` (Form-based) endpoints that were shadowing their correct implementations.
-- **Listing**: Integrated `search` and `plan` filters into the main `GET /api/admin/users` handler and added fields `is_member_module_active` and `organization_subtype` to the response.
-- **Updates**: Updated the `PUT /api/admin/users/{profile_id}/subscription` handler to accept `is_member_module_active` and `payment_period` inside the JSON body. The backend now synchronizes this checkbox with both `Subscription` and `Profile` objects, automatically spawning, unblocking, or blocking the child `osbb_enterprise` profile accordingly.
+### The Problem
+When extracting text from A-Bank PDF statements using `pypdf`, columns would frequently squash together vertically or overlap. This caused adjacent numeric values, dates, or payment references to concatenate with the transaction amounts (e.g. parsing `2764.94` as `933 213 556 282 765 грн`).
 
-### 3. Resident Cabinet Payment & Status (`backend/api/main.py`)
-- Standardized `/api/profiles/{profile_id}/purchase-resident-cabinet` and `/api/profiles/{profile_id}/resident-cabinet-status` to query prices using `"monthly"` payment period.
-- Modified subscription creation on cabinet purchase to set an expiration of 30 days instead of 10 years, ensuring correct billing cycle.
+### Changes Made
+- **Dynamic Layout Parser Routing**: Inspects the raw PDF text for A-Bank keywords (`"а-банк"`, `"a-bank"`, `"акцент-банк"`) and routes processing to a new dedicated `_parse_abank_pdf` method.
+- **Geometry-Based PDF Parsing**: Implemented `_parse_abank_pdf` using `pdfplumber` to extract words alongside their bounding boxes (`x0`, `top`), grouping words vertically into lines using a strict tolerance of `3.0` points.
+- **Column Classification**: Classified words into 5 columns based on horizontal positions:
+  - `date`: `x0 < 90`
+  - `number`: `90 <= x0 < 180`
+  - `details`: `180 <= x0 < 340`
+  - `purpose`: `340 <= x0 < 505`
+  - `amount`: `505 <= x0`
+- **Card Layout Support**: Enabled dynamic support for simple card statement layouts (e.g., `samples/abank.pdf`) by auto-detecting card keywords and adjusting column bounds to ignore the balance column.
+- **Midpoint-Based Grouping**: Grouped multi-line rows into individual transaction objects using vertical midpoints between consecutive transaction dates.
+- **Geometric Filtering**: Discarded headers and footers dynamically:
+  - Ignored lines above `first_tx_top - 15`.
+  - Ignored lines below `last_tx_top + 70`.
 
-### 4. Theme Transitions (`frontend/app/layout.tsx`)
-- Removed hardcoded `className="dark"` from the `<html>` tag and added `suppressHydrationWarning`. This prevents Next.js from resetting the theme class to dark on page transitions.
+---
 
-### 5. Layout Typos (`frontend/app/ClientLayout.tsx`)
-- Corrected Tailwind class typos:
-  - `dark:bg-slate-905` -> `dark:bg-slate-900`
-  - `dark:border-slate-805` -> `dark:border-slate-800`
+## 2. Monobank PDF Statement Parser Fix
 
-### 6. Admin Panel UI (`frontend/app/admin/dashboard/page.tsx`)
-- Updated the edit subscription modal to check both `tax_system === "non_profit"` and `organization_subtype === "osbb" / "st"` to display OSBB plans.
-- Added plan prices to select options: "Базовий (Basic) — 499 грн/міс" and "Преміум (Premium) — 999 грн/міс".
-- Appended price details to the checkbox: "📱 Активований кабінет мешканців (+500 грн/міс)".
+### The Problem
+Monobank (FOP) PDF statements failed to parse correctly. The default `pypdf` sequential reader missed all transactions, falling back to the heuristic parser which misread the license text in the header (`Ліцензія НБУ... №92 від 20.01.1994`) as a transaction of `92 UAH` on `1994-01-20`.
 
-### 7. Billing Page Text (`frontend/app/billing/page.tsx`)
-- Changed the modal label from "Одноразова оплата" to "Помісячна оплата".
+### Changes Made
+- **Routing**: Added routing in `_parse_pdf` to check if text contains Monobank keywords (`"універсал"`, `"universal"`, `"монобанк"`, `"monobank"`) and call `_parse_monobank_pdf(file_path)`.
+- **Character Normalization**: Normalized Latin `i`/`I` in Cyrillic contexts to ensure proper regex matching of counterparty names (e.g. converting `"Дн-кiй"` to `"Дн-кій"`).
+- **Column Classification**: Mapped words horizontally into 5 columns:
+  - `date`: `x0 < 70` (covers Date and Time)
+  - `details`: `70 <= x0 < 195` (covers payment purpose details)
+  - `contragent`: `195 <= x0 < 315` (covers counterparty name, IBAN, EDRPOU)
+  - `amount`: `315 <= x0 < 365` (covers transaction amount)
+  - `balance`: `365 <= x0` (ignored)
+- **Midpoint Grouping & Geometric Filtering**: Grouped lines into transactions using midpoints and geometric limits (`first_tx_top - 15` and `last_tx_top + 70`), completely filtering out the top license text and bottom signatures.
+- **Counterparty Details Parsing**: Filtered out `IBAN:`, `UA...` values, and `ЄДРПОУ:` from the `contragent` column to isolate the exact counterparty name while storing the EDRPOU and IBAN codes in separate transaction fields.
 
-### 8. Global Styles (`frontend/app/globals.css`)
-- Increased border colors opacity from `0.08` to `0.14` in light mode for sharp cards and buttons.
-- Added styling rules to correctly display App Store / Google Play badges in light mode (dark text/icons on light background).
-### 9. API Cleanup (`frontend/lib/api.ts`)
-- Removed duplicate admin methods at the bottom of the API object that were converting JSON payloads to `FormData`, resolving compatibility issues with the JSON-based PUT endpoint on the backend.
+---
+
+## 3. Admin Payment Button Fix
+
+### The Problem
+When the OSBB manager/accountant viewed a member's card in the admin billing dashboard (`frontend/app/billing/page.tsx`), a button titled "Оплатити через Mono Pay" was rendered below their balance. This button is unnecessary and confusing for administrators since they should not pay resident balances from their own bank accounts.
+
+### Changes Made
+- **UI Clean-up**: Removed the "Оплатити через Mono Pay" button from the administrator details card in `frontend/app/billing/page.tsx`.
+- **Validation**: Verified type safety using `npx tsc --noEmit` (0 compile errors).
+- **Deployment**: Successfully deployed frontend changes to Fly.io.
 
 ---
 
 ## Validation Results
 
-### 1. Python Server Check
-- Run compilation: `py_compile` succeeded with no errors.
-- Booted FastAPI server locally: verified database startup sequence completed successfully and warning levels logged normally.
+### 1. Verification of A-Bank Statements
+- Real PDF `277de235-a3d5-49fb-acb7-fe21e96cbda7.pdf` -> parsed all **18 transactions** with 100% accuracy.
+- Mock PDF `samples/abank.pdf` -> parsed all **3 transactions** with correct amounts (`15000.00`, `150.00`, `8500.00`).
 
-### 2. Frontend Next.js Build
-- Ran `npm run build` locally:
-  - Optimizations and static page generations completed successfully.
-  - No TypeScript, webpack, or layout compilation errors found.
+### 2. Verification of Monobank Statements
+- Real PDF `report_21-06-2026_08-09-10.pdf` -> parsed all **2 transactions** with 100% accuracy:
+  - Tx 1: `2026-06-20`, `-250.00 UAH` (Vійськовий збір), Contr: `ГУК У ДН-КІЙ ОБЛ/ДН-КА ОБ/11011000`, EDRPOU: `37988155`, IBAN: `UA778999980313070063000004001`
+  - Tx 2: `2026-06-18`, `985.02 UAH` (Acquiring Settlement), Contr: `АТ "УНІВЕРСАЛ БАНК"`, EDRPOU: `21133352`, IBAN: `UA773220012924799880000006136`
+- Top license information was successfully discarded.

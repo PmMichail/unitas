@@ -384,6 +384,40 @@ class UnitOrMember(Base):
 
     profile = relationship("Profile", back_populates="units_or_members")
 
+class Contractor(Base):
+    __tablename__ = "contractors"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    name = Column(String(255), nullable=False)
+    type = Column(String(50), nullable=False) # provider, contractor, lessee, bank, other
+    tax_id = Column(String(50), nullable=True) # ЄДРПОУ / ІПН
+    phone = Column(String(20), nullable=True)
+    email = Column(String(255), nullable=True)
+    address = Column(Text, nullable=True)
+    initial_balance = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    profile = relationship("Profile", backref="contractors")
+
+class ContractorTransaction(Base):
+    __tablename__ = "contractor_transactions"
+    id = Column(Integer, primary_key=True, index=True)
+    contractor_id = Column(Integer, ForeignKey("contractors.id", ondelete="CASCADE"))
+    type = Column(String(20), nullable=False) # income, expense
+    amount = Column(Float, nullable=False)
+    description = Column(Text, nullable=False)
+    transaction_date = Column(Date, nullable=False)
+    document_url = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    contractor = relationship("Contractor", back_populates="transactions")
+    creator = relationship("User", backref="contractor_transactions")
+
+# Set relationship on Contractor as well to sync
+Contractor.transactions = relationship("ContractorTransaction", back_populates="contractor", cascade="all, delete-orphan")
+
 class Meter(Base):
     __tablename__ = "meters"
     id = Column(Integer, primary_key=True, index=True)
@@ -1001,6 +1035,49 @@ except Exception as e:
     print(f"Error creating database tables: {e}")
     import traceback
     traceback.print_exc()
+
+# Migrate provider members to contractors table if empty
+try:
+    db_session = SessionLocal()
+    if db_session.query(Contractor).count() == 0:
+        old_providers = db_session.query(UnitOrMember).filter(UnitOrMember.property_type == "провайдер").all()
+        migrated_count = 0
+        for prov in old_providers:
+            # Simple heuristic for tax ID
+            is_digit_tax = prov.identifier and len(prov.identifier) <= 12 and prov.identifier.isdigit()
+            contractor = Contractor(
+                profile_id=prov.profile_id,
+                name=prov.owner_name or prov.identifier or "Контрагент",
+                type="provider",
+                tax_id=prov.identifier if is_digit_tax else None,
+                phone=prov.phone,
+                email=prov.email,
+                address=None,
+                initial_balance=prov.balance or 0.0
+            )
+            db_session.add(contractor)
+            db_session.flush() # get contractor.id
+
+            # Migrate linked parsed payments to contractor transactions
+            prov_payments = db_session.query(ParsedPayment).filter(ParsedPayment.member_id == prov.id).all()
+            for p in prov_payments:
+                tx = ContractorTransaction(
+                    contractor_id=contractor.id,
+                    type="income" if p.direction == "in" else "expense",
+                    amount=p.amount,
+                    description=p.purpose or "Перенесена операція",
+                    transaction_date=p.date or date.today(),
+                    created_by=None,
+                    created_at=datetime.combine(p.date, datetime.min.time()) if p.date else datetime.utcnow()
+                )
+                db_session.add(tx)
+            migrated_count += 1
+        db_session.commit()
+        if migrated_count > 0:
+            print(f"Migrated {migrated_count} providers to new contractors table.")
+    db_session.close()
+except Exception as migration_err:
+    print(f"Contractors data migration error: {migration_err}")
 
 # Migrate subscriptions and payments to add new columns if they are not present
 try:
@@ -4674,6 +4751,282 @@ def list_meters(profile_id: int, db: Session = Depends(get_db)):
         })
     return result
 
+# --- Contractors (Decoupled Module) Endpoints ---
+from sqlalchemy import func
+
+def get_contractor_balance_helper(db: Session, contractor_id: int, initial_balance: float) -> float:
+    c_type = db.query(Contractor.type).filter(Contractor.id == contractor_id).scalar()
+    income = db.query(func.sum(ContractorTransaction.amount)).filter(
+        ContractorTransaction.contractor_id == contractor_id,
+        ContractorTransaction.type == "income"
+    ).scalar() or 0.0
+    expense = db.query(func.sum(ContractorTransaction.amount)).filter(
+        ContractorTransaction.contractor_id == contractor_id,
+        ContractorTransaction.type == "expense"
+    ).scalar() or 0.0
+    if c_type in ["provider", "contractor", "bank"]:
+        return initial_balance - income + expense
+    else:
+        return initial_balance + income - expense
+
+@app.get("/api/contractors")
+def get_contractors(
+    profile_id: int,
+    type: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(Contractor).filter(Contractor.profile_id == profile_id)
+    if type and type != "all":
+        query = query.filter(Contractor.type == type)
+    if search:
+        query = query.filter(
+            (Contractor.name.like(f"%{search}%")) |
+            (Contractor.tax_id.like(f"%{search}%")) |
+            (Contractor.email.like(f"%{search}%")) |
+            (Contractor.phone.like(f"%{search}%"))
+        )
+    contractors = query.all()
+    result = []
+    for c in contractors:
+        bal = get_contractor_balance_helper(db, c.id, c.initial_balance)
+        result.append({
+            "id": c.id,
+            "profile_id": c.profile_id,
+            "name": c.name,
+            "type": c.type,
+            "tax_id": c.tax_id,
+            "phone": c.phone,
+            "email": c.email,
+            "address": c.address,
+            "initial_balance": c.initial_balance,
+            "balance": round(bal, 2),
+            "created_at": c.created_at
+        })
+    return result
+
+@app.post("/api/contractors")
+def create_contractor(
+    profile_id: int = Form(...),
+    name: str = Form(...),
+    type: str = Form(...),
+    tax_id: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    initial_balance: float = Form(0.0),
+    db: Session = Depends(get_db)
+):
+    dup = db.query(Contractor).filter(
+        Contractor.profile_id == profile_id,
+        Contractor.name == name
+    ).first()
+    if dup:
+        raise HTTPException(status_code=400, detail="Контрагент з такою назвою вже існує")
+        
+    contractor = Contractor(
+        profile_id=profile_id,
+        name=name.strip(),
+        type=type,
+        tax_id=tax_id.strip() if tax_id else None,
+        phone=phone.strip() if phone else None,
+        email=email.strip() if email else None,
+        address=address.strip() if address else None,
+        initial_balance=initial_balance
+    )
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+    
+    return {
+        "id": contractor.id,
+        "profile_id": contractor.profile_id,
+        "name": contractor.name,
+        "type": contractor.type,
+        "tax_id": contractor.tax_id,
+        "phone": contractor.phone,
+        "email": contractor.email,
+        "address": contractor.address,
+        "initial_balance": contractor.initial_balance,
+        "balance": contractor.initial_balance
+    }
+
+@app.get("/api/contractors/{id}")
+def get_contractor(id: int, db: Session = Depends(get_db)):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+    bal = get_contractor_balance_helper(db, c.id, c.initial_balance)
+    return {
+        "id": c.id,
+        "profile_id": c.profile_id,
+        "name": c.name,
+        "type": c.type,
+        "tax_id": c.tax_id,
+        "phone": c.phone,
+        "email": c.email,
+        "address": c.address,
+        "initial_balance": c.initial_balance,
+        "balance": round(bal, 2)
+    }
+
+@app.put("/api/contractors/{id}")
+def update_contractor(
+    id: int,
+    name: Optional[str] = Form(None),
+    type: Optional[str] = Form(None),
+    tax_id: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    initial_balance: Optional[float] = Form(None),
+    db: Session = Depends(get_db)
+):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+        
+    if name is not None:
+        name_s = name.strip()
+        if name_s:
+            dup = db.query(Contractor).filter(
+                Contractor.profile_id == c.profile_id,
+                Contractor.name == name_s,
+                Contractor.id != id
+            ).first()
+            if dup:
+                raise HTTPException(status_code=400, detail="Контрагент з такою назвою вже існує")
+            c.name = name_s
+            
+    if type is not None:
+        c.type = type
+    if tax_id is not None:
+        c.tax_id = tax_id.strip() if tax_id else None
+    if phone is not None:
+        c.phone = phone.strip() if phone else None
+    if email is not None:
+        c.email = email.strip() if email else None
+    if address is not None:
+        c.address = address.strip() if address else None
+    if initial_balance is not None:
+        c.initial_balance = initial_balance
+        
+    db.commit()
+    db.refresh(c)
+    bal = get_contractor_balance_helper(db, c.id, c.initial_balance)
+    return {
+        "id": c.id,
+        "profile_id": c.profile_id,
+        "name": c.name,
+        "type": c.type,
+        "tax_id": c.tax_id,
+        "phone": c.phone,
+        "email": c.email,
+        "address": c.address,
+        "initial_balance": c.initial_balance,
+        "balance": round(bal, 2)
+    }
+
+@app.delete("/api/contractors/{id}")
+def delete_contractor(id: int, db: Session = Depends(get_db)):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+    db.delete(c)
+    db.commit()
+    return {"message": "Контрагента успішно видалено"}
+
+@app.get("/api/contractors/{id}/transactions")
+def get_contractor_transactions(id: int, db: Session = Depends(get_db)):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+        
+    txs = db.query(ContractorTransaction).filter(
+        ContractorTransaction.contractor_id == id
+    ).order_by(ContractorTransaction.transaction_date.desc(), ContractorTransaction.id.desc()).all()
+    
+    total_income = sum(t.amount for t in txs if t.type == "income")
+    total_expense = sum(t.amount for t in txs if t.type == "expense")
+    if c.type in ["provider", "contractor", "bank"]:
+        saldo = c.initial_balance - total_income + total_expense
+    else:
+        saldo = c.initial_balance + total_income - total_expense
+    
+    return {
+        "contractor": {
+            "id": c.id,
+            "name": c.name,
+            "initial_balance": c.initial_balance
+        },
+        "transactions": [{
+            "id": t.id,
+            "type": t.type,
+            "amount": t.amount,
+            "description": t.description,
+            "transaction_date": t.transaction_date.strftime("%Y-%m-%d") if t.transaction_date else None,
+            "document_url": t.document_url,
+            "created_at": t.created_at
+        } for t in txs],
+        "total_income": round(total_income, 2),
+        "total_expense": round(total_expense, 2),
+        "saldo": round(saldo, 2)
+    }
+
+@app.post("/api/contractors/{id}/transactions")
+def create_contractor_transaction(
+    id: int,
+    type: str = Form(...), # income, expense
+    amount: float = Form(...),
+    description: str = Form(...),
+    transaction_date: str = Form(...),
+    document_url: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+        
+    if type not in ["income", "expense"]:
+        raise HTTPException(status_code=400, detail="Некоректний тип операції")
+        
+    try:
+        tx_date = datetime.strptime(transaction_date, "%Y-%m-%d").date()
+    except ValueError:
+        tx_date = date.today()
+        
+    tx = ContractorTransaction(
+        contractor_id=id,
+        type=type,
+        amount=amount,
+        description=description.strip(),
+        transaction_date=tx_date,
+        document_url=document_url,
+        created_by=user_id
+    )
+    db.add(tx)
+    db.commit()
+    db.refresh(tx)
+    
+    return {
+        "id": tx.id,
+        "contractor_id": tx.contractor_id,
+        "type": tx.type,
+        "amount": tx.amount,
+        "description": tx.description,
+        "transaction_date": tx.transaction_date.strftime("%Y-%m-%d") if tx.transaction_date else None,
+        "document_url": tx.document_url
+    }
+
+@app.get("/api/contractors/{id}/balance")
+def get_contractor_balance(id: int, db: Session = Depends(get_db)):
+    c = db.query(Contractor).filter(Contractor.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Контрагента не знайдено")
+    bal = get_contractor_balance_helper(db, c.id, c.initial_balance)
+    return {"balance": round(bal, 2)}
+
 @app.post("/api/profiles/{profile_id}/meters")
 def create_meter(
     profile_id: int,
@@ -4897,7 +5250,8 @@ def get_member_details(profile_id: int, member_id: int, db: Session = Depends(ge
         "date": p.date,
         "amount": p.amount,
         "purpose": p.purpose,
-        "contragent": p.contragent
+        "contragent": p.contragent,
+        "direction": p.direction
     } for p in payments]
     
     return {
@@ -5083,19 +5437,22 @@ def update_profile_endpoint(
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
 
-    if tax_id is not None and tax_id.strip():
-        related_ids = [profile_id]
-        if profile.parent_profile_id:
-            related_ids.append(profile.parent_profile_id)
-        children_ids = [p.id for p in db.query(Profile.id).filter(Profile.parent_profile_id == profile_id).all()]
-        related_ids.extend(children_ids)
-        
-        existing = db.query(Profile).filter(
-            Profile.tax_id == tax_id.strip(),
-            ~Profile.id.in_(related_ids)
-        ).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
+    if tax_id is not None:
+        new_tax_id = tax_id.strip()
+        old_tax_id = (profile.tax_id or "").strip()
+        if new_tax_id and new_tax_id != old_tax_id:
+            related_ids = [profile_id]
+            if profile.parent_profile_id:
+                related_ids.append(profile.parent_profile_id)
+            children_ids = [p.id for p in db.query(Profile.id).filter(Profile.parent_profile_id == profile_id).all()]
+            related_ids.extend(children_ids)
+            
+            existing = db.query(Profile).filter(
+                Profile.tax_id == new_tax_id,
+                ~Profile.id.in_(related_ids)
+            ).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Профіль з таким ЄДРПОУ/РНОКПП вже зареєстрований")
         
     company = db.query(Company).filter(Company.id == profile_id).first()
     
@@ -5382,6 +5739,7 @@ def add_manual_transaction(
     transaction_type: str = Form("income"), # income, expense, own_funds, refund, loan
     taxable: bool = Form(True),
     user_id: Optional[int] = Form(None),
+    member_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
     # Authorization check
@@ -5390,6 +5748,15 @@ def add_manual_transaction(
         raise HTTPException(status_code=404, detail="Profile not found")
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    member = None
+    if member_id is not None and member_id != -1 and member_id != 0:
+        member = db.query(UnitOrMember).filter(
+            UnitOrMember.id == member_id,
+            UnitOrMember.profile_id == profile_id
+        ).first()
+        if not member:
+            raise HTTPException(status_code=404, detail="Мешканця/контрагента не знайдено")
     
     try:
         tx_date = datetime.strptime(date, "%Y-%m-%d").date()
@@ -5402,13 +5769,21 @@ def add_manual_transaction(
         amount=amount,
         direction=direction,
         purpose=purpose,
-        contragent=contragent,
+        contragent=contragent or (member.owner_name or member.identifier if member else None),
         type=direction if transaction_type in ["income", "expense"] else ("income" if direction == "in" else "expense"),
         taxable=taxable,
         transaction_type=transaction_type,
-        profile_id=profile_id
+        profile_id=profile_id,
+        member_id=member.id if member else None
     )
     db.add(payment)
+    
+    if member:
+        if direction == "in":
+            member.balance += amount
+        elif direction == "out":
+            member.balance -= amount
+            
     db.commit()
     db.refresh(payment)
     
@@ -5423,7 +5798,8 @@ def add_manual_transaction(
         "type": payment.type,
         "taxable": payment.taxable,
         "transaction_type": payment.transaction_type,
-        "profile_id": payment.profile_id
+        "profile_id": payment.profile_id,
+        "member_id": payment.member_id
     }
 
 @app.post("/api/profiles")
@@ -7854,46 +8230,6 @@ def admin_activate_module(
     else:
         sub.is_member_module_active = True
         sub.status = "active"
-        
-    osbb_enterprise = db.query(Profile).filter(
-        Profile.parent_profile_id == profile.id,
-        Profile.has_resident_cabinet == True
-    ).first()
-    if not osbb_enterprise:
-        osbb_enterprise = Profile(
-            user_id=profile.user_id,
-            name=f"{profile.name} (Кабінет мешканців)",
-            tax_id=profile.tax_id,
-            address=profile.address,
-            tax_system="non_profit",
-            slug=slug_clean,
-            mono_api_token=profile.mono_api_token,
-            color_theme=profile.color_theme or "#3b82f6",
-            has_resident_cabinet=True,
-            is_member_module_active=True,
-            member_module_activated_at=datetime.utcnow(),
-            parent_profile_id=profile.id,
-            organization_subtype="osbb",
-            bank_name=profile.bank_name,
-            mfo=profile.mfo,
-            iban=profile.iban,
-            phone=profile.phone,
-            director_name=profile.director_name
-        )
-        db.add(osbb_enterprise)
-    else:
-        osbb_enterprise.slug = slug_clean
-        osbb_enterprise.color_theme = color_theme or "#3b82f6"
-        osbb_enterprise.tax_id = profile.tax_id
-        osbb_enterprise.address = profile.address
-        osbb_enterprise.bank_name = profile.bank_name
-        osbb_enterprise.mfo = profile.mfo
-        osbb_enterprise.iban = profile.iban
-        osbb_enterprise.phone = profile.phone
-        osbb_enterprise.director_name = profile.director_name
-        osbb_enterprise.is_member_module_active = True
-        osbb_enterprise.is_blocked = False
-        osbb_enterprise.block_reason = None
         
     db.commit()
     return {"status": "success", "message": "Модуль активовано"}
@@ -13728,19 +14064,9 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
             profile = db.query(Profile).filter(Profile.id == profile_id).first()
             if profile:
                 profile.has_resident_cabinet = enable_module
-                
-                # Check child resident cabinet profile
-                child_profile = db.query(Profile).filter(
-                    Profile.parent_profile_id == profile_id,
-                    Profile.has_resident_cabinet == True
-                ).first()
-                if child_profile:
-                    if enable_module:
-                        child_profile.is_blocked = False
-                        child_profile.block_reason = None
-                    else:
-                        child_profile.is_blocked = True
-                        child_profile.block_reason = "Деактивовано: модуль не оплачено в підписці"
+                profile.is_member_module_active = enable_module
+                if enable_module and not profile.member_module_activated_at:
+                    profile.member_module_activated_at = datetime.utcnow()
             
             # Send payment success email
             profile = subscription.profile
@@ -15000,7 +15326,7 @@ def admin_update_subscription(
         )
         db.add(sub)
         
-    # Sync profile and child profile
+    # Sync profile
     profile.is_member_module_active = bool(req.is_member_module_active)
     profile.has_resident_cabinet = bool(req.is_member_module_active)
     
@@ -15017,56 +15343,6 @@ def admin_update_subscription(
             while db.query(Profile).filter(Profile.slug == profile.slug, Profile.id != profile.id).first():
                 profile.slug = f"{base_slug}-{counter}"
                 counter += 1
-                
-        # Find or create child profile
-        child_profile = db.query(Profile).filter(
-            Profile.parent_profile_id == profile_id,
-            Profile.has_resident_cabinet == True
-        ).first()
-        if not child_profile:
-            child_profile = Profile(
-                user_id=profile.user_id,
-                name=f"{profile.name} (Кабінет мешканців)",
-                tax_id=profile.tax_id,
-                address=profile.address,
-                tax_system="non_profit",
-                slug=profile.slug,
-                mono_api_token=profile.mono_api_token,
-                color_theme=profile.color_theme or "#3b82f6",
-                has_resident_cabinet=True,
-                is_member_module_active=True,
-                member_module_activated_at=datetime.utcnow(),
-                parent_profile_id=profile.id,
-                organization_subtype="osbb",
-                bank_name=profile.bank_name,
-                mfo=profile.mfo,
-                iban=profile.iban,
-                phone=profile.phone,
-                director_name=profile.director_name
-            )
-            db.add(child_profile)
-        else:
-            child_profile.is_blocked = False
-            child_profile.block_reason = None
-            child_profile.is_member_module_active = True
-            child_profile.slug = profile.slug
-            child_profile.tax_id = profile.tax_id
-            child_profile.address = profile.address
-            child_profile.bank_name = profile.bank_name
-            child_profile.mfo = profile.mfo
-            child_profile.iban = profile.iban
-            child_profile.phone = profile.phone
-            child_profile.director_name = profile.director_name
-    else:
-        # Block child profile
-        child_profile = db.query(Profile).filter(
-            Profile.parent_profile_id == profile_id,
-            Profile.has_resident_cabinet == True
-        ).first()
-        if child_profile:
-            child_profile.is_blocked = True
-            child_profile.is_member_module_active = False
-            child_profile.block_reason = "Деактивовано: модуль не оплачено в підписці"
 
     db.commit()
     return {"message": "Підписку оновлено", "plan": sub.plan, "expires_at": sub.expires_at}
@@ -16977,6 +17253,13 @@ def get_resident_cabinet_status(
         Pricing.payment_period == "monthly"
     ).first()
     
+    basic_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 1).first()
+    premium_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 2).first()
+    
+    basic_price = basic_plan.price if basic_plan else 499.0
+    premium_price = premium_plan.price if premium_plan else 999.0
+    module_price = premium_plan.member_module_price if (premium_plan and premium_plan.has_member_module) else 500.0
+    
     return {
         "is_active": is_active,
         "slug": profile.slug,
@@ -16991,7 +17274,13 @@ def get_resident_cabinet_status(
         "pricing": {
             "price": pricing.price if pricing else 500,
             "currency": pricing.currency if pricing else "UAH"
-        } if pricing else {"price": 500, "currency": "UAH"}
+        } if pricing else {"price": 500, "currency": "UAH"},
+        "prices": {
+            "basic": float(basic_price),
+            "premium": float(premium_price),
+            "module": float(module_price),
+            "currency": "UAH"
+        }
     }
 
 
@@ -17059,47 +17348,8 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
             counter += 1
         profile.slug = slug
         
-    # Create or update child resident cabinet profile
-    osbb_enterprise = db.query(Profile).filter(
-        Profile.parent_profile_id == profile.id,
-        Profile.has_resident_cabinet == True
-    ).first()
-    
-    if not osbb_enterprise:
-        osbb_enterprise = Profile(
-            user_id=profile.user_id,
-            name=f"{profile.name} (Кабінет мешканців)",
-            tax_id=profile.tax_id,
-            address=profile.address,
-            tax_system="non_profit",
-            slug=slug,
-            mono_api_token=profile.mono_api_token,
-            color_theme=profile.color_theme or "#3b82f6",
-            has_resident_cabinet=True,
-            parent_profile_id=profile.id,
-            organization_subtype="osbb",
-            bank_name=profile.bank_name,
-            mfo=profile.mfo,
-            iban=profile.iban,
-            phone=profile.phone,
-            director_name=profile.director_name
-        )
-        db.add(osbb_enterprise)
-        db.flush()
-    else:
-        osbb_enterprise.slug = slug
-        osbb_enterprise.name = f"{profile.name} (Кабінет мешканців)"
-        osbb_enterprise.tax_id = profile.tax_id
-        osbb_enterprise.address = profile.address
-        osbb_enterprise.bank_name = profile.bank_name
-        osbb_enterprise.mfo = profile.mfo
-        osbb_enterprise.iban = profile.iban
-        osbb_enterprise.phone = profile.phone
-        osbb_enterprise.director_name = profile.director_name
-        
     db.commit()
     db.refresh(profile)
-    db.refresh(osbb_enterprise)
     
     subscription = db.query(Subscription).filter(Subscription.profile_id == profile.id).first()
     plan_code = "premium" if plan.id == 2 else "basic"
@@ -17164,7 +17414,7 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
         "total_price": total_price,
         "payment_url": payment_url,
         "member_module_active": enable_module,
-        "member_profile_id": osbb_enterprise.id,
+        "member_profile_id": profile.id,
         "member_login_url": f"{frontend_url}/osbb/{slug}"
     }
 

@@ -36,7 +36,10 @@ import {
   Unlock,
   Eye,
   Crown,
-  Clock
+  Clock,
+  Printer,
+  Download,
+  History as HistoryIcon
 } from "lucide-react";
 
 interface Member {
@@ -189,6 +192,35 @@ export default function BillingPage() {
   const [rcPurchasing, setRcPurchasing] = useState(false);
   const [rcLoading, setRcLoading] = useState(false);
 
+  // Contractors Module State
+  const [contractors, setContractors] = useState<any[]>([]);
+  const [contractorSearchTerm, setContractorSearchTerm] = useState("");
+  const [contractorTypeFilter, setContractorTypeFilter] = useState("all");
+  const [contractorModalOpen, setContractorModalOpen] = useState(false);
+  const [editingContractor, setEditingContractor] = useState<any | null>(null);
+  const [contractorName, setContractorName] = useState("");
+  const [contractorType, setContractorType] = useState("provider");
+  const [contractorTaxId, setContractorTaxId] = useState("");
+  const [contractorPhone, setContractorPhone] = useState("");
+  const [contractorEmail, setContractorEmail] = useState("");
+  const [contractorAddress, setContractorAddress] = useState("");
+  const [contractorInitialBalance, setContractorInitialBalance] = useState<number>(0);
+
+  const [contractorTxModalOpen, setContractorTxModalOpen] = useState(false);
+  const [selectedContractorForTx, setSelectedContractorForTx] = useState<any | null>(null);
+  const [contractorTxType, setContractorTxType] = useState<"income" | "expense">("expense");
+  const [contractorTxAmount, setContractorTxAmount] = useState("");
+  const [contractorTxDescription, setContractorTxDescription] = useState("");
+  const [contractorTxDate, setContractorTxDate] = useState(new Date().toISOString().split("T")[0]);
+  const [contractorTxDocumentUrl, setContractorTxDocumentUrl] = useState("");
+
+  const [contractorHistoryModalOpen, setContractorHistoryModalOpen] = useState(false);
+  const [selectedContractorForHistory, setSelectedContractorForHistory] = useState<any | null>(null);
+  const [contractorHistoryData, setContractorHistoryData] = useState<any[]>([]);
+  const [loadingContractorHistory, setLoadingContractorHistory] = useState(false);
+  const [historyStartDate, setHistoryStartDate] = useState("");
+  const [historyEndDate, setHistoryEndDate] = useState("");
+
   const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
     setToast({ message, type });
     setTimeout(() => {
@@ -211,12 +243,53 @@ export default function BillingPage() {
 
       const fetchedMeters = await api.getMeters(selectedProfile.id);
       setMeters(fetchedMeters || []);
+
+      const fetchedContractors = await api.getContractors(selectedProfile.id);
+      setContractors(fetchedContractors || []);
+
       setError(null);
     } catch (err: any) {
       console.error("Error fetching billing data", err);
       setError("Не вдалося завантажити дані. Будь ласка, перевірте з'єднання.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getContractorTypeLabel = (type: string) => {
+    switch (type) {
+      case "provider":
+        return "Постачальник послуг";
+      case "contractor":
+        return "Підрядник";
+      case "tenant":
+        return "Орендар";
+      case "bank":
+        return "Банк";
+      default:
+        return "Інше";
+    }
+  };
+
+  const renderContractorBalance = (balance: number) => {
+    if (balance > 0) {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-extrabold">
+          +{balance.toLocaleString("uk-UA")} грн (передплата)
+        </span>
+      );
+    } else if (balance < 0) {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs bg-rose-500/10 text-rose-600 dark:text-rose-400 font-extrabold">
+          {balance.toLocaleString("uk-UA")} грн (борг)
+        </span>
+      );
+    } else {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs bg-slate-100 dark:bg-slate-800 text-slate-500 font-extrabold">
+          0 грн
+        </span>
+      );
     }
   };
 
@@ -379,6 +452,261 @@ export default function BillingPage() {
       console.error(err);
       showToast("Помилка при видаленні об'єкта", "error");
     }
+  };
+
+  const handleOpenAddContractorModal = () => {
+    setEditingContractor(null);
+    setContractorName("");
+    setContractorType("provider");
+    setContractorTaxId("");
+    setContractorPhone("");
+    setContractorEmail("");
+    setContractorAddress("");
+    setContractorInitialBalance(0);
+    setContractorModalOpen(true);
+  };
+
+  const handleOpenEditContractorModal = (c: any) => {
+    setEditingContractor(c);
+    setContractorName(c.name || "");
+    setContractorType(c.type || "provider");
+    setContractorTaxId(c.tax_id || "");
+    setContractorPhone(c.phone || "");
+    setContractorEmail(c.email || "");
+    setContractorAddress(c.address || "");
+    setContractorInitialBalance(c.initial_balance || 0);
+    setContractorModalOpen(true);
+  };
+
+  const handleSaveContractor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!contractorName.trim()) {
+      showToast("Вкажіть назву контрагента", "error");
+      return;
+    }
+
+    try {
+      const payload = {
+        profile_id: selectedProfile.id,
+        name: contractorName,
+        type: contractorType,
+        tax_id: contractorTaxId || undefined,
+        phone: contractorPhone || undefined,
+        email: contractorEmail || undefined,
+        address: contractorAddress || undefined,
+        initial_balance: Number(contractorInitialBalance) || 0,
+      };
+
+      if (editingContractor) {
+        await api.updateContractor(editingContractor.id, payload);
+        showToast("Контрагента успішно оновлено!");
+      } else {
+        await api.createContractor(payload);
+        showToast("Контрагента успішно додано!");
+      }
+
+      setContractorModalOpen(false);
+      const fetchedContractors = await api.getContractors(selectedProfile.id);
+      setContractors(fetchedContractors || []);
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.response?.data?.detail || "Помилка збереження контрагента", "error");
+    }
+  };
+
+  const handleDeleteContractor = async (id: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Ви впевнені, що хочете видалити цього контрагента?")) return;
+
+    try {
+      await api.deleteContractor(id);
+      showToast("Контрагента видалено");
+      const fetchedContractors = await api.getContractors(selectedProfile.id);
+      setContractors(fetchedContractors || []);
+    } catch (err: any) {
+      console.error(err);
+      showToast("Помилка при видаленні контрагента", "error");
+    }
+  };
+
+  const handleOpenContractorTxModal = (c: any, type: "income" | "expense") => {
+    setSelectedContractorForTx(c);
+    setContractorTxType(type);
+    setContractorTxAmount("");
+    setContractorTxDescription("");
+    setContractorTxDate(new Date().toISOString().split("T")[0]);
+    setContractorTxDocumentUrl("");
+    setContractorTxModalOpen(true);
+  };
+
+  const handleSaveContractorTx = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedContractorForTx) return;
+    if (!contractorTxAmount.trim() || isNaN(Number(contractorTxAmount)) || Number(contractorTxAmount) <= 0) {
+      showToast("Вкажіть коректну суму операції", "error");
+      return;
+    }
+    if (!contractorTxDescription.trim()) {
+      showToast("Вкажіть призначення платежу", "error");
+      return;
+    }
+
+    try {
+      const payload = {
+        type: contractorTxType,
+        amount: Number(contractorTxAmount),
+        description: contractorTxDescription,
+        transaction_date: contractorTxDate,
+        document_url: contractorTxDocumentUrl || undefined,
+        user_id: selectedProfile?.user_id
+      };
+
+      await api.createContractorTransaction(selectedContractorForTx.id, payload);
+      showToast("Транзакцію успішно додано!");
+      setContractorTxModalOpen(false);
+
+      const fetchedContractors = await api.getContractors(selectedProfile.id);
+      setContractors(fetchedContractors || []);
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.response?.data?.detail || "Помилка при збереженні транзакції", "error");
+    }
+  };
+
+  const handleOpenContractorHistoryModal = async (c: any) => {
+    setSelectedContractorForHistory(c);
+    setHistoryStartDate("");
+    setHistoryEndDate("");
+    setLoadingContractorHistory(true);
+    setContractorHistoryModalOpen(true);
+    try {
+      const res = await api.getContractorTransactions(c.id);
+      setContractorHistoryData(res.transactions || []);
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося завантажити історію транзакцій", "error");
+    } finally {
+      setLoadingContractorHistory(false);
+    }
+  };
+
+  const handleExportContractorCSV = () => {
+    if (!selectedContractorForHistory) return;
+    const filteredTxs = contractorHistoryData.filter((t) => {
+      if (historyStartDate && t.transaction_date < historyStartDate) return false;
+      if (historyEndDate && t.transaction_date > historyEndDate) return false;
+      return true;
+    });
+
+    const headers = ["ID", "Дата", "Тип", "Сума (грн)", "Призначення", "Документ"];
+    const rows = filteredTxs.map((t) => [
+      t.id,
+      t.transaction_date,
+      t.type === "income" ? "Прихід" : "Видаток",
+      t.amount,
+      t.description.replace(/"/g, '""'),
+      t.document_url || ""
+    ]);
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(e => e.map(val => `"${val}"`).join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `contractor_${selectedContractorForHistory.id}_transactions.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handlePrintContractorHistory = () => {
+    if (!selectedContractorForHistory) return;
+    const filteredTxs = contractorHistoryData.filter((t) => {
+      if (historyStartDate && t.transaction_date < historyStartDate) return false;
+      if (historyEndDate && t.transaction_date > historyEndDate) return false;
+      return true;
+    });
+    const totalIn = filteredTxs.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
+    const totalOut = filteredTxs.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
+    const balanceDiff = ["provider", "contractor", "bank"].includes(selectedContractorForHistory.type)
+      ? totalOut - totalIn
+      : totalIn - totalOut;
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Історія транзакцій - ${selectedContractorForHistory.name}</title>
+          <style>
+            body { font-family: 'Outfit', 'Helvetica Neue', Arial, sans-serif; padding: 20px; color: #1e293b; }
+            h2 { margin-bottom: 5px; }
+            .meta { color: #64748b; font-size: 14px; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; font-size: 14px; }
+            th { background-color: #f8fafc; font-weight: bold; }
+            .income { color: #16a34a; font-weight: bold; }
+            .expense { color: #dc2626; font-weight: bold; }
+            .totals { margin-top: 30px; font-size: 14px; width: 300px; float: right; }
+            .totals-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #cbd5e1; }
+            .totals-row.final { font-weight: bold; border-bottom: 2px solid #1e293b; font-size: 16px; }
+          </style>
+        </head>
+        <body>
+          <h2>Історія транзакцій: ${selectedContractorForHistory.name}</h2>
+          <div class="meta">
+            Період: ${historyStartDate || "початок"} — ${historyEndDate || "сьогодні"}<br/>
+            Сгенеровано: ${new Date().toLocaleDateString("uk-UA")}
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Дата</th>
+                <th>Тип</th>
+                <th>Сума</th>
+                <th>Призначення</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredTxs.map(t => `
+                <tr>
+                  <td>#${t.id}</td>
+                  <td>${t.transaction_date}</td>
+                  <td>${t.type === "income" ? "Прихід" : "Видаток"}</td>
+                  <td class="${t.type === "income" ? "income" : "expense"}">
+                    ${t.type === "income" ? "+" : "-"}${t.amount.toLocaleString("uk-UA")} грн
+                  </td>
+                  <td>${t.description}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+          <div class="totals">
+            <div class="totals-row">
+              <span>Прихід:</span>
+              <span class="income">+${totalIn.toLocaleString("uk-UA")} грн</span>
+            </div>
+            <div class="totals-row">
+              <span>Видаток:</span>
+              <span class="expense">-${totalOut.toLocaleString("uk-UA")} грн</span>
+            </div>
+            <div class="totals-row final">
+              <span>Сальдо змін:</span>
+              <span class="${balanceDiff >= 0 ? "income" : "expense"}">
+                ${balanceDiff >= 0 ? "+" : ""}${balanceDiff.toLocaleString("uk-UA")} грн
+              </span>
+            </div>
+          </div>
+          <script>
+            window.onload = function() { window.print(); }
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   const handleCharge = async () => {
@@ -641,25 +969,26 @@ export default function BillingPage() {
 
   // Calculations for stats
   const totalDebt = members
-    .filter((m) => m.balance < 0)
+    .filter((m) => m.property_type !== "провайдер" && m.balance < 0)
     .reduce((sum, m) => sum + Math.abs(m.balance), 0);
   
   const totalPrepaid = members
-    .filter((m) => m.balance > 0)
+    .filter((m) => m.property_type !== "провайдер" && m.balance > 0)
     .reduce((sum, m) => sum + m.balance, 0);
 
-  const estimatedMonthlyAccruals = members.reduce((sum, m) => {
-    if (m.rate_per_sqm && m.area) {
-      return sum + m.rate_per_sqm * m.area;
-    }
-    return sum + (m.fixed_monthly_fee || 0);
-  }, 0);
+  const estimatedMonthlyAccruals = members
+    .filter((m) => m.property_type !== "провайдер")
+    .reduce((sum, m) => {
+      if (m.rate_per_sqm && m.area) {
+        return sum + m.rate_per_sqm * m.area;
+      }
+      return sum + (m.fixed_monthly_fee || 0);
+    }, 0);
 
   // Filtered members list
   const filteredMembers = members.filter((m) => {
     const isProvider = m.property_type === "провайдер";
-    if (activeTab === "members" && isProvider) return false;
-    if (activeTab === "contractors" && !isProvider) return false;
+    if (isProvider) return false;
 
     const searchLower = searchTerm.toLowerCase();
     const matchesSearch =
@@ -916,7 +1245,7 @@ export default function BillingPage() {
                   : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-250"
               }`}
             >
-              Контрагенти ({members.filter(m => m.property_type === "провайдер").length})
+              Контрагенти ({contractors.length})
             </button>
             <button
               onClick={() => setActiveTab("payments")}
@@ -960,20 +1289,20 @@ export default function BillingPage() {
             </button>
           </div>
 
-          {(activeTab === "members" || activeTab === "contractors") && (
+          {activeTab === "members" && (
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
               <button
                 onClick={handleOpenAddModal}
                 className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-2 rounded-xl"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>{activeTab === "contractors" ? "Додати контрагента" : "Додати мешканця"}</span>
+                <span>Додати мешканця</span>
               </button>
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder={activeTab === "contractors" ? "Пошук за назвою, реквізитами..." : "Пошук об'єкта, ПІБ, типу..."}
+                  placeholder="Пошук об'єкта, ПІБ, типу..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
@@ -988,6 +1317,41 @@ export default function BillingPage() {
                 <option value="all">Усі баланси</option>
                 <option value="debt">Тільки боржники</option>
                 <option value="prepaid">Тільки з передплатою</option>
+              </select>
+            </div>
+          )}
+
+          {activeTab === "contractors" && (
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+              <button
+                onClick={handleOpenAddContractorModal}
+                className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-2 rounded-xl"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Додати контрагента</span>
+              </button>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Пошук за назвою, ЄДРПОУ..."
+                  value={contractorSearchTerm}
+                  onChange={(e) => setContractorSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                />
+              </div>
+
+              <select
+                value={contractorTypeFilter}
+                onChange={(e: any) => setContractorTypeFilter(e.target.value)}
+                className="w-full sm:w-auto px-4 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="all">Усі типи</option>
+                <option value="provider">Постачальник послуг</option>
+                <option value="contractor">Підрядник</option>
+                <option value="tenant">Орендар</option>
+                <option value="bank">Банк</option>
+                <option value="other">Інше</option>
               </select>
             </div>
           )}
@@ -1303,25 +1667,17 @@ export default function BillingPage() {
         )}
 
         {/* Tab 1: Members Table */}
-        {(activeTab === "members" || activeTab === "contractors") && (
+        {activeTab === "members" && (
           <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                    <th className="px-6 py-4">
-                      {activeTab === "contractors" ? "Контрагент / Договір" : "Об'єкт / Тип"}
-                    </th>
-                    <th className="px-6 py-4">
-                      {activeTab === "contractors" ? "Назва / Представник" : "Власник"}
-                    </th>
-                    <th className="px-6 py-4">
-                      {activeTab === "contractors" ? "Прив'язка до об'єкта" : "Зв'язок (Батьківський)"}
-                    </th>
+                    <th className="px-6 py-4">Об'єкт / Тип</th>
+                    <th className="px-6 py-4">Власник</th>
+                    <th className="px-6 py-4">Зв'язок (Батьківський)</th>
                     <th className="px-6 py-4">Контакти</th>
-                    <th className="px-6 py-4">
-                      {activeTab === "contractors" ? "Орендна плата / Тариф" : "Параметри внеску"}
-                    </th>
+                    <th className="px-6 py-4">Параметри внеску</th>
                     <th className="px-6 py-4">Поточний баланс</th>
                     <th className="px-6 py-4 text-right">Дії</th>
                   </tr>
@@ -1352,17 +1708,16 @@ export default function BillingPage() {
                             <button
                               type="button"
                               onClick={() => handleOpenMemberDetails(m.id)}
-                              className="flex items-center space-x-2.5 text-left hover:text-indigo-600 transition-colors"
+                              className="flex items-center space-x-2.5 text-left hover:text-indigo-650 transition-colors"
                             >
                               <div className="w-9 h-9 rounded-lg bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 flex flex-col items-center justify-center text-[10px] font-black">
-                                <span className="uppercase text-[9px] font-medium tracking-tight text-slate-400">{m.property_type === "провайдер" ? "дог." : (m.property_type || "кв.")}</span>
+                                <span className="uppercase text-[9px] font-medium tracking-tight text-slate-400">{(m.property_type || "кв.")}</span>
                                 <span className="text-xs -mt-1 font-bold">{m.identifier}</span>
                               </div>
                               <div className="flex flex-col">
                                 <span className="text-slate-800 dark:text-white font-bold hover:underline">
-                                  {m.property_type === "провайдер" ? "Контрагент" : (m.property_type || "кв.")} {m.identifier}
+                                  {(m.property_type || "кв.")} {m.identifier}
                                 </span>
-                                {m.property_type === "провайдер" && <span className="text-[10px] text-slate-400">Кабельне / Інтернет обладнання</span>}
                               </div>
                             </button>
                           </td>
@@ -1370,7 +1725,7 @@ export default function BillingPage() {
                             <button
                               type="button"
                               onClick={() => handleOpenMemberDetails(m.id)}
-                              className="hover:underline hover:text-indigo-600 transition-colors font-semibold text-left"
+                              className="hover:underline hover:text-indigo-650 transition-colors font-semibold text-left"
                             >
                               {m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}
                             </button>
@@ -1378,7 +1733,7 @@ export default function BillingPage() {
                           <td className="px-6 py-4 text-xs text-slate-400">
                             {parentMember ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
-                                {m.property_type === "провайдер" ? "Об'єкт: " : "Прив'язка до: "} {parentMember.property_type || "кв."} {parentMember.identifier}
+                                Прив'язка до: {parentMember.property_type || "кв."} {parentMember.identifier}
                               </span>
                             ) : (
                               <span className="text-slate-400 italic">Немає</span>
@@ -1388,7 +1743,7 @@ export default function BillingPage() {
                             {m.email && (
                               <div className="flex items-center">
                                 <Mail className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                                <a href={`mailto:${m.email}`} className="hover:text-indigo-600 hover:underline">{m.email}</a>
+                                <a href={`mailto:${m.email}`} className="hover:text-indigo-650 hover:underline">{m.email}</a>
                               </div>
                             )}
                             {m.phone && (
@@ -1400,32 +1755,17 @@ export default function BillingPage() {
                             {!m.email && !m.phone && <span className="text-slate-400 italic">-</span>}
                           </td>
                           <td className="px-6 py-4 text-xs text-slate-500 space-y-1">
-                            {m.property_type === "провайдер" ? (
-                              m.fixed_monthly_fee ? (
-                                <div>
-                                  Оренда: <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.fixed_monthly_fee} грн/міс</span>
-                                </div>
-                              ) : m.area && m.rate_per_sqm ? (
-                                <div>
-                                  <span className="font-semibold text-slate-700 dark:text-slate-350">{m.area} кв.м</span> @ <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.rate_per_sqm} грн/кв.м</span>
-                                  <div className="text-[10px] text-slate-450 mt-0.5">(= {(m.area * m.rate_per_sqm).toFixed(2)} грн/міс)</div>
-                                </div>
-                              ) : (
-                                <span className="text-slate-400 italic">Не встановлено</span>
-                              )
+                            {m.area && m.rate_per_sqm ? (
+                              <div>
+                                <span className="font-semibold text-slate-700 dark:text-slate-355">{m.area} кв.м</span> @ <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.rate_per_sqm} грн/кв.м</span>
+                                <div className="text-[10px] text-slate-450 mt-0.5">(= {(m.area * m.rate_per_sqm).toFixed(2)} грн/міс)</div>
+                              </div>
+                            ) : m.fixed_monthly_fee ? (
+                              <div>
+                                Фіксований: <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.fixed_monthly_fee} грн/міс</span>
+                              </div>
                             ) : (
-                              m.area && m.rate_per_sqm ? (
-                                <div>
-                                  <span className="font-semibold text-slate-700 dark:text-slate-350">{m.area} кв.м</span> @ <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.rate_per_sqm} грн/кв.м</span>
-                                  <div className="text-[10px] text-slate-450 mt-0.5">(= {(m.area * m.rate_per_sqm).toFixed(2)} грн/міс)</div>
-                                </div>
-                              ) : m.fixed_monthly_fee ? (
-                                <div>
-                                  Фіксований: <span className="font-semibold text-indigo-550 dark:text-indigo-400">{m.fixed_monthly_fee} грн/міс</span>
-                                </div>
-                              ) : (
-                                <span className="text-slate-400 italic">Не встановлено</span>
-                              )
+                              <span className="text-slate-400 italic">Не встановлено</span>
                             )}
                           </td>
                           <td className="px-6 py-4 font-bold">
@@ -1472,6 +1812,146 @@ export default function BillingPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* Tab 1.5: Contractors Grid */}
+        {activeTab === "contractors" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {loading ? (
+              <div className="col-span-full text-center py-12 text-slate-400">
+                <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500 mb-2"></div>
+                <p>Завантаження даних...</p>
+              </div>
+            ) : (() => {
+              const filteredContractors = contractors.filter((c) => {
+                const searchLower = contractorSearchTerm.toLowerCase();
+                const matchesSearch =
+                  c.name.toLowerCase().includes(searchLower) ||
+                  (c.tax_id && c.tax_id.toLowerCase().includes(searchLower)) ||
+                  (c.email && c.email.toLowerCase().includes(searchLower)) ||
+                  (c.phone && c.phone.toLowerCase().includes(searchLower));
+
+                if (contractorTypeFilter !== "all" && c.type !== contractorTypeFilter) return false;
+                return matchesSearch;
+              });
+
+              if (filteredContractors.length === 0) {
+                return (
+                  <div className="col-span-full text-center py-12 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                    <Users className="w-12 h-12 mx-auto mb-3 text-slate-300 dark:text-slate-700" />
+                    <p className="text-slate-500 dark:text-slate-400 font-medium">Контрагентів не знайдено</p>
+                    <p className="text-xs text-slate-400 mt-1">Додайте нового контрагента, щоб розпочати роботу</p>
+                  </div>
+                );
+              }
+
+              return filteredContractors.map((c) => {
+                return (
+                  <div key={c.id} className="glass-panel bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800/60 p-6 shadow-xl hover:shadow-2xl transition-all duration-350 flex flex-col justify-between relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none group-hover:bg-indigo-500/10 transition-colors" />
+                    <div>
+                      {/* Badge and Name */}
+                      <div className="flex justify-between items-start mb-4">
+                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${
+                          c.type === "provider" 
+                            ? "bg-indigo-500/10 border-indigo-500/20 text-indigo-650 dark:text-indigo-400" 
+                            : c.type === "contractor" 
+                              ? "bg-amber-500/10 border-amber-500/20 text-amber-650 dark:text-amber-400"
+                              : c.type === "tenant" 
+                                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                                : c.type === "bank" 
+                                  ? "bg-cyan-500/10 border-cyan-500/20 text-cyan-650 dark:text-cyan-400"
+                                  : "bg-slate-100 dark:bg-slate-800 border-slate-200 text-slate-600 dark:text-slate-400"
+                        }`}>
+                          {getContractorTypeLabel(c.type)}
+                        </span>
+                        <div className="flex space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <button
+                            onClick={() => handleOpenEditContractorModal(c)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-amber-505 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+                            title="Редагувати"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteContractor(c.id)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+                            title="Видалити"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <h4 className="text-base font-extrabold text-slate-900 dark:text-white leading-tight mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                        {c.name}
+                      </h4>
+
+                      {/* Details list */}
+                      <div className="space-y-1.5 text-xs text-slate-500 dark:text-slate-400 mb-6">
+                        {c.tax_id && (
+                          <div className="flex items-center">
+                            <span className="font-semibold text-slate-400 dark:text-slate-500 w-16">ЄДРПОУ:</span>
+                            <span className="font-mono text-slate-800 dark:text-slate-200">{c.tax_id}</span>
+                          </div>
+                        )}
+                        {c.phone && (
+                          <div className="flex items-center">
+                            <span className="font-semibold text-slate-400 dark:text-slate-500 w-16">Тел:</span>
+                            <a href={`tel:${c.phone}`} className="text-indigo-600 hover:underline">{c.phone}</a>
+                          </div>
+                        )}
+                        {c.email && (
+                          <div className="flex items-center">
+                            <span className="font-semibold text-slate-400 dark:text-slate-500 w-16">Email:</span>
+                            <a href={`mailto:${c.email}`} className="text-indigo-650 hover:underline">{c.email}</a>
+                          </div>
+                        )}
+                        {c.address && (
+                          <div className="flex items-start">
+                            <span className="font-semibold text-slate-400 dark:text-slate-500 w-16 flex-shrink-0">Адреса:</span>
+                            <span className="truncate" title={c.address}>{c.address}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Balance and Actions */}
+                    <div className="border-t border-slate-150 dark:border-slate-800/60 pt-4 mt-auto">
+                      <div className="flex justify-between items-center mb-4">
+                        <span className="text-[10px] text-slate-400 uppercase tracking-widest font-black">Поточний баланс:</span>
+                        {renderContractorBalance(c.balance)}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => handleOpenContractorTxModal(c, "expense")}
+                          className="flex items-center justify-center space-x-1 py-2 text-[11px] font-black uppercase tracking-wider bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl transition-all"
+                        >
+                          <DollarSign className="w-3 h-3" />
+                          <span>Сплатити</span>
+                        </button>
+                        <button
+                          onClick={() => handleOpenContractorTxModal(c, "income")}
+                          className="flex items-center justify-center space-x-1 py-2 text-[11px] font-black uppercase tracking-wider bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-450 rounded-xl transition-all"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Отримати</span>
+                        </button>
+                        <button
+                          onClick={() => handleOpenContractorHistoryModal(c)}
+                          className="flex items-center justify-center space-x-1 py-2 text-[11px] font-black uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-650 dark:text-indigo-400 rounded-xl border border-indigo-100 dark:border-indigo-900/50 transition-all"
+                        >
+                          <HistoryIcon className="w-3 h-3" />
+                          <span>Історія</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
 
@@ -2362,16 +2842,7 @@ export default function BillingPage() {
                       <span className="text-[9px] text-slate-400">
                         {selectedMemberDetails.member.balance < 0 ? "Наявна заборгованість" : "Передплата за послуги"}
                       </span>
-                      {selectedMemberDetails.member.balance < 0 && selectedMemberDetails.member.property_type !== "провайдер" && (
-                        <button
-                          type="button"
-                          onClick={() => handlePayMonoInvoice(selectedMemberDetails.member)}
-                          disabled={payingMono}
-                          className="mt-2 flex items-center justify-center px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white text-xs font-bold rounded-xl transition-all shadow-md hover:shadow-indigo-500/20"
-                        >
-                          {payingMono ? "Створення..." : "Оплатити через Mono Pay"}
-                        </button>
-                      )}
+
                     </div>
                   </div>
 
@@ -2766,6 +3237,450 @@ export default function BillingPage() {
                 </>
               )}
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Contractor Modal */}
+      {contractorModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg glass-panel bg-white dark:bg-slate-900 rounded-3xl overflow-hidden shadow-2xl animate-fade-in border border-slate-200 dark:border-slate-800">
+            <div className="flex justify-between items-center p-6 border-b border-slate-200 dark:border-slate-800/60">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                {editingContractor ? "Редагувати контрагента" : "Додати контрагента"}
+              </h3>
+              <button
+                onClick={() => setContractorModalOpen(false)}
+                className="text-slate-400 hover:text-slate-650 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveContractor} className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Назва контрагента / Організації *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="напр: ДТЕК Київські електромережі, ФОП Іванов"
+                  value={contractorName}
+                  onChange={(e) => setContractorName(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Тип контрагента *
+                  </label>
+                  <select
+                    value={contractorType}
+                    onChange={(e) => setContractorType(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="provider">Постачальник послуг</option>
+                    <option value="contractor">Підрядник</option>
+                    <option value="tenant">Орендар</option>
+                    <option value="bank">Банк</option>
+                    <option value="other">Інше</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Код ЄДРПОУ / ІПН
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="8 або 10 цифр"
+                    value={contractorTaxId}
+                    onChange={(e) => setContractorTaxId(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Номер телефону
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="+380..."
+                    value={contractorPhone}
+                    onChange={(e) => setContractorPhone(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Електронна пошта
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="partner@example.com"
+                    value={contractorEmail}
+                    onChange={(e) => setContractorEmail(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Юридична адреса
+                </label>
+                <input
+                  type="text"
+                  placeholder="напр: м. Київ, вул. Хрещатик, 1"
+                  value={contractorAddress}
+                  onChange={(e) => setContractorAddress(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Початковий баланс (грн)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={contractorInitialBalance}
+                  onChange={(e) => setContractorInitialBalance(parseFloat(e.target.value) || 0)}
+                  disabled={!!editingContractor}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                />
+                <span className="text-[10px] text-slate-400 block leading-tight">
+                  Коригується стартовий борг (зі знаком "-") чи передплата (зі знаком "+").
+                </span>
+              </div>
+
+              <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
+                <button
+                  type="button"
+                  onClick={() => setContractorModalOpen(false)}
+                  className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 rounded-xl transition-all"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all"
+                >
+                  Зберегти
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Conduct Contractor Transaction Modal */}
+      {contractorTxModalOpen && selectedContractorForTx && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md glass-panel bg-white dark:bg-slate-900 rounded-3xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800">
+            <div className="flex justify-between items-center p-6 border-b border-slate-200 dark:border-slate-800/60">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                {contractorTxType === "expense" ? "Провести видаток (сплатити)" : "Провести прихід (отримати)"}
+              </h3>
+              <button onClick={() => setContractorTxModalOpen(false)} className="text-slate-400 hover:text-slate-650">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveContractorTx} className="p-6 space-y-4">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-400">Контрагент:</span>
+                  <span className="font-bold text-slate-700 dark:text-slate-200">{selectedContractorForTx.name}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-400">Поточний баланс:</span>
+                  <span className={`font-bold ${selectedContractorForTx.balance < 0 ? "text-rose-600" : "text-emerald-650"}`}>
+                    {selectedContractorForTx.balance.toLocaleString("uk-UA")} грн
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-400">IBAN організації:</span>
+                  <span className="font-mono text-xs text-slate-600 dark:text-slate-350">{selectedProfile.iban || "Не вказано в профілі"}</span>
+                </div>
+              </div>
+
+              {/* Dynamic expected balance preview */}
+              {(() => {
+                const amountVal = parseFloat(contractorTxAmount) || 0;
+                let expectedBal = selectedContractorForTx.balance;
+                if (["provider", "contractor", "bank"].includes(selectedContractorForTx.type)) {
+                  expectedBal = selectedContractorForTx.balance - (contractorTxType === "income" ? amountVal : 0) + (contractorTxType === "expense" ? amountVal : 0);
+                } else {
+                  expectedBal = selectedContractorForTx.balance + (contractorTxType === "income" ? amountVal : 0) - (contractorTxType === "expense" ? amountVal : 0);
+                }
+                return (
+                  <div className="p-3.5 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-900/40 space-y-1">
+                    <div className="flex justify-between text-xs text-slate-500">
+                      <span>Очікуваний баланс після операції:</span>
+                      <span className={`font-extrabold text-sm ${expectedBal < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                        {expectedBal.toLocaleString("uk-UA")} грн
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Сума операції (грн) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    placeholder="0.00"
+                    value={contractorTxAmount}
+                    onChange={(e) => setContractorTxAmount(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Дата операції *</label>
+                  <input
+                    type="date"
+                    required
+                    value={contractorTxDate}
+                    onChange={(e) => setContractorTxDate(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-500 uppercase">Призначення платежу / Опис *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="напр: Оплата за ремонт ліфта згідно акту №4"
+                  value={contractorTxDescription}
+                  onChange={(e) => setContractorTxDescription(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-500 uppercase">Посилання на документ (PDF тощо)</label>
+                <input
+                  type="url"
+                  placeholder="https://example.com/invoice.pdf"
+                  value={contractorTxDocumentUrl}
+                  onChange={(e) => setContractorTxDocumentUrl(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-4 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setContractorTxModalOpen(false)}
+                  className="flex-1 py-3 text-sm font-semibold border border-slate-200 rounded-xl"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl"
+                >
+                  Провести
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Contractor History Modal */}
+      {contractorHistoryModalOpen && selectedContractorForHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-4xl glass-panel bg-white dark:bg-slate-900 rounded-3xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[85vh]">
+            <div className="flex justify-between items-center p-6 border-b border-slate-200 dark:border-slate-800/60">
+              <div className="flex items-center space-x-2">
+                <HistoryIcon className="w-5 h-5 text-indigo-500" />
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  Історія взаєморозрахунків: {selectedContractorForHistory.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => setContractorHistoryModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Date Filters & Exports Header */}
+            <div className="p-6 bg-slate-50/50 dark:bg-slate-950/30 border-b border-slate-200/60 dark:border-slate-800/40 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-slate-400">З</span>
+                  <input
+                    type="date"
+                    value={historyStartDate}
+                    onChange={(e) => setHistoryStartDate(e.target.value)}
+                    className="px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl"
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-slate-400">По</span>
+                  <input
+                    type="date"
+                    value={historyEndDate}
+                    onChange={(e) => setHistoryEndDate(e.target.value)}
+                    className="px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrintContractorHistory}
+                  className="flex items-center gap-1 bg-white hover:bg-slate-50 dark:bg-slate-950 dark:hover:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 transition-all"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Друк</span>
+                </button>
+                <button
+                  onClick={handleExportContractorCSV}
+                  className="flex items-center gap-1 bg-white hover:bg-slate-50 dark:bg-slate-950 dark:hover:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Експорт CSV</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingContractorHistory ? (
+                <div className="text-center py-12 text-slate-400">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-2"></div>
+                  <p>Завантаження історії транзакцій...</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Dynamic calculation of stats */}
+                  {(() => {
+                    const filteredTxs = contractorHistoryData.filter((t) => {
+                      if (historyStartDate && t.transaction_date < historyStartDate) return false;
+                      if (historyEndDate && t.transaction_date > historyEndDate) return false;
+                      return true;
+                    });
+                    const totalIn = filteredTxs.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
+                    const totalOut = filteredTxs.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
+                    const balanceDiff = ["provider", "contractor", "bank"].includes(selectedContractorForHistory.type)
+                      ? totalOut - totalIn
+                      : totalIn - totalOut;
+
+                    return (
+                      <>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="bg-slate-50 dark:bg-slate-905/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-850 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase tracking-widest font-black mb-1">Отримано (прихід)</div>
+                            <div className="text-xl font-black text-emerald-600 dark:text-emerald-450">
+                              +{totalIn.toLocaleString("uk-UA")} грн
+                            </div>
+                          </div>
+                          <div className="bg-slate-50 dark:bg-slate-905/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-850 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase tracking-widest font-black mb-1">Сплачено (видаток)</div>
+                            <div className="text-xl font-black text-rose-600 dark:text-rose-450">
+                              -{totalOut.toLocaleString("uk-UA")} грн
+                            </div>
+                          </div>
+                          <div className="bg-slate-50 dark:bg-slate-905/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-850 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase tracking-widest font-black mb-1">Зміна сальдо</div>
+                            <div className={`text-xl font-black ${balanceDiff >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                              {balanceDiff >= 0 ? "+" : ""}{balanceDiff.toLocaleString("uk-UA")} грн
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Transaction Table */}
+                        <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                          <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                            <thead>
+                              <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                <th className="px-4 py-3">ID</th>
+                                <th className="px-4 py-3">Дата</th>
+                                <th className="px-4 py-3">Тип</th>
+                                <th className="px-4 py-3">Сума</th>
+                                <th className="px-4 py-3">Призначення</th>
+                                <th className="px-4 py-3 text-right">Документ</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
+                              {filteredTxs.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="text-center py-8 text-slate-450 italic">
+                                    Операцій за вказаний період не знайдено
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredTxs.map((t) => (
+                                  <tr key={t.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-900/10">
+                                    <td className="px-4 py-3 font-semibold text-slate-400">#{t.id}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">{t.transaction_date}</td>
+                                    <td className="px-4 py-3">
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${
+                                        t.type === "income" 
+                                          ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-450" 
+                                          : "bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-450"
+                                      }`}>
+                                        {t.type === "income" ? "Прихід" : "Видаток"}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-3 font-bold whitespace-nowrap">
+                                      {t.type === "income" ? "+" : "-"}
+                                      {t.amount.toLocaleString("uk-UA")} грн
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-600 dark:text-slate-350">{t.description}</td>
+                                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                                      {t.document_url ? (
+                                        <a
+                                          href={t.document_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center text-indigo-650 hover:underline hover:text-indigo-500 font-bold"
+                                        >
+                                          <FileText className="w-3.5 h-3.5 mr-1" />
+                                          <span>PDF</span>
+                                        </a>
+                                      ) : (
+                                        <span className="text-slate-400">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-slate-200 dark:border-slate-800/60 bg-slate-50 dark:bg-slate-950/20 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setContractorHistoryModalOpen(false)}
+                className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white text-sm font-semibold rounded-xl transition-all"
+              >
+                Закрити
+              </button>
+            </div>
           </div>
         </div>
       )}

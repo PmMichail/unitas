@@ -36,6 +36,7 @@ interface Profile {
   non_profit_code?: string;
   parent_profile_id?: number | null;
   has_resident_cabinet?: boolean;
+  is_member_module_active?: boolean;
   slug?: string;
   color_theme?: string;
 }

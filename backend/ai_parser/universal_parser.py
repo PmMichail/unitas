@@ -187,6 +187,371 @@ class UniversalParser:
         except Exception as e:
             return self._parse_with_ai(file_path, f'Помилка парсингу HTML: {str(e)}')
 
+    def _parse_abank_pdf(self, file_path):
+        """Парсинг PDF виписок А-Банку за допомогою pdfplumber та геометричного аналізу"""
+        import pdfplumber
+        transactions = []
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    words = page.extract_words(x_tolerance=3, y_tolerance=3)
+                    if not words:
+                        continue
+                    
+                    # Detect layout style (card vs business account statement)
+                    is_card_layout = False
+                    for w in words:
+                        if w["text"] in ["Vypyska", "Opys", "Balans", "karttsi"]:
+                            is_card_layout = True
+                            break
+                    
+                    # Sort words by top, then by x0
+                    words_sorted = sorted(words, key=lambda w: (w["top"], w["x0"]))
+                    
+                    # Group into lines (tolerance 3.0 to keep lines separate)
+                    lines = []
+                    current_line = []
+                    for w in words_sorted:
+                        if not current_line:
+                            current_line.append(w)
+                        else:
+                            first_top = current_line[0]["top"]
+                            if abs(w["top"] - first_top) < 3.0:
+                                current_line.append(w)
+                            else:
+                                lines.append(current_line)
+                                current_line = [w]
+                    if current_line:
+                        lines.append(current_line)
+                        
+                    # Classify words on each line into columns
+                    rows = []
+                    for line in lines:
+                        line_sorted = sorted(line, key=lambda w: w["x0"])
+                        row = {
+                            "date": [],
+                            "number": [],
+                            "details": [],
+                            "purpose": [],
+                            "amount": []
+                        }
+                        for w in line_sorted:
+                            x0 = w["x0"]
+                            text = w["text"]
+                            if is_card_layout:
+                                if x0 < 100:
+                                    row["date"].append(text)
+                                elif 100 <= x0 < 350:
+                                    row["details"].append(text)
+                                elif 350 <= x0 < 450:
+                                    row["amount"].append(text)
+                                else:
+                                    # Balance column - ignore to avoid mixing with amount
+                                    pass
+                            else:
+                                if x0 < 90:
+                                    row["date"].append(text)
+                                elif 90 <= x0 < 180:
+                                    row["number"].append(text)
+                                elif 180 <= x0 < 340:
+                                    row["details"].append(text)
+                                elif 340 <= x0 < 505:
+                                    row["purpose"].append(text)
+                                else:
+                                    row["amount"].append(text)
+                        
+                        avg_top = sum([w["top"] for w in line]) / len(line)
+                        
+                        rows.append({
+                            "top": avg_top,
+                            "date": " ".join(row["date"]).strip(),
+                            "number": " ".join(row["number"]).strip(),
+                            "details": " ".join(row["details"]).strip(),
+                            "purpose": " ".join(row["purpose"]).strip(),
+                            "amount": " ".join(row["amount"]).strip()
+                        })
+                    
+                    # Identify transaction starting rows and their tops
+                    tx_headers = []
+                    for idx, r in enumerate(rows):
+                        date_str = r["date"]
+                        if re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", date_str):
+                            tx_headers.append((idx, r["top"]))
+                    
+                    if not tx_headers:
+                        continue
+                        
+                    first_tx_top = tx_headers[0][1]
+                    last_tx_top = tx_headers[-1][1]
+                    
+                    # Calculate midpoints between transaction headers
+                    midpoints = []
+                    for i in range(len(tx_headers) - 1):
+                        midpoints.append((tx_headers[i][1] + tx_headers[i+1][1]) / 2.0)
+                        
+                    # Group rows by transaction index
+                    page_txs = [
+                        {
+                            "date": rows[header_idx]["date"],
+                            "time": "",
+                            "number_parts": [],
+                            "details_parts": [],
+                            "purpose_parts": [],
+                            "amount_parts": [],
+                        }
+                        for header_idx, _ in tx_headers
+                    ]
+                    
+                    for r in rows:
+                        line_top = r["top"]
+                        # Apply geometric filters to discard headers & footers
+                        if line_top < first_tx_top - 15:
+                            continue
+                        if line_top > last_tx_top + 70:
+                            continue
+                            
+                        # Determine which tx this row belongs to based on midpoint boundaries
+                        tx_idx = len(tx_headers) - 1
+                        for i, mid in enumerate(midpoints):
+                            if line_top < mid:
+                                tx_idx = i
+                                break
+                                
+                        tx = page_txs[tx_idx]
+                        
+                        if r["date"] and r["date"] != tx["date"]:
+                            if re.match(r"^\d{2}:\d{2}:\d{2}$", r["date"]):
+                                tx["time"] = r["date"]
+                            else:
+                                tx["details_parts"].append(r["date"])
+                                
+                        if r["number"]:
+                            tx["number_parts"].append(r["number"])
+                        if r["details"]:
+                            tx["details_parts"].append(r["details"])
+                        if r["purpose"]:
+                            tx["purpose_parts"].append(r["purpose"])
+                        if r["amount"]:
+                            tx["amount_parts"].append(r["amount"])
+                    
+                    # Map page_txs to standard transaction dicts
+                    for tx in page_txs:
+                        amount_val = 0.0
+                        if tx["amount_parts"]:
+                            amount_val = self._clean_number(tx["amount_parts"][0])
+                        
+                        # Extract details
+                        detail_lines = tx["details_parts"] + tx["purpose_parts"]
+                        purpose, contragent, tx_edrpou, tx_iban = self._extract_details_from_lines(detail_lines)
+                        
+                        # Format date
+                        date_str = self._clean_date(tx["date"])
+                        
+                        tx_dict = self._create_transaction_dict(
+                            date=date_str,
+                            amount=amount_val,
+                            purpose=purpose,
+                            contragent=contragent,
+                            bank_name="А-Банк"
+                        )
+                        tx_dict["edrpou"] = tx_edrpou
+                        tx_dict["iban"] = tx_iban
+                        
+                        transactions.append(tx_dict)
+            
+            return transactions
+        except Exception as e:
+            print(f"[A-Bank Parser Error] {e}")
+            return self._parse_with_ai(file_path, f"Помилка парсингу А-Банку: {str(e)}")
+
+    def _parse_monobank_pdf(self, file_path):
+        """Парсинг PDF виписок Monobank за допомогою pdfplumber та геометричного аналізу"""
+        import pdfplumber
+        transactions = []
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    words = page.extract_words(x_tolerance=3, y_tolerance=3)
+                    if not words:
+                        continue
+                    
+                    # Sort words by top, then by x0
+                    words_sorted = sorted(words, key=lambda w: (w["top"], w["x0"]))
+                    
+                    # Group into lines (tolerance 3.0 to keep lines separate)
+                    lines = []
+                    current_line = []
+                    for w in words_sorted:
+                        # Normalize Ukrainian i
+                        w["text"] = self._normalize_ukrainian_i(w["text"])
+                        
+                        if not current_line:
+                            current_line.append(w)
+                        else:
+                            first_top = current_line[0]["top"]
+                            if abs(w["top"] - first_top) < 3.0:
+                                current_line.append(w)
+                            else:
+                                lines.append(current_line)
+                                current_line = [w]
+                    if current_line:
+                        lines.append(current_line)
+                        
+                    # Classify words on each line into columns
+                    rows = []
+                    for line in lines:
+                        line_sorted = sorted(line, key=lambda w: w["x0"])
+                        row = {
+                            "date": [],
+                            "details": [],
+                            "contragent": [],
+                            "amount": [],
+                            "balance": []
+                        }
+                        for w in line_sorted:
+                            x0 = w["x0"]
+                            text = w["text"]
+                            if x0 < 70:
+                                row["date"].append(text)
+                            elif 70 <= x0 < 195:
+                                row["details"].append(text)
+                            elif 195 <= x0 < 315:
+                                row["contragent"].append(text)
+                            elif 315 <= x0 < 365:
+                                row["amount"].append(text)
+                            else:
+                                row["balance"].append(text)
+                        
+                        avg_top = sum([w["top"] for w in line]) / len(line)
+                        
+                        rows.append({
+                            "top": avg_top,
+                            "date": " ".join(row["date"]).strip(),
+                            "details": " ".join(row["details"]).strip(),
+                            "contragent": " ".join(row["contragent"]).strip(),
+                            "amount": " ".join(row["amount"]).strip(),
+                            "balance": " ".join(row["balance"]).strip()
+                        })
+                    
+                    # Identify transaction starting rows and their tops
+                    tx_headers = []
+                    for idx, r in enumerate(rows):
+                        date_str = r["date"]
+                        if re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", date_str):
+                            tx_headers.append((idx, r["top"]))
+                    
+                    if not tx_headers:
+                        continue
+                        
+                    first_tx_top = tx_headers[0][1]
+                    last_tx_top = tx_headers[-1][1]
+                    
+                    # Calculate midpoints between transaction headers
+                    midpoints = []
+                    for i in range(len(tx_headers) - 1):
+                        midpoints.append((tx_headers[i][1] + tx_headers[i+1][1]) / 2.0)
+                        
+                    # Group rows by transaction index
+                    page_txs = [
+                        {
+                            "date": rows[header_idx]["date"],
+                            "time": "",
+                            "details_parts": [],
+                            "contragent_parts": [],
+                            "amount_parts": [],
+                        }
+                        for header_idx, _ in tx_headers
+                    ]
+                    
+                    for r in rows:
+                        line_top = r["top"]
+                        # Apply geometric filters to discard headers & footers
+                        if line_top < first_tx_top - 15:
+                            continue
+                        if line_top > last_tx_top + 70:
+                            continue
+                            
+                        # Determine which tx this row belongs to based on midpoint boundaries
+                        tx_idx = len(tx_headers) - 1
+                        for i, mid in enumerate(midpoints):
+                            if line_top < mid:
+                                tx_idx = i
+                                break
+                                
+                        tx = page_txs[tx_idx]
+                        
+                        if r["date"] and r["date"] != tx["date"]:
+                            if re.match(r"^\d{2}:\d{2}:\d{2}$", r["date"]):
+                                tx["time"] = r["date"]
+                            else:
+                                tx["details_parts"].append(r["date"])
+                                
+                        if r["details"]:
+                            tx["details_parts"].append(r["details"])
+                        if r["contragent"]:
+                            tx["contragent_parts"].append(r["contragent"])
+                        if r["amount"]:
+                            tx["amount_parts"].append(r["amount"])
+                    
+                    # Map page_txs to standard transaction dicts
+                    for tx in page_txs:
+                        amount_val = 0.0
+                        if tx["amount_parts"]:
+                            amount_val = self._clean_number(tx["amount_parts"][0])
+                        
+                        # Extract EDRPOU and IBAN from contragent parts
+                        tx_edrpou = None
+                        tx_iban = None
+                        name_parts = []
+                        for part in tx["contragent_parts"]:
+                            part_clean = part.strip()
+                            if not part_clean:
+                                continue
+                            
+                            # IBAN check
+                            if re.match(r"^IBAN:?$", part_clean, re.IGNORECASE):
+                                continue
+                            if re.match(r"^UA\d{27}$", part_clean.replace(" ", ""), re.IGNORECASE):
+                                tx_iban = part_clean.replace(" ", "").upper()
+                                continue
+                            
+                            # EDRPOU check
+                            match_edrpou = re.search(r"(?:ЄДРПОУ|РНОКПП|ЄДРПОУ:)\s*(\d{8,10})", part_clean, re.IGNORECASE)
+                            if match_edrpou:
+                                tx_edrpou = match_edrpou.group(1)
+                                continue
+                            if re.match(r"^\d{8,10}$", part_clean):
+                                tx_edrpou = part_clean
+                                continue
+                                
+                            name_parts.append(part_clean)
+                        
+                        contragent = " ".join(name_parts).strip()
+                        if not contragent:
+                            contragent = "Невідомий Контрагент"
+                        
+                        # Extract purpose
+                        purpose = " ".join(tx["details_parts"]).strip()
+                        
+                        date_str = self._clean_date(tx["date"])
+                        
+                        tx_dict = self._create_transaction_dict(
+                            date=date_str,
+                            amount=amount_val,
+                            purpose=purpose,
+                            contragent=contragent.upper(),
+                            bank_name="Monobank"
+                        )
+                        tx_dict["edrpou"] = tx_edrpou
+                        tx_dict["iban"] = tx_iban
+                        
+                        transactions.append(tx_dict)
+            
+            return transactions
+        except Exception as e:
+            print(f"[Monobank Parser Error] {e}")
+            return self._parse_with_ai(file_path, f"Помилка парсингу Monobank: {str(e)}")
+
     def _parse_pdf(self, file_path):
         """Парсинг PDF виписок за допомогою pypdf (Приват24, А-Банк тощо)"""
         transactions = []
@@ -220,6 +585,20 @@ class UniversalParser:
             bank_name = "ПриватБанк"
             if "а-банк" in text.lower() or "a-bank" in text.lower():
                 bank_name = "А-Банк"
+                self.bank_name = bank_name
+                # Спробуємо знайти tax_id за допомогою розширеного регулярного виразу
+                match_tax_id = re.search(r"(?:єдрпоу|рнокпп|клієнт:?)\s*:?\s*(\d{8,10})", text, re.IGNORECASE)
+                if match_tax_id:
+                    self.statement_tax_id = match_tax_id.group(1)
+                return self._parse_abank_pdf(file_path)
+            elif "універсал" in text.lower() or "universal" in text.lower() or "монобанк" in text.lower() or "monobank" in text.lower():
+                bank_name = "Monobank"
+                self.bank_name = bank_name
+                # Спробуємо знайти tax_id за допомогою розширеного регулярного виразу
+                match_tax_id = re.search(r"(?:єдрпоу|рнокпп|клієнт:?)\s*:?\s*(\d{8,10})", text, re.IGNORECASE)
+                if match_tax_id:
+                    self.statement_tax_id = match_tax_id.group(1)
+                return self._parse_monobank_pdf(file_path)
             elif "райффайзен" in text.lower() or "aval" in text.lower():
                 bank_name = "Райффайзен"
             elif "пумб" in text.lower():

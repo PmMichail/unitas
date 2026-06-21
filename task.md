@@ -1,13 +1,21 @@
-- [x] Backend: Add SubscriptionPlan model and update migrate_database
-- [x] Backend: Implement GET /api/subscription/plans and POST /api/subscription/create
-- [x] Backend: Update Monobank Webhook (/api/billing/webhook/mono) and check_feature_access
-- [x] Backend: Add Subscription access check inside verify_member_token
-- [x] Backend: Implement daily CRON-check for expired subscription/module deactivation
-- [x] Frontend: Add API methods for plans and subscription in api.ts
-- [x] Frontend: Update settings/subscription/page.tsx (plan selector, module checkbox, total price)
-- [x] Frontend: Update billing/page.tsx (display active subscription card under resident cabinet tab)
-- [x] Verification: Test checkout flow, webhook processing, access check, and deactivation script
-- [x] Deployment: Deploy updated backend to Fly.io
-- [x] Deployment: Deploy updated frontend to Fly.io app unitas-frontend
+# Tasks - Bank Parser & Payment Fixes
 
+## A-Bank Parser Fix
+- [x] Modify `backend/ai_parser/universal_parser.py` to route A-Bank to midpoint-based parser
+- [x] Implement `pdfplumber` midpoint parser with geometric filtering in `universal_parser.py`
+- [x] Verify parsing accuracy of A-Bank statement locally using test script
+- [x] Run parser tests to check for regressions on other banks
+- [x] Deploy backend updates to Fly.io
+- [x] Update walkthrough documentation
 
+## Monobank PDF Parser Fix
+- [x] Modify `backend/ai_parser/universal_parser.py` to route Monobank to midpoint-based parser
+- [x] Implement `_parse_monobank_pdf` with geometric filtering and normalization in `universal_parser.py`
+- [x] Verify parsing accuracy of Monobank statement locally using test script
+- [x] Deploy backend updates to Fly.io
+- [x] Update walkthrough documentation
+
+## Admin Payment Button Fix
+- [x] Remove unnecessary Mono Pay button from the admin billing details card view
+- [x] Verify frontend compile safety locally
+- [x] Deploy frontend updates to Fly.io

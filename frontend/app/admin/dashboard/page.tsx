@@ -60,6 +60,7 @@ export default function AdminDashboard() {
   // Search and filters
   const [searchQuery, setSearchQuery] = useState("");
   const [planFilter, setPlanFilter] = useState("");
+  const [memberModuleFilter, setMemberModuleFilter] = useState("");
 
   // Loading and Error states
   const [loading, setLoading] = useState(false);
@@ -346,7 +347,15 @@ export default function AdminDashboard() {
         (u.email || "").toLowerCase().includes(searchQuery.toLowerCase());
       
       const matchesPlan = planFilter ? u.plan === planFilter : true;
-      return matchesSearch && matchesPlan;
+      
+      let matchesModule = true;
+      if (memberModuleFilter === "active") {
+        matchesModule = !!u.is_member_module_active;
+      } else if (memberModuleFilter === "inactive") {
+        matchesModule = !u.is_member_module_active;
+      }
+      
+      return matchesSearch && matchesPlan && matchesModule;
     });
   };
 
@@ -755,6 +764,15 @@ export default function AdminDashboard() {
                     <option value="free">Free</option>
                     <option value="business">Business</option>
                   </select>
+                  <select
+                    value={memberModuleFilter}
+                    onChange={(e) => setMemberModuleFilter(e.target.value)}
+                    className="px-4 py-2 bg-slate-900/40 border border-slate-800 rounded-xl text-xs focus:outline-none focus:border-indigo-500 font-bold"
+                  >
+                    <option value="">Усі модулі</option>
+                    <option value="active">Модуль мешканців: ✅ Так</option>
+                    <option value="inactive">Модуль мешканців: ❌ Ні</option>
+                  </select>
                 </div>
 
                 {/* Profiles Table */}
@@ -765,6 +783,7 @@ export default function AdminDashboard() {
                         <th className="p-4 font-bold">Профіль</th>
                         <th className="p-4 font-bold">Email</th>
                         <th className="p-4 font-bold">Тариф</th>
+                        <th className="p-4 font-bold">Кабінет мешканців</th>
                         <th className="p-4 font-bold">Статус підписки</th>
                         <th className="p-4 font-bold">Остання оплата</th>
                         <th className="p-4 font-bold">Діє до</th>
@@ -808,6 +827,15 @@ export default function AdminDashboard() {
                                 </span>
                               )}
                             </div>
+                          </td>
+                          <td className="p-4">
+                            <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase border ${
+                              u.is_member_module_active
+                                ? "bg-emerald-500/10 text-emerald-450 border border-emerald-500/20"
+                                : "bg-rose-500/10 text-rose-455 border border-rose-500/20"
+                            }`}>
+                              {u.is_member_module_active ? "✅ Так" : "❌ Ні"}
+                            </span>
                           </td>
                           <td className="p-4">
                             <div className="flex flex-col gap-1 items-start">

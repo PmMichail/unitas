@@ -457,6 +457,22 @@ export const api = {
     return response.data;
   },
 
+  addManualTransaction: async (data: {
+    profile_id: number;
+    date: string;
+    amount: number;
+    direction: 'in' | 'out';
+    purpose: string;
+    contragent?: string;
+    transaction_type?: string;
+    taxable?: boolean;
+    member_id?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/transactions`, formData);
+    return response.data;
+  },
+
   updateTransaction: async (
     paymentId: number,
     data: {
@@ -904,6 +920,65 @@ export const api = {
     const response = await client.get("/api/monobank/oauth/authorize", { params: { profile_id: profileId } });
     return response.data;
   },
+  getContractors: async (profileId: number, type?: string, search?: string) => {
+    const response = await client.get(`/api/contractors`, {
+      params: { profile_id: profileId, type, search }
+    });
+    return response.data;
+  },
+  createContractor: async (data: {
+    profile_id: number;
+    name: string;
+    type: string;
+    tax_id?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    initial_balance?: number;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/contractors`, formData);
+    return response.data;
+  },
+  updateContractor: async (
+    id: number,
+    data: {
+      name?: string;
+      type?: string;
+      tax_id?: string;
+      phone?: string;
+      email?: string;
+      address?: string;
+      initial_balance?: number;
+    }
+  ) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/contractors/${id}`, formData);
+    return response.data;
+  },
+  deleteContractor: async (id: number) => {
+    const response = await client.delete(`/api/contractors/${id}`);
+    return response.data;
+  },
+  getContractorTransactions: async (id: number) => {
+    const response = await client.get(`/api/contractors/${id}/transactions`);
+    return response.data;
+  },
+  createContractorTransaction: async (
+    id: number,
+    data: {
+      type: "income" | "expense";
+      amount: number;
+      description: string;
+      transaction_date: string;
+      document_url?: string;
+      user_id?: number;
+    }
+  ) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/contractors/${id}/transactions`, formData);
+    return response.data;
+  }
 };
 
 export const emailApi = {
@@ -1052,7 +1127,7 @@ export const invoicesApi = {
   sendProfileDocument: async (docId: number, data: { toEmail: string; subject?: string; message?: string }) => {
     const response = await client.post(`/api/profiles/documents/${docId}/send`, data);
     return response.data;
-  },
+  }
 };
 
 export const paymentsApi = {
@@ -1088,7 +1163,7 @@ export const paymentsApi = {
   }) => {
     const response = await client.post('/api/payments/reset', data);
     return response.data;
-  },
+  }
 };
 
 export const certificatesApi = {
@@ -1161,6 +1236,12 @@ export const taxCabinetApi = {
   },
   recalculateDpsDebt: async (profileId: number) => {
     const response = await client.post(`/api/dps/recalculate?profile_id=${profileId}`);
+    return response.data;
+  },
+  generateReconciliationReport: async (profileId: number) => {
+    const response = await client.post(`/api/reports/recalculate?profile_id=${profileId}`, null, {
+      responseType: 'blob'
+    });
     return response.data;
   },
   fetchDpsData: async (profileId: number) => {

@@ -5,7 +5,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --background: #edf1f6;
+  --background: #e2e8f0;
   --foreground: #0f172a;
   --border: rgba(99, 102, 241, 0.14);
   --card: rgba(255, 255, 255, 0.95);
@@ -292,58 +292,26 @@ body {
   box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.15), 0 4px 6px -4px rgba(79, 70, 229, 0.15) !important;
 }
 
-/* Orange border outlines in light theme */
-.light .glass-panel,
-.light .bg-slate-950,
-.light .bg-slate-955,
-.light .bg-slate-950\/95,
-.light .bg-slate-950\/80,
-.light .bg-slate-950\/40,
-.light .bg-slate-900\/95,
-.light .bg-slate-900\/40,
-.light select,
-.light input[type="text"],
-.light input[type="password"],
-.light input[type="email"],
-.light input[type="number"],
-.light textarea {
-  border: 1px solid #d97706 !important;
-}
-
-/* Sidebar and menu buttons */
-.light aside {
-  border-right: 1.5px solid #d97706 !important;
-}
-
-.light aside a,
-.light aside button {
-  border: 1.2px solid #d97706 !important;
-  margin-bottom: 4px;
-}
-
-.light aside a:hover,
-.light aside button:hover {
-  background-color: rgba(217, 119, 6, 0.08) !important;
-  color: #b45309 !important;
-  border-color: #d97706 !important;
-}
-
-/* Make sure active menu items still stand out */
-.light aside a.bg-indigo-600,
-.light aside button.bg-indigo-650,
-.light aside a.bg-indigo-650 {
-  background-color: #d97706 !important;
-  color: #ffffff !important;
-  border-color: #d97706 !important;
-}
-.light aside a.bg-indigo-600 svg,
-.light aside button.bg-indigo-650 svg,
-.light aside a.bg-indigo-650 svg {
+/* Styling for primary indigo/blue buttons in light theme to be highly visible */
+.light .bg-indigo-650,
+.light .bg-indigo-600,
+.light button.bg-indigo-650,
+.light button.bg-indigo-600 {
+  background-color: #4f46e5 !important;
   color: #ffffff !important;
 }
 
-/* General buttons in light mode */
-.light button:not(.bg-amber-600):not(.bg-emerald-600):not(.bg-rose-600):not(.bg-rose-500):not(.bg-indigo-600):not(.bg-indigo-650):not(.bg-blue-600) {
-  border: 1px solid #d97706 !important;
+.light .bg-indigo-650 span,
+.light .bg-indigo-600 span,
+.light button.bg-indigo-650 span,
+.light button.bg-indigo-600 span {
+  color: #ffffff !important;
+}
+
+.light .bg-indigo-650:hover,
+.light .bg-indigo-600:hover,
+.light button.bg-indigo-650:hover,
+.light button.bg-indigo-600:hover {
+  background-color: #4338ca !important;
 }
 
