@@ -68,3 +68,47 @@ When the OSBB manager/accountant viewed a member's card in the admin billing das
   - Tx 1: `2026-06-20`, `-250.00 UAH` (Vійськовий збір), Contr: `ГУК У ДН-КІЙ ОБЛ/ДН-КА ОБ/11011000`, EDRPOU: `37988155`, IBAN: `UA778999980313070063000004001`
   - Tx 2: `2026-06-18`, `985.02 UAH` (Acquiring Settlement), Contr: `АТ "УНІВЕРСАЛ БАНК"`, EDRPOU: `21133352`, IBAN: `UA773220012924799880000006136`
 - Top license information was successfully discarded.
+ 
+---
+
+## 4. Subscription Period Checkout and Webhook Activation Fixes
+
+### The Problem
+FOP and OSBB profile subscription checkouts failed when choosing half-yearly or yearly periods. Specifically:
+- Mismatched period names between frontend and backend endpoints caused database lookups to fail.
+- The Monobank payment reference format used underscores (e.g. `half_yearly`) which broke the webhook `parts = reference.split("_")` parsing index, causing a `ValueError` when converting the text `"yearly"` to an integer payment ID.
+- Startup table synchronization hung or threw duplicate table exceptions on utility imports.
+
+### Changes Made
+- **Period Mapping**: Standardized period formats on the frontend subscription settings page (`frontend/app/settings/subscription/page.tsx`).
+- **Reference Index Safety**: Standardized `"half_yearly"` to `"halfyearly"` inside Monobank order references, preventing webhook splits from breaking.
+- **Robust Webhook Processing**: Updated backend webhook callback to process all period aliases ("month", "halfyearly", "yearly", "year", etc.) and dynamically calculate expiration dates (30, 180, and 365 days).
+- **Startup Protection**: Wrapped database initializations and table creation steps in `try-except` blocks to prevent connection pool locks and startup crashes.
+
+---
+
+## Validation Results
+
+### 1. Verification of A-Bank Statements
+- Real PDF `277de235-a3d5-49fb-acb7-fe21e96cbda7.pdf` -> parsed all **18 transactions** with 100% accuracy.
+- Mock PDF `samples/abank.pdf` -> parsed all **3 transactions** with correct amounts (`15000.00`, `150.00`, `8500.00`).
+
+### 2. Verification of Monobank Statements
+- Real PDF `report_21-06-2026_08-09-10.pdf` -> parsed all **2 transactions** with 100% accuracy:
+  - Tx 1: `2026-06-20`, `-250.00 UAH` (Vійськовий збір), Contr: `ГУК У ДН-КІЙ ОБЛ/ДН-КА ОБ/11011000`, EDRPOU: `37988155`, IBAN: `UA778999980313070063000004001`
+  - Tx 2: `2026-06-18`, `985.02 UAH` (Acquiring Settlement), Contr: `АТ "УНІВЕРСАЛ БАНК"`, EDRPOU: `21133352`, IBAN: `UA773220012924799880000006136`
+- Top license information was successfully discarded.
+
+### 3. Subscription Checkout Integration
+- Ran end-to-end integration checkout tests for all periods:
+  - **Monthly**: Monobank invoice created successfully (549 UAH total).
+  - **Half-yearly**: Monobank invoice created successfully (2999 UAH total).
+  - **Yearly**: Monobank invoice created successfully (5999 UAH total).
+
+### 4. Webhook and Subscription Activation Verification
+Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying correct subscription states:
+- **Monthly**: Payment set to `paid`, subscription activated for `monthly`, expires in **30 days**.
+- **Half-yearly**: Payment set to `paid`, subscription activated for `half_yearly`, expires in **180 days**.
+- **Yearly**: Payment set to `paid`, subscription activated for `yearly`, expires in **365 days**.
+- Resident cabinet and member modules were correctly enabled on the profile.
+
