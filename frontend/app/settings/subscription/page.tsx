@@ -26,17 +26,25 @@ import {
 export default function SubscriptionPage() {
   const { selectedProfile, refreshProfiles } = useApp();
   const [subscription, setSubscription] = useState<any>(null);
-  const [prices, setPrices] = useState({ monthly: 499, half_yearly: 2499, yearly: 4989 });
+  const [prices, setPrices] = useState({ monthly: 299, half_yearly: 1499, yearly: 2999 });
   const [usage, setUsage] = useState({ used: 0, limit: 5 });
   const [paymentsList, setPaymentsList] = useState<any[]>([]);
   
   // OSBB Plans States
   const [plans, setPlans] = useState<any[]>([
-    { id: 1, name: "Базовий", price: 499, has_member_module: false, member_module_price: 0 },
-    { id: 2, name: "Преміум", price: 999, has_member_module: true, member_module_price: 500 }
+    { 
+      id: 1, 
+      name: "Бізнес", 
+      price: 299, 
+      has_member_module: true, 
+      member_module_price: 250,
+      prices: { monthly: 299, half_yearly: 1499, yearly: 2999 },
+      module_price: { monthly: 250, half_yearly: 1500, yearly: 3000 },
+      has_module: true
+    }
   ]);
-  const [selectedPlanId, setSelectedPlanId] = useState<number>(2);
-  const [enableMemberModule, setEnableMemberModule] = useState<boolean>(true);
+  const [selectedPlanId, setSelectedPlanId] = useState<number>(1);
+  const [enableMemberModule, setEnableMemberModule] = useState<boolean>(false);
   
   // UI States
   const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "half_yearly" | "yearly">("monthly");
@@ -153,8 +161,16 @@ export default function SubscriptionPage() {
     } catch (e) {
       console.error("Failed to load subscription plans:", e);
       setPlans([
-        { id: 1, name: "Базовий", price: 499, has_member_module: false, member_module_price: 0 },
-        { id: 2, name: "Преміум", price: 999, has_member_module: true, member_module_price: 500 }
+        { 
+          id: 1, 
+          name: "Бізнес", 
+          price: 299, 
+          has_member_module: true, 
+          member_module_price: 250,
+          prices: { monthly: 299, half_yearly: 1499, yearly: 2999 },
+          module_price: { monthly: 250, half_yearly: 1500, yearly: 3000 },
+          has_module: true
+        }
       ]);
     }
   };
@@ -172,6 +188,7 @@ export default function SubscriptionPage() {
               : "monthly"
         );
       }
+      setEnableMemberModule(!!subData.is_member_module_active || !!subData.has_resident_cabinet);
     } catch (e) {
       console.error("Failed to load subscription details:", e);
     }
@@ -180,9 +197,9 @@ export default function SubscriptionPage() {
   const fetchPricingDetails = async () => {
     try {
       const priceData = await api.getPricing();
-      const monthlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "monthly")?.price || 499;
-      const halfYearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "half_yearly")?.price || 2499;
-      const yearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "yearly")?.price || 4989;
+      const monthlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "monthly")?.price || 299;
+      const halfYearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "half_yearly")?.price || 1499;
+      const yearlyPrice = priceData.find((p: any) => p.plan_type === "business" && p.payment_period === "yearly")?.price || 2999;
       setPrices({ monthly: monthlyPrice, half_yearly: halfYearlyPrice, yearly: yearlyPrice });
     } catch (e) {
       console.error("Failed to load pricing details:", e);
@@ -221,7 +238,8 @@ export default function SubscriptionPage() {
       if (isOSBBOrST) {
         const res = await api.createSubscription({
           plan_id: selectedPlanId,
-          enable_member_module: enableMemberModule,
+          period: selectedPeriod,
+          has_resident_cabinet: enableMemberModule,
           profile_id: selectedProfile.id
         });
         if (res.payment_url) {
@@ -342,6 +360,46 @@ export default function SubscriptionPage() {
 
   const isActiveBusiness = subscription?.plan === "business";
   const isPendingBusiness = subscription?.status === "pending" && subscription?.plan === "business";
+
+  const getDynamicPricing = () => {
+    const plan = plans.find(p => p.id === selectedPlanId) || plans[0];
+    if (!plan) return { base: 299, module: 250, total: 549, periodText: "міс", totalText: "всього 549 грн" };
+
+    let base = plan.price || 299;
+    let module = plan.member_module_price || 250;
+
+    if (selectedPeriod === "monthly") {
+      base = plan.prices?.monthly ?? 299;
+      module = plan.module_price?.monthly ?? 250;
+    } else if (selectedPeriod === "half_yearly") {
+      base = plan.prices?.half_yearly ?? 1499;
+      module = plan.module_price?.half_yearly ?? 1500;
+    } else if (selectedPeriod === "yearly") {
+      base = plan.prices?.yearly ?? 2999;
+      module = plan.module_price?.yearly ?? 3000;
+    }
+
+    const total = base + (enableMemberModule ? module : 0);
+    const periodText = selectedPeriod === "monthly" ? "міс" : selectedPeriod === "half_yearly" ? "6 міс" : "12 міс";
+    
+    // Total breakdown text
+    let totalText = "";
+    if (selectedPeriod === "monthly") {
+      totalText = enableMemberModule 
+        ? `Тариф Business (299 грн) + Кабінет мешканців (250 грн) = 549 грн/міс (всього 549 грн)`
+        : `Тариф Business (299 грн) = 299 грн/міс (всього 299 грн)`;
+    } else if (selectedPeriod === "half_yearly") {
+      totalText = enableMemberModule
+        ? `Тариф Business (1499 грн) + Кабінет мешканців (1500 грн) = 2999 грн (всього 2999 грн)`
+        : `Тариф Business (1499 грн) = 1499 грн (всього 1499 грн)`;
+    } else if (selectedPeriod === "yearly") {
+      totalText = enableMemberModule
+        ? `Тариф Business (2999 грн) + Кабінет мешканців (3000 грн) = 5999 грн (всього 5999 грн)`
+        : `Тариф Business (2999 грн) = 2999 грн (всього 2999 грн)`;
+    }
+
+    return { base, module, total, periodText, totalText };
+  };
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-10">
@@ -483,6 +541,16 @@ export default function SubscriptionPage() {
                       {plans.map((p) => {
                         const isSelected = selectedPlanId === p.id;
                         const isPremium = p.has_member_module;
+                        const planBasePrice = selectedPeriod === "monthly"
+                          ? p.prices?.monthly ?? p.price
+                          : selectedPeriod === "half_yearly"
+                            ? p.prices?.half_yearly ?? 1499
+                            : p.prices?.yearly ?? 2999;
+                        const planPeriodLabel = selectedPeriod === "monthly"
+                          ? " грн/міс"
+                          : selectedPeriod === "half_yearly"
+                            ? " грн / 6 міс"
+                            : " грн / 12 міс";
                         
                         return (
                           <div
@@ -510,8 +578,8 @@ export default function SubscriptionPage() {
                               </div>
                               
                               <div className="text-right">
-                                <span className="text-xl font-black text-white">{p.price}</span>
-                                <span className="text-xs text-slate-400"> грн/міс</span>
+                                <span className="text-xl font-black text-white">{planBasePrice}</span>
+                                <span className="text-xs text-slate-400">{planPeriodLabel}</span>
                               </div>
                             </div>
 
@@ -535,7 +603,7 @@ export default function SubscriptionPage() {
                                         className="w-4 h-4 rounded border border-slate-700 accent-indigo-650 bg-slate-900 transition-all cursor-pointer focus:ring-0"
                                       />
                                       <span className="font-bold text-slate-200 flex items-center gap-1">
-                                        📱 Кабінет мешканців <span className="text-indigo-400 font-extrabold">(+{p.member_module_price} грн/міс)</span>
+                                        Додати кабінет мешканців <span className="text-indigo-400 font-extrabold">(+250 грн/міс)</span>
                                       </span>
                                     </label>
                                   </li>
@@ -559,11 +627,20 @@ export default function SubscriptionPage() {
                       <div className="flex justify-between items-center px-2">
                         <span className="text-xs font-bold text-slate-400">Загальна сума до сплати:</span>
                         <span className="text-2xl font-black text-indigo-400">
-                          {selectedPlanId === 2 && enableMemberModule 
-                            ? ((plans.find(p => p.id === 2)?.price || 0) + (plans.find(p => p.id === 2)?.member_module_price || 0)) 
-                            : (plans.find(p => p.id === selectedPlanId)?.price || 0)
-                          } грн<span className="text-xs text-slate-400 font-normal"> / міс</span>
+                          {(() => {
+                            const pricing = getDynamicPricing();
+                            return (
+                              <>
+                                {pricing.total} грн
+                                <span className="text-xs text-slate-400 font-normal"> / {pricing.periodText}</span>
+                              </>
+                            );
+                          })()}
                         </span>
+                      </div>
+                      
+                      <div className="px-2 pb-2 text-[10px] text-slate-500 font-bold tracking-wide italic leading-relaxed">
+                        Розшифровка: {getDynamicPricing().totalText}
                       </div>
                       
                       <button

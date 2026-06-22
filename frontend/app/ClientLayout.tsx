@@ -36,8 +36,47 @@ import {
   Crown,
   HelpCircle,
   Sparkles,
-  Send
+  Send,
+  Clock
 } from "lucide-react";
+
+function SubscriptionExpiredLockedView({ profileName }: { profileName: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] p-4 text-center">
+      <div className="w-full max-w-lg p-8 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/55 dark:bg-slate-900/30 backdrop-blur-xl shadow-2xl relative overflow-hidden space-y-6">
+        <div className="absolute top-[-20%] left-[-20%] w-[50%] h-[50%] rounded-full bg-rose-500/5 blur-[100px] pointer-events-none" />
+        
+        <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-rose-500/5 animate-pulse">
+          <Clock className="w-8 h-8" />
+        </div>
+
+        <div className="space-y-2">
+          <h2 className="text-2xl font-black bg-gradient-to-r from-slate-900 via-slate-700 to-rose-505 dark:from-white dark:via-slate-200 dark:to-rose-400 bg-clip-text text-transparent tracking-tight">
+            Термін дії підписки закінчився
+          </h2>
+          <p className="text-xs text-slate-550 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+            Термін дії вашої підписки або пробного періоду для підприємства <span className="font-extrabold text-indigo-500 dark:text-indigo-400">{profileName}</span> завершився. Будь ласка, здійсніть оплату для відновлення доступу до функцій системи.
+          </p>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800/60 flex flex-col sm:flex-row gap-3">
+          <Link
+            href="/settings/subscription"
+            className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-600/10"
+          >
+            <CreditCard className="w-4 h-4" /> Продовжити підписку
+          </Link>
+          <Link
+            href="/profiles"
+            className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+          >
+            <LayoutDashboard className="w-4 h-4" /> До списку підприємств
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SubscriptionLockedView() {
   return (
@@ -115,6 +154,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   
   const isFree = subscription !== null && subscription.plan === "free";
+  const isExpired = subscription !== null && subscription.status === "expired";
+  
   const isAllowedPathForFree = (path: string) => {
     const allowed = [
       "/dashboard",
@@ -125,7 +166,17 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     ];
     return allowed.includes(path) || path.startsWith("/statements/") || path.startsWith("http");
   };
-  const showLockScreen = isFree && !isAllowedPathForFree(pathname);
+  
+  const isAllowedPathForExpired = (path: string) => {
+    const allowed = [
+      "/profiles",
+      "/settings/subscription",
+    ];
+    return allowed.includes(path);
+  };
+  
+  const showLockScreen = isFree && !isExpired && !isAllowedPathForFree(pathname);
+  const showExpiredLockScreen = isExpired && !isAllowedPathForExpired(pathname);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [theme, setThemeState] = useState<"dark" | "light">("dark");
@@ -577,6 +628,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                   <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
                 </div>
               </div>
+            ) : showExpiredLockScreen ? (
+              <SubscriptionExpiredLockedView profileName={selectedProfile?.name || ""} />
             ) : showLockScreen ? (
               <SubscriptionLockedView />
             ) : (
@@ -597,6 +650,8 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
                 <p className="mt-4 text-xs font-semibold text-slate-400">Завантаження кабінету UniTax...</p>
               </div>
             </div>
+          ) : showExpiredLockScreen ? (
+            <SubscriptionExpiredLockedView profileName={selectedProfile?.name || ""} />
           ) : showLockScreen ? (
             <SubscriptionLockedView />
           ) : (

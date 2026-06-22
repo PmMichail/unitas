@@ -338,11 +338,6 @@ export default function BillingPage() {
     }
 
     if (rcModalStep === "review") {
-      setRcModalStep("payment");
-      return;
-    }
-
-    if (rcModalStep === "payment") {
       setRcPurchasing(true);
       try {
         await api.purchaseResidentCabinet(selectedProfile.id, {
@@ -350,12 +345,12 @@ export default function BillingPage() {
           mono_api_token: rcMonoApiToken,
           color_theme: rcColorTheme,
         });
-        showToast("Модуль кабінету мешканця успішно активовано!", "success");
+        showToast("Налаштування кабінету мешканця успішно збережено!", "success");
         setResidentCabinetModalOpen(false);
         loadResidentCabinetStatus();
       } catch (err: any) {
         console.error(err);
-        showToast(err.response?.data?.detail || "Помилка при активуванні модуля", "error");
+        showToast(err.response?.data?.detail || "Помилка при збереженні налаштувань", "error");
       } finally {
         setRcPurchasing(false);
       }
@@ -1513,7 +1508,7 @@ export default function BillingPage() {
                       <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 dark:text-slate-500">Статус кабінету</p>
                       <p className="text-base font-extrabold text-slate-900 dark:text-white">
                         {residentCabinetStatus?.is_active ? (
-                          <span className="text-emerald-500">Активний (+500 грн/міс)</span>
+                          <span className="text-emerald-500">Активний (+{residentCabinetStatus?.pricing?.price || 250} грн/міс)</span>
                         ) : (
                           <span className="text-rose-500">Неактивний</span>
                         )}
@@ -1536,7 +1531,19 @@ export default function BillingPage() {
                         <p className="text-xs text-indigo-500 dark:text-indigo-400 font-bold mt-1">
                           Загальна сума: {(() => {
                             const plan = residentCabinetStatus?.subscription?.plan;
+                            const period = residentCabinetStatus?.subscription?.payment_period;
                             const hasModule = residentCabinetStatus?.subscription?.is_member_module_active;
+                            
+                            if (plan === "business") {
+                              if (period === "yearly") {
+                                return hasModule ? "5999 UAH/рік" : "2999 UAH/рік";
+                              }
+                              if (period === "half_yearly" || period === "halfyearly") {
+                                return hasModule ? "2999 UAH/6 міс" : "1499 UAH/6 міс";
+                              }
+                              return hasModule ? "549 UAH/міс" : "299 UAH/міс";
+                            }
+                            
                             if (plan === "premium") {
                               return hasModule ? "1499 UAH/міс" : "999 UAH/міс";
                             }
@@ -3035,7 +3042,6 @@ export default function BillingPage() {
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
                 {rcModalStep === "configure" && "Налаштування кабінету мешканця"}
                 {rcModalStep === "review" && "Перевірка даних"}
-                {rcModalStep === "payment" && "Оплата модуля"}
               </h3>
               <button onClick={() => setResidentCabinetModalOpen(false)} className="text-slate-400 hover:text-slate-650">
                 <X className="w-5 h-5" />
@@ -3054,10 +3060,10 @@ export default function BillingPage() {
                           Помісячна оплата
                         </div>
                         <div className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
-                          Вартість: {residentCabinetStatus?.pricing?.price || 500} {residentCabinetStatus?.pricing?.currency || 'UAH'}
+                          Вартість: {residentCabinetStatus?.pricing?.price || 250} {residentCabinetStatus?.pricing?.currency || 'UAH'}
                         </div>
                         <div className="text-[10px] text-indigo-600 dark:text-indigo-400 mt-2">
-                          Після активації мешканці зможуть переглядати баланс, вносити показники лічильників та оплачувати послуги через Monobank.
+                          Після налаштування мешканці зможуть переглядати баланс, вносити показники лічильників та оплачувати послуги через Monobank.
                         </div>
                       </div>
                     </div>
@@ -3137,7 +3143,7 @@ export default function BillingPage() {
               {rcModalStep === "review" && (
                 <>
                   <div className="bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Перевірте дані перед оплатою</h4>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Перевірте дані перед збереженням</h4>
                     
                     <div className="space-y-2">
                       <div className="flex justify-between items-center">
@@ -3172,9 +3178,9 @@ export default function BillingPage() {
                     </div>
                   </div>
 
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                      Після підтвердження оплати буде створено особистий кабінет для мешканців з вказаними налаштуваннями. 
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4">
+                    <p className="text-xs text-indigo-750 dark:text-indigo-405 leading-relaxed">
+                      Після підтвердження особистий кабінет мешканців буде створено або оновлено з вказаними налаштуваннями.
                       Мешканці зможуть переглядати баланс, вносити показники лічильників та оплачувати послуги через Monobank.
                     </p>
                   </div>
@@ -3184,54 +3190,16 @@ export default function BillingPage() {
                       type="button"
                       onClick={() => setRcModalStep("configure")}
                       className="flex-1 py-3 text-sm font-semibold border border-slate-200 rounded-xl"
-                    >
-                      Назад
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl"
-                    >
-                      Підтвердити та оплатити
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {/* Step 3: Payment */}
-              {rcModalStep === "payment" && (
-                <>
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
-                    <div className="flex items-start gap-3">
-                      <CheckCircle className="w-5 h-5 text-emerald-600 mt-0.5" />
-                      <div>
-                        <div className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-                          Готово до оплати
-                        </div>
-                        <div className="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
-                          Вартість: {residentCabinetStatus?.pricing?.price || 500} {residentCabinetStatus?.pricing?.currency || 'UAH'}
-                        </div>
-                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-2">
-                          Натисніть кнопку нижче для завершення оплати та активації модуля кабінету мешканця.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
-                    <button
-                      type="button"
-                      onClick={() => setRcModalStep("review")}
-                      className="flex-1 py-3 text-sm font-semibold border border-slate-200 rounded-xl"
                       disabled={rcPurchasing}
                     >
                       Назад
                     </button>
                     <button
                       type="submit"
-                      className="flex-1 py-3 text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl"
+                      className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl flex items-center justify-center gap-1.5"
                       disabled={rcPurchasing}
                     >
-                      {rcPurchasing ? 'Обробка...' : 'Оплатити та активувати'}
+                      {rcPurchasing ? "Збереження..." : "Зберегти налаштування"}
                     </button>
                   </div>
                 </>

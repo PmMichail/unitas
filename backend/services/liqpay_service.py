@@ -112,7 +112,7 @@ class LiqPayService:
             if plan == "free":
                 amount = 0
             elif plan == "business":
-                amount = 499 if period == "month" else 4989  # Default prices
+                amount = 299 if period == "month" else 2999  # Default prices
             else:
                 raise ValueError(f"Unknown plan: {plan}")
         

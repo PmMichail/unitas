@@ -37,10 +37,10 @@ export default function AdminDashboard() {
   const [pricing, setPricing] = useState<any[]>([]);
 
   // Edit pricing states
-  const [monthlyPriceInput, setMonthlyPriceInput] = useState<string>("499");
-  const [halfYearlyPriceInput, setHalfYearlyPriceInput] = useState<string>("2499");
-  const [yearlyPriceInput, setYearlyPriceInput] = useState<string>("4989");
-  const [residentCabinetPriceInput, setResidentCabinetPriceInput] = useState<string>("500");
+  const [monthlyPriceInput, setMonthlyPriceInput] = useState<string>("299");
+  const [halfYearlyPriceInput, setHalfYearlyPriceInput] = useState<string>("1499");
+  const [yearlyPriceInput, setYearlyPriceInput] = useState<string>("2999");
+  const [residentCabinetPriceInput, setResidentCabinetPriceInput] = useState<string>("250");
 
   // Email connection and sent emails log states
   const [emails, setEmails] = useState<any[]>([]);
@@ -1579,8 +1579,7 @@ export default function AdminDashboard() {
                     className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
                   >
                     <option value="free">Безкоштовно (Free)</option>
-                    <option value="basic">Базовий (Basic) — 499 грн/міс</option>
-                    <option value="premium">Преміум (Premium) — 999 грн/міс</option>
+                    <option value="basic">Бізнес (Business) — 299 грн/міс</option>
                   </select>
                 ) : (
                   <select
@@ -1619,7 +1618,7 @@ export default function AdminDashboard() {
                     className="w-4 h-4 rounded border border-slate-800 accent-indigo-650 bg-slate-950 transition-all cursor-pointer focus:ring-0"
                   />
                   <label htmlFor="editIsMemberModuleActive" className="text-xs font-bold text-slate-200 cursor-pointer">
-                    📱 Активований кабінет мешканців (+500 грн/міс)
+                    📱 Активований кабінет мешканців (+250 грн/міс)
                   </label>
                 </div>
               )}

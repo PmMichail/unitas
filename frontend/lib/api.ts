@@ -226,6 +226,18 @@ export const api = {
     return response.data;
   },
 
+  importMembersXml: async (profileId: number, file: File, userId?: number) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (userId !== undefined) {
+      formData.append("user_id", String(userId));
+    }
+    const response = await client.post(`/api/profiles/${profileId}/members/import-xml`, formData, {
+      headers: { "Content-Type": "multipart/form-data" }
+    });
+    return response.data;
+  },
+
   updateMember: async (profileId: number, memberId: number, data: {
     identifier?: string;
     owner_name?: string;
@@ -296,6 +308,16 @@ export const api = {
 
   getMemberDetails: async (profileId: number, memberId: number) => {
     const response = await client.get(`/api/profiles/${profileId}/members/${memberId}/details`);
+    return response.data;
+  },
+
+  getMonthlyBill: async (profileId: number, memberId: number, year: number, month: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/members/${memberId}/monthly-bills/${year}/${month}`);
+    return response.data;
+  },
+
+  saveMonthlyBill: async (profileId: number, memberId: number, data: { year: number; month: number }) => {
+    const response = await client.post(`/api/profiles/${profileId}/members/${memberId}/monthly-bills`, data);
     return response.data;
   },
 
@@ -840,7 +862,8 @@ export const api = {
 
   createSubscription: async (data: {
     plan_id: number;
-    enable_member_module: boolean;
+    period: "monthly" | "half_yearly" | "yearly";
+    has_resident_cabinet: boolean;
     profile_id: number;
   }) => {
     const response = await client.post("/api/subscription/create", data);

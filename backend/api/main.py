@@ -715,6 +715,8 @@ class Subscription(Base):
     reminder_email_sent_at = Column(DateTime, nullable=True)
     invoice_email_sent_at = Column(DateTime, nullable=True)
     is_member_module_active = Column(Boolean, default=False)
+    has_resident_cabinet = Column(Boolean, default=False)
+    module_price_paid = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -878,7 +880,10 @@ class VisitLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Create tables
-Base.metadata.create_all(engine)
+try:
+    Base.metadata.create_all(engine)
+except Exception as e:
+    print(f"Non-fatal error creating tables at line 883: {e}")
 
 # Migrate schema if columns are missing
 from sqlalchemy import text
@@ -1218,30 +1223,36 @@ try:
         monthly_price = Pricing(
             plan_type="business",
             payment_period="monthly",
-            price=499,
+            price=299,
             currency="UAH"
         )
         db_seed.add(monthly_price)
+    else:
+        monthly_price.price = 299
         
     half_yearly_price = db_seed.query(Pricing).filter(Pricing.plan_type == "business", Pricing.payment_period == "half_yearly").first()
     if not half_yearly_price:
         half_yearly_price = Pricing(
             plan_type="business",
             payment_period="half_yearly",
-            price=2499,
+            price=1499,
             currency="UAH"
         )
         db_seed.add(half_yearly_price)
+    else:
+        half_yearly_price.price = 1499
         
     yearly_price = db_seed.query(Pricing).filter(Pricing.plan_type == "business", Pricing.payment_period == "yearly").first()
     if not yearly_price:
         yearly_price = Pricing(
             plan_type="business",
             payment_period="yearly",
-            price=4989,
+            price=2999,
             currency="UAH"
         )
         db_seed.add(yearly_price)
+    else:
+        yearly_price.price = 2999
 
     # Seed resident_cabinet monthly pricing row
     resident_price = db_seed.query(Pricing).filter(Pricing.plan_type == "resident_cabinet", Pricing.payment_period == "monthly").first()
@@ -1249,18 +1260,20 @@ try:
         existing_onetime = db_seed.query(Pricing).filter(Pricing.plan_type == "resident_cabinet", Pricing.payment_period == "onetime").first()
         if existing_onetime:
             existing_onetime.payment_period = "monthly"
-            existing_onetime.price = 500
+            existing_onetime.price = 250
         else:
             resident_price = Pricing(
                 plan_type="resident_cabinet",
                 payment_period="monthly",
-                price=500,
+                price=250,
                 currency="UAH"
             )
             db_seed.add(resident_price)
+    else:
+        resident_price.price = 250
             
     db_seed.commit()
-    print("Created default monthly (499), half-yearly (2499) and yearly (4989) pricing rows, and resident cabinet monthly (500) row.")
+    print("Created/updated default monthly (299), half-yearly (1499) and yearly (2999) pricing rows, and resident cabinet monthly (250) row.")
     
     # 1. Admin account (always set password to Admin2026!)
     admin_email = "admin@unitas.com"
@@ -1847,7 +1860,7 @@ def check_subscription_expirations_and_notify():
                 Pricing.plan_type == "business",
                 Pricing.payment_period == payment_period
             ).first()
-            price_val = pricing.price if pricing else (4989.0 if payment_period == "yearly" else 2499.0 if payment_period == "half_yearly" else 499.0)
+            price_val = pricing.price if pricing else (2999.0 if payment_period == "yearly" else 1499.0 if payment_period == "half_yearly" else 299.0)
             
             invoice_number = generate_subscription_invoice_number(db, profile.id)
             pdf_bytes = generate_subscription_invoice_pdf(
@@ -8886,7 +8899,10 @@ class IncomingDocument(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Create the invoice automation tables if they don't exist yet
-Base.metadata.create_all(engine)
+try:
+    Base.metadata.create_all(engine)
+except Exception as e:
+    print(f"Non-fatal error creating tables at line 8902: {e}")
 
 def delete_profile_data_helper(profile_id: int, db: Session):
     # 1. Delete ServiceAct (linked to invoices of this profile or to this profile)
@@ -13923,7 +13939,7 @@ async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
                     if period in ["year", "yearly"]:
                         subscription.payment_period = "yearly"
                         days = 365
-                    elif period in ["half_yearly", "half", "6_months"]:
+                    elif period in ["half_yearly", "halfyearly", "half", "6_months"]:
                         subscription.payment_period = "half_yearly"
                         days = 180
                     else:
@@ -14113,7 +14129,7 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
             if period in ["year", "yearly"]:
                 subscription.payment_period = "yearly"
                 days = 365
-            elif period in ["half_yearly", "half", "6_months"]:
+            elif period in ["half_yearly", "halfyearly", "half", "6_months"]:
                 subscription.payment_period = "half_yearly"
                 days = 180
             else:
@@ -14132,6 +14148,22 @@ async def mono_billing_webhook(request: Request, background_tasks: BackgroundTas
                 enable_module = (parts[7] == "1")
             
             subscription.is_member_module_active = enable_module
+            subscription.has_resident_cabinet = enable_module
+            
+            module_price_paid = 0.0
+            if enable_module:
+                module_pricing = db.query(Pricing).filter(
+                    Pricing.plan_type == "resident_cabinet",
+                    Pricing.payment_period == "monthly"
+                ).first()
+                monthly_cab = module_pricing.price if module_pricing else 250.0
+                if subscription.payment_period == "yearly":
+                    module_price_paid = monthly_cab * 12
+                elif subscription.payment_period == "half_yearly":
+                    module_price_paid = monthly_cab * 6
+                else:
+                    module_price_paid = monthly_cab
+            subscription.module_price_paid = module_price_paid
             
             profile = db.query(Profile).filter(Profile.id == profile_id).first()
             if profile:
@@ -14190,18 +14222,43 @@ def check_feature_access(profile_id: int, feature: str, db: Session) -> bool:
 @app.get("/api/subscription/plans")
 def get_subscription_plans(db: Session = Depends(get_db)):
     plans = db.query(SubscriptionPlan).all()
-    return {
-        "plans": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "price": float(p.price),
-                "has_member_module": bool(p.has_member_module),
-                "member_module_price": float(p.member_module_price)
-            }
-            for p in plans
-        ]
-    }
+    business_pricing = db.query(Pricing).filter(Pricing.plan_type == "business").all()
+    cabinet_pricing = db.query(Pricing).filter(Pricing.plan_type == "resident_cabinet").all()
+    
+    b_prices = {"monthly": 299.0, "half_yearly": 1499.0, "yearly": 2999.0}
+    for bp in business_pricing:
+        period = bp.payment_period
+        if period == "half_yearly" or period == "halfyearly":
+            b_prices["half_yearly"] = float(bp.price)
+        elif period == "yearly":
+            b_prices["yearly"] = float(bp.price)
+        elif period == "monthly":
+            b_prices["monthly"] = float(bp.price)
+            
+    m_prices = {"monthly": 250.0, "half_yearly": 1500.0, "yearly": 3000.0}
+    monthly_cab = next((cp.price for cp in cabinet_pricing if cp.payment_period == "monthly"), 250.0)
+    m_prices["monthly"] = float(monthly_cab)
+    m_prices["half_yearly"] = float(monthly_cab * 6)
+    m_prices["yearly"] = float(monthly_cab * 12)
+    
+    res = []
+    for p in plans:
+        plan_dict = {
+            "id": p.id,
+            "name": p.name,
+            "price": float(p.price),
+            "has_member_module": bool(p.has_member_module),
+            "member_module_price": float(p.member_module_price)
+        }
+        if p.id == 1:
+            plan_dict["prices"] = b_prices
+            plan_dict["module_price"] = m_prices
+        else:
+            plan_dict["prices"] = {"monthly": float(p.price), "half_yearly": float(p.price * 6), "yearly": float(p.price * 12)}
+            plan_dict["module_price"] = {"monthly": float(p.member_module_price), "half_yearly": float(p.member_module_price * 6), "yearly": float(p.member_module_price * 12)}
+        res.append(plan_dict)
+        
+    return {"plans": res}
 
 @app.get("/api/subscription/{profile_id}")
 def get_subscription(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -15023,7 +15080,7 @@ async def create_payment_combined(req: dict, user_id: Optional[int] = None, db: 
         if profile.type != "fop":
             raise HTTPException(status_code=403, detail="Підприємства можуть оплачувати тільки за рахунками. Будь ласка, зверніться до адміністратора для отримання рахунку.")
             
-        period = "month" if payment_period == "monthly" else "half_yearly" if payment_period == "half_yearly" else "year"
+        period = "month" if payment_period == "monthly" else "halfyearly" if payment_period == "half_yearly" else "year"
         existing_sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
         
         if plan == "free":
@@ -15065,7 +15122,7 @@ async def create_payment_combined(req: dict, user_id: Optional[int] = None, db: 
             Pricing.plan_type == plan,
             Pricing.payment_period == payment_period
         ).first()
-        price_val = pricing.price if pricing else (499 if payment_period == "monthly" else 2499 if payment_period == "half_yearly" else 4989)
+        price_val = pricing.price if pricing else (299 if payment_period == "monthly" else 1499 if payment_period == "half_yearly" else 2999)
         
         sub_id = None
         if existing_sub:
@@ -16770,7 +16827,7 @@ def send_subscription_invoice(req: SendSubscriptionInvoiceRequest, db: Session =
         Pricing.plan_type == req.plan_type,
         Pricing.payment_period == req.payment_period
     ).first()
-    price_val = pricing.price if pricing else (4989.0 if req.payment_period == "yearly" else 499.0)
+    price_val = pricing.price if pricing else (2999.0 if req.payment_period == "yearly" else 1499.0 if req.payment_period == "half_yearly" else 299.0)
     
     invoice_number = generate_subscription_invoice_number(db, profile.id)
     pdf_bytes = generate_subscription_invoice_pdf(
@@ -17016,6 +17073,24 @@ def migrate_database():
                 print(f"Error adding is_member_module_active: {e}")
                 db.rollback()
 
+        if 'has_resident_cabinet' not in subscriptions_columns:
+            try:
+                db.execute(text("ALTER TABLE subscriptions ADD COLUMN has_resident_cabinet BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added has_resident_cabinet column to subscriptions table")
+            except Exception as e:
+                print(f"Error adding has_resident_cabinet: {e}")
+                db.rollback()
+
+        if 'module_price_paid' not in subscriptions_columns:
+            try:
+                db.execute(text("ALTER TABLE subscriptions ADD COLUMN module_price_paid REAL DEFAULT 0.0"))
+                db.commit()
+                print("Added module_price_paid column to subscriptions table")
+            except Exception as e:
+                print(f"Error adding module_price_paid: {e}")
+                db.rollback()
+
         # Add created_by column to surveys table if not present
         surveys_columns = [col['name'] for col in inspector.get_columns('surveys')]
         if 'created_by' not in surveys_columns:
@@ -17084,15 +17159,30 @@ def migrate_database():
                 db.commit()
                 print("Created subscription_plans table")
             
+            # Add new columns to subscription_plans table if they do not exist
+            sub_plans_columns = [col['name'] for col in inspector.get_columns('subscription_plans')]
+            for col_name, col_type in [
+                ("base_price_monthly", "DECIMAL(10,2)"),
+                ("base_price_half_yearly", "DECIMAL(10,2)"),
+                ("base_price_yearly", "DECIMAL(10,2)"),
+                ("module_price_monthly", "DECIMAL(10,2) DEFAULT 250.00")
+            ]:
+                if col_name not in sub_plans_columns:
+                    try:
+                        db.execute(text(f"ALTER TABLE subscription_plans ADD COLUMN {col_name} {col_type}"))
+                        db.commit()
+                        print(f"Added {col_name} column to subscription_plans table")
+                    except Exception as e:
+                        print(f"Error adding {col_name}: {e}")
+                        db.rollback()
+
             # Seed default plans if table is empty
             count = db.execute(text("SELECT COUNT(*) FROM subscription_plans")).scalar()
             if count == 0:
                 if db.bind.dialect.name == 'postgresql':
-                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Базовий', 499.00, FALSE, 0.00)"))
-                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Преміум', 999.00, TRUE, 500.00)"))
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price, base_price_monthly, base_price_half_yearly, base_price_yearly, module_price_monthly) VALUES ('Бізнес', 299.00, TRUE, 250.00, 299.00, 1499.00, 2999.00, 250.00)"))
                 else:
-                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Базовий', 499.00, 0, 0.00)"))
-                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price) VALUES ('Преміум', 999.00, 1, 500.00)"))
+                    db.execute(text("INSERT INTO subscription_plans (name, price, has_member_module, member_module_price, base_price_monthly, base_price_half_yearly, base_price_yearly, module_price_monthly) VALUES ('Бізнес', 299.00, 1, 250.00, 299.00, 1499.00, 2999.00, 250.00)"))
                 db.commit()
                 print("Inserted default subscription plans")
             
@@ -17100,11 +17190,20 @@ def migrate_database():
             try:
                 monthly_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'business' AND payment_period = 'monthly'")).scalar()
                 if monthly_pricing is not None:
-                    db.execute(text("UPDATE subscription_plans SET price = :price WHERE id = 1"), {"price": monthly_pricing})
+                    db.execute(text("UPDATE subscription_plans SET price = :price, base_price_monthly = :price WHERE id = 1"), {"price": monthly_pricing})
                 
+                half_yearly_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'business' AND payment_period = 'half_yearly'")).scalar()
+                if half_yearly_pricing is not None:
+                    db.execute(text("UPDATE subscription_plans SET base_price_half_yearly = :price WHERE id = 1"), {"price": half_yearly_pricing})
+
+                yearly_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'business' AND payment_period = 'yearly'")).scalar()
+                if yearly_pricing is not None:
+                    db.execute(text("UPDATE subscription_plans SET base_price_yearly = :price WHERE id = 1"), {"price": yearly_pricing})
+
                 module_pricing = db.execute(text("SELECT price FROM pricing WHERE plan_type = 'resident_cabinet' AND payment_period = 'monthly'")).scalar()
                 if module_pricing is not None:
-                    db.execute(text("UPDATE subscription_plans SET member_module_price = :price WHERE id = 2"), {"price": module_pricing})
+                    db.execute(text("UPDATE subscription_plans SET member_module_price = :price, module_price_monthly = :price WHERE id = 1"), {"price": module_pricing})
+                    db.execute(text("UPDATE subscription_plans SET member_module_price = :price, module_price_monthly = :price WHERE id = 2"), {"price": module_pricing})
                 db.commit()
                 print("Synced subscription_plans with pricing table values on startup")
             except Exception as e:
@@ -17195,80 +17294,81 @@ def purchase_resident_cabinet_module(
     user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Purchase and activate the resident cabinet module for a profile"""
+    """Purchase and activate the resident cabinet module for a profile (configuration-only/free)"""
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
-    
+        
     # Authorization check
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
-    
-    # Check if module is already active
-    if profile.has_resident_cabinet:
-        raise HTTPException(status_code=400, detail="Модуль кабінету мешканця вже активовано")
-    
-    # Validate slug uniqueness
-    existing_slug = db.query(Profile).filter(Profile.slug == slug.strip().lower()).first()
-    if existing_slug and existing_slug.id != profile_id:
+        
+    # Validate slug uniqueness (only against other profiles, not including itself or its child)
+    clean_slug = slug.strip().lower()
+    existing_slug = db.query(Profile).filter(Profile.slug == clean_slug).first()
+    if existing_slug and existing_slug.id != profile_id and existing_slug.parent_profile_id != profile_id:
         raise HTTPException(status_code=400, detail="Цей slug вже зайнятий іншим профілем")
-    
-    # Get pricing for resident cabinet module
-    pricing = db.query(Pricing).filter(
-        Pricing.plan_type == "resident_cabinet",
-        Pricing.payment_period == "monthly"
-    ).first()
-    
-    if not pricing:
-        # Create default pricing if not exists
-        pricing = Pricing(
-            plan_type="resident_cabinet",
+        
+    # Create or update subscription record if needed
+    subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
+    if not subscription:
+        from datetime import datetime, timedelta
+        subscription = Subscription(
+            profile_id=profile_id,
+            plan="basic",
             payment_period="monthly",
-            price=500,  # Default price in UAH
-            currency="UAH"
+            status="active",
+            expires_at=datetime.utcnow() + timedelta(days=30),
+            is_member_module_active=True,
+            has_resident_cabinet=True,
+            module_price_paid=0.0
         )
-        db.add(pricing)
-        db.commit()
-        db.refresh(pricing)
-    
-    # Create subscription record
-    from datetime import datetime, timedelta
-    subscription = Subscription(
-        profile_id=profile_id,
-        plan="resident_cabinet",
-        payment_period="monthly",
-        status="active",
-        expires_at=datetime.utcnow() + timedelta(days=30),  # 30 days for monthly purchase
-        amount=pricing.price
-    )
-    db.add(subscription)
-    
+        db.add(subscription)
+    else:
+        subscription.is_member_module_active = True
+        subscription.has_resident_cabinet = True
+        
     # Update profile with resident cabinet settings
     profile.has_resident_cabinet = True
-    profile.slug = slug.strip().lower()
+    profile.is_member_module_active = True
+    profile.slug = clean_slug
     profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
     profile.color_theme = color_theme.strip() or "#3b82f6"
-    
-    # Create OSBB enterprise for residents (separate from the main profile)
-    # This will be used for resident payments and access
-    osbb_enterprise = Profile(
-        user_id=profile.user_id,
-        name=f"{profile.name} (Кабінет мешканців)",
-        tax_id=profile.tax_id,  # Same EDRPOU as main profile
-        address=profile.address,  # Same address as main profile
-        tax_system="non_profit",  # OSBBs are typically non-profit
-        slug=slug.strip().lower(),  # Same slug for resident access
-        mono_api_token=encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None,  # Same token for payments
-        color_theme=color_theme.strip() or "#3b82f6",
-        has_resident_cabinet=True,  # This is the resident cabinet profile
-        parent_profile_id=profile.id  # Link to main profile
-    )
-    db.add(osbb_enterprise)
-    
+    if not profile.member_module_activated_at:
+        profile.member_module_activated_at = datetime.utcnow()
+        
+    # Create or update OSBB enterprise child profile for residents
+    osbb_enterprise = db.query(Profile).filter(Profile.parent_profile_id == profile_id).first()
+    if osbb_enterprise:
+        osbb_enterprise.name = f"{profile.name} (Кабінет мешканців)"
+        osbb_enterprise.tax_id = profile.tax_id
+        osbb_enterprise.address = profile.address
+        osbb_enterprise.mono_api_token = profile.mono_api_token
+        osbb_enterprise.color_theme = profile.color_theme
+        osbb_enterprise.has_resident_cabinet = True
+        osbb_enterprise.is_member_module_active = True
+        osbb_enterprise.slug = None # Keep slug None on child to prevent UNIQUE constraint violation
+    else:
+        osbb_enterprise = Profile(
+            user_id=profile.user_id,
+            name=f"{profile.name} (Кабінет мешканців)",
+            tax_id=profile.tax_id,
+            address=profile.address,
+            tax_system="non_profit",
+            slug=None, # Keep slug None on child to prevent UNIQUE constraint violation
+            mono_api_token=profile.mono_api_token,
+            color_theme=profile.color_theme,
+            has_resident_cabinet=True,
+            is_member_module_active=True,
+            parent_profile_id=profile.id
+        )
+        db.add(osbb_enterprise)
+        
     db.commit()
     db.refresh(profile)
     db.refresh(osbb_enterprise)
     
+    # Return child profile with parent's slug for routing
     return {
         "status": "success",
         "message": "Модуль кабінету мешканця успішно активовано",
@@ -17281,14 +17381,14 @@ def purchase_resident_cabinet_module(
         "osbb_enterprise": {
             "id": osbb_enterprise.id,
             "name": osbb_enterprise.name,
-            "slug": osbb_enterprise.slug,
-            "access_url": f"unitax.pro/osbb/{osbb_enterprise.slug}"
+            "slug": profile.slug, # Return parent's slug for resident frontend routing
+            "access_url": f"unitax.pro/osbb/{profile.slug}"
         },
         "subscription": {
             "plan": subscription.plan,
             "status": subscription.status,
             "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
-            "amount": subscription.amount
+            "amount": getattr(subscription, "amount", 0.0) or getattr(subscription, "last_payment_amount", 0.0) or 0.0
         }
     }
 
@@ -17328,9 +17428,9 @@ def get_resident_cabinet_status(
     basic_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 1).first()
     premium_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == 2).first()
     
-    basic_price = basic_plan.price if basic_plan else 499.0
-    premium_price = premium_plan.price if premium_plan else 999.0
-    module_price = premium_plan.member_module_price if (premium_plan and premium_plan.has_member_module) else 500.0
+    basic_price = basic_plan.price if basic_plan else 299.0
+    premium_price = premium_plan.price if premium_plan else 299.0
+    module_price = basic_plan.member_module_price if (basic_plan and basic_plan.has_member_module) else 250.0
     
     return {
         "is_active": is_active,
@@ -17341,12 +17441,13 @@ def get_resident_cabinet_status(
             "expires_at": subscription.expires_at.isoformat() if subscription and subscription.expires_at else None,
             "amount": getattr(subscription, "amount", None) or getattr(subscription, "last_payment_amount", None),
             "plan": subscription.plan if subscription else "free",
+            "payment_period": getattr(subscription, "payment_period", None),
             "is_member_module_active": getattr(subscription, "is_member_module_active", False) if subscription else False
         } if subscription else None,
         "pricing": {
-            "price": pricing.price if pricing else 500,
+            "price": pricing.price if pricing else 250,
             "currency": pricing.currency if pricing else "UAH"
-        } if pricing else {"price": 500, "currency": "UAH"},
+        } if pricing else {"price": 250, "currency": "UAH"},
         "prices": {
             "basic": float(basic_price),
             "premium": float(premium_price),
@@ -17360,8 +17461,10 @@ def get_resident_cabinet_status(
 
 class CreateSubscriptionPlanRequest(BaseModel):
     plan_id: int
-    enable_member_module: bool
     profile_id: int
+    period: str = "monthly"
+    has_resident_cabinet: bool = False
+    enable_member_module: Optional[bool] = None
 
 def slugify(text: str) -> str:
     cyrillic_map = {
@@ -17398,11 +17501,41 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
     if not plan:
         raise HTTPException(status_code=404, detail="Тариф не знайдено")
         
-    total_price = float(plan.price)
-    enable_module = False
-    if req.enable_member_module and plan.has_member_module:
-        total_price += float(plan.member_module_price)
-        enable_module = True
+    enable_module = req.has_resident_cabinet
+    if req.enable_member_module is not None:
+        enable_module = req.enable_member_module
+
+    # Look up dynamic pricing from database
+    base_pricing = db.query(Pricing).filter(
+        Pricing.plan_type == "business",
+        Pricing.payment_period == req.period
+    ).first()
+    
+    if req.period == "yearly":
+        default_base = 2999.0
+    elif req.period == "half_yearly" or req.period == "halfyearly":
+        default_base = 1499.0
+    else:
+        default_base = 299.0
+
+    base_price = base_pricing.price if base_pricing else default_base
+    
+    module_price = 0.0
+    if enable_module:
+        module_pricing = db.query(Pricing).filter(
+            Pricing.plan_type == "resident_cabinet",
+            Pricing.payment_period == "monthly"
+        ).first()
+        db_module_price = module_pricing.price if module_pricing else 250.0
+        
+        if req.period == "yearly":
+            module_price = db_module_price * 12
+        elif req.period == "half_yearly" or req.period == "halfyearly":
+            module_price = db_module_price * 6
+        else:
+            module_price = db_module_price
+            
+    total_price = base_price + module_price
         
     # Slug generation
     slug = profile.slug
@@ -17429,17 +17562,19 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
     if subscription:
         subscription.plan = plan_code
         subscription.plan_type = plan_code
-        subscription.payment_period = "monthly"
+        subscription.payment_period = req.period
         subscription.status = "pending"
         subscription.is_member_module_active = enable_module
+        subscription.has_resident_cabinet = enable_module
     else:
         subscription = Subscription(
             profile_id=profile.id,
             plan=plan_code,
             plan_type=plan_code,
-            payment_period="monthly",
+            payment_period=req.period,
             status="pending",
-            is_member_module_active=enable_module
+            is_member_module_active=enable_module,
+            has_resident_cabinet=enable_module
         )
         db.add(subscription)
         
@@ -17449,15 +17584,20 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
         profile_id=profile.id,
         tax_type=plan_code,
         amount=float(total_price),
-        period="monthly",
+        period=req.period,
         status="pending",
         payment_type="subscription"
     )
     db.add(payment)
     db.flush()
     
+    # Safe period string mapping for Reference (e.g. half_yearly -> halfyearly)
+    safe_period_ref = req.period
+    if safe_period_ref == "half_yearly":
+        safe_period_ref = "halfyearly"
+        
     import time
-    reference = f"sub_{profile.id}_{plan_code}_monthly_{payment.id}_{int(time.time())}_member_{1 if enable_module else 0}"
+    reference = f"sub_{profile.id}_{plan_code}_{safe_period_ref}_{payment.id}_{int(time.time())}_member_{1 if enable_module else 0}"
     
     subscription.liqpay_order_id = reference
     payment.liqpay_order_id = reference
