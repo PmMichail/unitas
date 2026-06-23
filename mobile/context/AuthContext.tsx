@@ -1,17 +1,65 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { api } from '../services/api';
+
+async function registerForPushNotificationsAsync(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return null;
+  }
+  if (!Device.isDevice) {
+    console.log('Must use physical device for Push Notifications');
+    return null;
+  }
+  try {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync() as any;
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync() as any;
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') {
+      console.log('Failed to get push token for push notification!');
+      return null;
+    }
+    
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      Constants.easConfig?.projectId;
+      
+    if (!projectId) {
+      console.log('Project ID not found in Constants');
+      return null;
+    }
+    
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId,
+    });
+    return tokenData.data;
+  } catch (error) {
+    console.error('Error getting push token:', error);
+    return null;
+  }
+}
 
 interface AuthContextType {
   telegramId: string | null; // Залишаємо для сумісності (зберігатиме Email або Telegram ID)
   userEmail: string | null;
+  memberToken: string | null;
+  memberProfileSlug: string | null;
+  memberData: any | null;
+  isResident: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   isBiometricSupported: boolean;
   isBiometricEnabled: boolean;
   login: (email: string, password: string) => Promise<{ status: 'success' | 'verification_required'; email?: string; message: string }>;
+  residentLogin: (slug: string, account_number: string, password: string) => Promise<any>;
+  residentRegister: (payload: any) => Promise<any>;
   loginWithTelegram: (telegramId: string) => Promise<{ status: 'verification_required'; telegram_id: string; message: string }>;
   verify2FACode: (identifier: string, code: string, isTelegram?: boolean) => Promise<boolean>;
   register: (payload: any) => Promise<any>;
@@ -26,6 +74,10 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [telegramId, setTelegramId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [memberToken, setMemberToken] = useState<string | null>(null);
+  const [memberProfileSlug, setMemberProfileSlug] = useState<string | null>(null);
+  const [memberData, setMemberData] = useState<any | null>(null);
+  const [isResident, setIsResident] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
   const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
@@ -51,6 +103,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTelegramId(storedId);
         if (storedId.includes('@')) {
           setUserEmail(storedId);
+        }
+      }
+
+      // Перевірка сесії мешканця
+      const storedMemberToken = await SecureStore.getItemAsync('MEMBER_TOKEN');
+      const storedMemberSlug = await SecureStore.getItemAsync('MEMBER_SLUG');
+      const storedMemberData = await SecureStore.getItemAsync('MEMBER_DATA');
+      if (storedMemberToken) {
+        setMemberToken(storedMemberToken);
+        setMemberProfileSlug(storedMemberSlug);
+        setIsResident(true);
+        if (storedMemberData) {
+          try {
+            setMemberData(JSON.parse(storedMemberData));
+          } catch (e) {
+            console.error('Error parsing stored member data:', e);
+          }
         }
       }
     } catch (e) {
@@ -127,13 +196,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const residentLogin = async (slug: string, accountNumber: string, passwordString: string): Promise<any> => {
+    try {
+      const pushToken = await registerForPushNotificationsAsync();
+      const response = await api.memberLogin({
+        slug,
+        account_number: accountNumber,
+        password: passwordString,
+        push_token: pushToken || undefined,
+        platform: Platform.OS,
+      });
+      if (response.status === 'success') {
+        const { token: tokenVal, member: memberObj } = response;
+        await SecureStore.setItemAsync('MEMBER_TOKEN', tokenVal);
+        await SecureStore.setItemAsync('MEMBER_SLUG', slug);
+        await SecureStore.setItemAsync('MEMBER_DATA', JSON.stringify(memberObj));
+        setMemberToken(tokenVal);
+        setMemberProfileSlug(slug);
+        setMemberData(memberObj);
+        setIsResident(true);
+      }
+      return response;
+    } catch (e: any) {
+      const errMsg = e.response?.data?.detail || e.message || 'Не вдалося увійти як мешканець';
+      throw new Error(errMsg);
+    }
+  };
+
+  const residentRegister = async (payload: any): Promise<any> => {
+    try {
+      const pushToken = await registerForPushNotificationsAsync();
+      const fullPayload = {
+        ...payload,
+        push_token: pushToken || undefined,
+        platform: Platform.OS,
+      };
+      const response = await api.memberRegister(fullPayload);
+      return response;
+    } catch (e: any) {
+      const errMsg = e.response?.data?.detail || e.message || 'Помилка реєстрації';
+      throw new Error(errMsg);
+    }
+  };
+
   const logout = async () => {
     try {
       await SecureStore.deleteItemAsync('TELEGRAM_ID');
       await SecureStore.deleteItemAsync('BIOMETRICS_ENABLED');
+      await SecureStore.deleteItemAsync('MEMBER_TOKEN');
+      await SecureStore.deleteItemAsync('MEMBER_SLUG');
+      await SecureStore.deleteItemAsync('MEMBER_DATA');
       setTelegramId(null);
       setUserEmail(null);
       setIsBiometricEnabled(false);
+      setMemberToken(null);
+      setMemberProfileSlug(null);
+      setMemberData(null);
+      setIsResident(false);
     } catch (e) {
       console.error('Logout error', e);
     }
@@ -196,11 +315,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         telegramId,
         userEmail,
-        isAuthenticated: !!telegramId,
+        memberToken,
+        memberProfileSlug,
+        memberData,
+        isResident,
+        isAuthenticated: !!telegramId || !!memberToken,
         isLoading,
         isBiometricSupported,
         isBiometricEnabled,
         login,
+        residentLogin,
+        residentRegister,
         loginWithTelegram,
         verify2FACode,
         register,

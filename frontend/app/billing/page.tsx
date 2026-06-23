@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/context/AppContext";
-import { api } from "@/lib/api";
+import { api, invoicesApi } from "@/lib/api";
 import {
   Users,
   Plus,
@@ -192,6 +192,52 @@ export default function BillingPage() {
   const [rcPurchasing, setRcPurchasing] = useState(false);
   const [rcLoading, setRcLoading] = useState(false);
 
+  // Resident Cabinet Sub-tabs and Data lists
+  const [rcSubTab, setRcSubTab] = useState<"general" | "contacts" | "security" | "zones" | "tickets" | "documents">("general");
+
+  // Contacts Sub-tab State
+  const [contactsList, setContactsList] = useState<any[]>([]);
+  const [contactName, setContactName] = useState("");
+  const [contactRole, setContactRole] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [isContactsLoading, setIsContactsLoading] = useState(false);
+
+  // Security Sub-tab State
+  const [securityDevicesList, setSecurityDevicesList] = useState<any[]>([]);
+  const [deviceName, setDeviceName] = useState("");
+  const [deviceType, setDeviceType] = useState("camera"); // camera / gate
+  const [deviceStreamUrl, setDeviceStreamUrl] = useState("");
+  const [isSecurityLoading, setIsSecurityLoading] = useState(false);
+
+  // Recreation Zones Sub-tab State
+  const [zonesList, setZonesList] = useState<any[]>([]);
+  const [zoneName, setZoneName] = useState("");
+  const [zoneDescription, setZoneDescription] = useState("");
+  const [zoneCapacity, setZoneCapacity] = useState<number>(0);
+  const [zonePricePerHour, setZonePricePerHour] = useState<number>(0);
+  const [zoneImageUrl, setZoneImageUrl] = useState("");
+  const [isZonesLoading, setIsZonesLoading] = useState(false);
+
+  // Service Tickets/Orders Sub-tab State
+  const [serviceOrdersList, setServiceOrdersList] = useState<any[]>([]);
+  const [isTicketsLoading, setIsTicketsLoading] = useState(false);
+  const [selectedTicketForEdit, setSelectedTicketForEdit] = useState<any | null>(null);
+  const [ticketStatus, setTicketStatus] = useState("");
+  const [ticketPrice, setTicketPrice] = useState<number>(0);
+  const [ticketContractor, setTicketContractor] = useState("");
+  const [ticketModalOpen, setTicketModalOpen] = useState(false);
+
+  // Documents Sub-tab State
+  const [profileDocsList, setProfileDocsList] = useState<any[]>([]);
+  const [isDocsLoading, setIsDocsLoading] = useState(false);
+  const [selectedDocForEdit, setSelectedDocForEdit] = useState<any | null>(null);
+  const [docDescription, setDocDescription] = useState("");
+  const [docType, setDocType] = useState("other");
+  const [docIsPublic, setDocIsPublic] = useState(false);
+  const [docMetadataModalOpen, setDocMetadataModalOpen] = useState(false);
+  const [docUploadLoading, setDocUploadLoading] = useState(false);
+
+
   // Contractors Module State
   const [contractors, setContractors] = useState<any[]>([]);
   const [contractorSearchTerm, setContractorSearchTerm] = useState("");
@@ -366,6 +412,315 @@ export default function BillingPage() {
       loadResidentCabinetStatus();
     }
   }, [selectedProfile?.id]);
+
+  // --- RESIDENT CABINET OPERATIONS ---
+
+  const fetchRCContacts = async () => {
+    if (!selectedProfile) return;
+    setIsContactsLoading(true);
+    try {
+      const data = await api.getProfileContacts(selectedProfile.id);
+      setContactsList(data || []);
+    } catch (err) {
+      console.error("Error loading contacts", err);
+    } finally {
+      setIsContactsLoading(false);
+    }
+  };
+
+  const handleAddContact = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!contactName.trim() || !contactRole.trim() || !contactPhone.trim()) {
+      showToast("Заповніть всі поля контакту", "error");
+      return;
+    }
+    try {
+      await api.createProfileContact(selectedProfile.id, {
+        name: contactName,
+        role: contactRole,
+        phone: contactPhone,
+      });
+      showToast("Контакт успішно додано!", "success");
+      setContactName("");
+      setContactRole("");
+      setContactPhone("");
+      fetchRCContacts();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося додати контакт", "error");
+    }
+  };
+
+  const handleDeleteContact = async (contactId: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Ви впевнені, що хочете видалити цей контакт?")) return;
+    try {
+      await api.deleteProfileContact(selectedProfile.id, contactId);
+      showToast("Контакт видалено", "success");
+      fetchRCContacts();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося видалити контакт", "error");
+    }
+  };
+
+  const fetchRCSecurityDevices = async () => {
+    if (!selectedProfile) return;
+    setIsSecurityLoading(true);
+    try {
+      const data = await api.getProfileSecurityDevices(selectedProfile.id);
+      setSecurityDevicesList(data || []);
+    } catch (err) {
+      console.error("Error loading security devices", err);
+    } finally {
+      setIsSecurityLoading(false);
+    }
+  };
+
+  const handleAddSecurityDevice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!deviceName.trim() || !deviceType.trim()) {
+      showToast("Вкажіть назву та тип пристрою", "error");
+      return;
+    }
+    try {
+      await api.createProfileSecurityDevice(selectedProfile.id, {
+        name: deviceName,
+        device_type: deviceType,
+        stream_url: deviceStreamUrl.trim() || undefined,
+      });
+      showToast("Пристрій додано!", "success");
+      setDeviceName("");
+      setDeviceStreamUrl("");
+      fetchRCSecurityDevices();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося додати пристрій", "error");
+    }
+  };
+
+  const handleDeleteSecurityDevice = async (deviceId: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Видалити цей пристрій безпеки?")) return;
+    try {
+      await api.deleteProfileSecurityDevice(selectedProfile.id, deviceId);
+      showToast("Пристрій видалено", "success");
+      fetchRCSecurityDevices();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося видалити пристрій", "error");
+    }
+  };
+
+  const fetchRCZones = async () => {
+    if (!selectedProfile) return;
+    setIsZonesLoading(true);
+    try {
+      const data = await api.getProfileRecreationZones(selectedProfile.id);
+      setZonesList(data || []);
+    } catch (err) {
+      console.error("Error loading zones", err);
+    } finally {
+      setIsZonesLoading(false);
+    }
+  };
+
+  const handleAddZone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!zoneName.trim() || zoneCapacity <= 0 || zonePricePerHour < 0) {
+      showToast("Заповніть назву, місткість та ціну зони", "error");
+      return;
+    }
+    try {
+      await api.createProfileRecreationZone(selectedProfile.id, {
+        name: zoneName,
+        description: zoneDescription.trim() || undefined,
+        capacity: Number(zoneCapacity),
+        price_per_hour: Number(zonePricePerHour),
+        image_url: zoneImageUrl.trim() || undefined,
+      });
+      showToast("Зону відпочинку створено!", "success");
+      setZoneName("");
+      setZoneDescription("");
+      setZoneCapacity(0);
+      setZonePricePerHour(0);
+      setZoneImageUrl("");
+      fetchRCZones();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося створити зону", "error");
+    }
+  };
+
+  const handleDeleteZone = async (zoneId: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Видалити цю зону відпочинку?")) return;
+    try {
+      await api.deleteProfileRecreationZone(selectedProfile.id, zoneId);
+      showToast("Зону видалено", "success");
+      fetchRCZones();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося видалити зону", "error");
+    }
+  };
+
+  const fetchRCOrders = async () => {
+    if (!selectedProfile) return;
+    setIsTicketsLoading(true);
+    try {
+      const data = await api.getProfileServiceOrders(selectedProfile.id);
+      setServiceOrdersList(data || []);
+    } catch (err) {
+      console.error("Error loading service orders", err);
+    } finally {
+      setIsTicketsLoading(false);
+    }
+  };
+
+  const handleOpenEditTicket = (ticket: any) => {
+    setSelectedTicketForEdit(ticket);
+    setTicketStatus(ticket.status || "pending");
+    setTicketPrice(ticket.price || 0);
+    setTicketContractor(ticket.contractor_name || "");
+    setTicketModalOpen(true);
+  };
+
+  const handleUpdateTicket = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile || !selectedTicketForEdit) return;
+    try {
+      await api.updateProfileServiceOrder(selectedProfile.id, selectedTicketForEdit.id, {
+        status: ticketStatus,
+        price: Number(ticketPrice),
+        contractor_name: ticketContractor || undefined,
+      });
+      showToast("Заявку оновлено!", "success");
+      setTicketModalOpen(false);
+      fetchRCOrders();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося оновити заявку", "error");
+    }
+  };
+
+  const fetchRCDocuments = async () => {
+    if (!selectedProfile) return;
+    setIsDocsLoading(true);
+    try {
+      const data = await invoicesApi.getProfileDocuments(selectedProfile.id);
+      setProfileDocsList(data || []);
+    } catch (err) {
+      console.error("Error loading profile documents", err);
+    } finally {
+      setIsDocsLoading(false);
+    }
+  };
+
+  const handleUploadDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProfile) return;
+    setDocUploadLoading(true);
+    try {
+      await invoicesApi.uploadProfileDocument(
+        selectedProfile.id,
+        file,
+        false,
+        "other",
+        ""
+      );
+      showToast("Документ завантажено!", "success");
+      fetchRCDocuments();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося завантажити документ", "error");
+    } finally {
+      setDocUploadLoading(false);
+    }
+  };
+
+  const handleOpenEditDoc = (doc: any) => {
+    setSelectedDocForEdit(doc);
+    setDocDescription(doc.description || "");
+    setDocType(doc.document_type || "other");
+    setDocIsPublic(!!doc.is_public_to_residents);
+    setDocMetadataModalOpen(true);
+  };
+
+  const handleSaveDocMetadata = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile || !selectedDocForEdit) return;
+    try {
+      await invoicesApi.updateProfileDocumentMetadata(selectedProfile.id, selectedDocForEdit.id, {
+        is_public_to_residents: docIsPublic,
+        document_type: docType,
+        description: docDescription
+      });
+      showToast("Параметри документа збережено!", "success");
+      setDocMetadataModalOpen(false);
+      fetchRCDocuments();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося зберегти параметри", "error");
+    }
+  };
+
+  const handleDeleteDoc = async (docId: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Ви впевнені, що хочете видалити цей документ?")) return;
+    try {
+      await invoicesApi.deleteProfileDocument(selectedProfile.id, docId);
+      showToast("Документ видалено", "success");
+      fetchRCDocuments();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося видалити документ", "error");
+    }
+  };
+
+  const handleSaveGeneralConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!rcSlug.trim()) {
+      showToast("Вкажіть slug для URL", "error");
+      return;
+    }
+    setRcLoading(true);
+    try {
+      await api.purchaseResidentCabinet(selectedProfile.id, {
+        slug: rcSlug,
+        mono_api_token: rcMonoApiToken,
+        color_theme: rcColorTheme,
+      });
+      showToast("Налаштування кабінету мешканця успішно збережено!", "success");
+      loadResidentCabinetStatus();
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.response?.data?.detail || "Помилка при збереженні налаштувань", "error");
+    } finally {
+      setRcLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "resident_cabinet") {
+      if (rcSubTab === "contacts") {
+        fetchRCContacts();
+      } else if (rcSubTab === "security") {
+        fetchRCSecurityDevices();
+      } else if (rcSubTab === "zones") {
+        fetchRCZones();
+      } else if (rcSubTab === "tickets") {
+        fetchRCOrders();
+      } else if (rcSubTab === "documents") {
+        fetchRCDocuments();
+      }
+    }
+  }, [selectedProfile?.id, activeTab, rcSubTab]);
+
 
   const handleOpenAddModal = () => {
     setEditingMember(null);
@@ -1025,10 +1380,10 @@ export default function BillingPage() {
           font-family: 'Outfit', sans-serif;
         }
         .glass-panel {
-          background: rgba(255, 255, 255, 0.65);
+          background: rgba(248, 250, 252, 0.85);
           backdrop-filter: blur(16px);
           -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(15, 23, 42, 0.07);
+          border: 1px solid rgba(15, 23, 42, 0.09);
         }
         .dark .glass-panel {
           background: rgba(15, 23, 42, 0.45);
@@ -1556,117 +1911,717 @@ export default function BillingPage() {
                   </div>
                 </div>
 
-                {/* Resident statistics Card */}
-                <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-5">
-                  <div className="flex items-center gap-2">
-                    <Users className="w-5 h-5 text-indigo-500" />
-                    <h3 className="text-sm font-black text-slate-400 dark:text-slate-400 uppercase tracking-wider">
-                      Статистика особових рахунків мешканців
-                    </h3>
+                {!residentCabinetStatus?.is_active ? (
+                  /* Lock Card when Inactive */
+                  <div className="glass-panel rounded-3xl p-8 border border-slate-200 dark:border-slate-800/60 shadow-xl text-center space-y-4">
+                    <Lock className="w-12 h-12 text-indigo-500 mx-auto animate-pulse" />
+                    <h4 className="text-lg font-bold text-slate-900 dark:text-white">Модуль «Кабінет мешканців» не активовано</h4>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                      Щоб налаштувати контакти правління, пристрої безпеки, бронювання зон відпочинку, приймати заявки та публікувати документи, будь ласка, активуйте цей модуль у налаштуваннях вашої підписки.
+                    </p>
+                    <button
+                      onClick={() => router.push("/settings/subscription")}
+                      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/10 hover:scale-[1.01]"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>Активувати в підписці</span>
+                    </button>
                   </div>
+                ) : (
+                  <>
+                    {/* Resident statistics Card */}
+                    <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-5">
+                      <div className="flex items-center gap-2">
+                        <Users className="w-5 h-5 text-indigo-500" />
+                        <h3 className="text-sm font-black text-slate-400 dark:text-slate-440 uppercase tracking-wider">
+                          Статистика особових рахунків мешканців
+                        </h3>
+                      </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
-                        Всього особових рахунків
-                      </div>
-                      <div className="text-3xl font-black text-slate-900 dark:text-white">
-                        {moderationMembers.length}
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-1">Кількість заведених об'єктів</div>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
-                        Зареєстровано кабінетів
-                      </div>
-                      <div className="text-3xl font-black text-indigo-500 dark:text-indigo-400">
-                        {moderationMembers.filter(m => m.account_number).length}
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-1">Створили акаунт та пароль</div>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
-                        Очікують підтвердження
-                      </div>
-                      <div className="text-3xl font-black text-amber-500 dark:text-amber-400">
-                        {moderationMembers.filter(m => m.account_number && m.status === "pending").length}
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-1">Потребують схвалення головою</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Configuration and Domain Section */}
-                {residentCabinetStatus?.is_active && (
-                  <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-6">
-                    <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
-                      Доступ та налаштування кабінету
-                    </h3>
-
-                    <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-2xl p-5 space-y-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                          <div className="text-sm font-extrabold text-indigo-850 dark:text-indigo-300">
-                            Адреса входу для мешканців
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                            Всього особових рахунків
                           </div>
-                          <div className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
-                            Мешканці вашого будинку можуть зареєструватись або авторизуватись за цією адресою:
+                          <div className="text-3xl font-black text-slate-900 dark:text-white">
+                            {moderationMembers.length}
                           </div>
+                          <div className="text-[10px] text-slate-400 mt-1">Кількість заведених об'єктів</div>
                         </div>
-                        <button
-                          onClick={() => {
-                            const url = `https://unitax.pro/osbb/${residentCabinetStatus.slug}`;
-                            navigator.clipboard.writeText(url);
-                            showToast("Посилання скопійовано!", "success");
-                          }}
-                          className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 shrink-0 hover:scale-[1.01]"
-                        >
-                          <Copy className="w-4 h-4" />
-                          <span>Копіювати посилання</span>
-                        </button>
-                      </div>
 
-                      <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
-                        <div className="text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 break-all">
-                          https://unitax.pro/osbb/{residentCabinetStatus.slug}
+                        <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                            Зареєстровано кабінетів
+                          </div>
+                          <div className="text-3xl font-black text-indigo-500 dark:text-indigo-400">
+                            {moderationMembers.filter(m => m.account_number).length}
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1">Створили акаунт та пароль</div>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/20 text-center">
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
+                            Очікують підтвердження
+                          </div>
+                          <div className="text-3xl font-black text-amber-500 dark:text-amber-400">
+                            {moderationMembers.filter(m => m.account_number && m.status === "pending").length}
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1">Потребують схвалення головою</div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-105 dark:border-slate-800/20">
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
-                          Slug організації
-                        </div>
-                        <div className="text-sm font-bold text-slate-900 dark:text-white">
-                          {residentCabinetStatus.slug}
-                        </div>
-                        <div className="text-xs text-slate-400 mt-1">
-                          Використовується в унікальному URL вашого кабінету
-                        </div>
-                      </div>
+                    {/* Sub-tabs menu */}
+                    <div className="flex flex-wrap gap-2 p-1.5 bg-slate-150/40 dark:bg-slate-900/60 border border-slate-200/50 dark:border-slate-800/40 rounded-2xl">
+                      {[
+                        { id: "general", label: "Основне", icon: Settings },
+                        { id: "contacts", label: "Контакти", icon: Phone },
+                        { id: "security", label: "Безпека", icon: Lock },
+                        { id: "zones", label: "Зони відпочинку", icon: Building },
+                        { id: "tickets", label: "Заявки мешканців", icon: FileText },
+                        { id: "documents", label: "Публічні документи", icon: FileText },
+                      ].map((tab) => {
+                        const Icon = tab.icon;
+                        const isActive = rcSubTab === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            onClick={() => setRcSubTab(tab.id as any)}
+                            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 ${
+                              isActive
+                                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10 scale-[1.02]"
+                                : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100/50 dark:hover:bg-slate-800/40"
+                            }`}
+                          >
+                            <Icon className="w-3.5 h-3.5" />
+                            <span>{tab.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                      <div className="bg-slate-50 dark:bg-slate-900/30 rounded-2xl p-5 border border-slate-105 dark:border-slate-800/20">
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-black mb-1">
-                          Колір інтерфейсу
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="w-6 h-6 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm shrink-0"
-                            style={{ backgroundColor: residentCabinetStatus.color_theme }}
-                          />
-                          <div className="text-sm font-bold text-slate-900 dark:text-white">
-                            {residentCabinetStatus.color_theme || "Не встановлено"}
+                    {/* General config sub-tab */}
+                    {rcSubTab === "general" && (
+                      <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-6">
+                        <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                          Доступ та налаштування кабінету
+                        </h3>
+
+                        <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-2xl p-5 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                              <div className="text-sm font-extrabold text-indigo-850 dark:text-indigo-300">
+                                Адреса входу для мешканців
+                              </div>
+                              <div className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
+                                Мешканці вашого будинку можуть зареєструватись або авторизуватись за цією адресою:
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                const url = `https://unitax.pro/osbb/${residentCabinetStatus.slug}`;
+                                navigator.clipboard.writeText(url);
+                                showToast("Посилання скопійовано!", "success");
+                              }}
+                              className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 shrink-0 hover:scale-[1.01]"
+                            >
+                              <Copy className="w-4 h-4" />
+                              <span>Копіювати посилання</span>
+                            </button>
+                          </div>
+
+                          <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                            <div className="text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 break-all">
+                              https://unitax.pro/osbb/{residentCabinetStatus.slug}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-xs text-slate-400 mt-1">
-                          Основний бренд-колір кабінету мешканця
+
+                        {/* Direct Edit Form */}
+                        <form onSubmit={handleSaveGeneralConfig} className="space-y-4 pt-4 border-t border-slate-100 dark:border-slate-800/40">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Редагувати загальні налаштування</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Slug організації (в URL)</label>
+                              <input
+                                type="text"
+                                value={rcSlug}
+                                onChange={(e) => setRcSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
+                                placeholder="slug-nazva..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                              <p className="text-[10px] text-slate-450">Тільки маленькі англійські літери, цифри та дефіси</p>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Колір інтерфейсу (HEX)</label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="color"
+                                  value={rcColorTheme.startsWith("#") ? rcColorTheme : "#3b82f6"}
+                                  onChange={(e) => setRcColorTheme(e.target.value)}
+                                  className="w-10 h-10 border border-slate-200 dark:border-slate-800 rounded-xl cursor-pointer bg-transparent"
+                                />
+                                <input
+                                  type="text"
+                                  value={rcColorTheme}
+                                  onChange={(e) => setRcColorTheme(e.target.value)}
+                                  placeholder="#3b82f6"
+                                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  required
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500">Monobank API Token (для завантаження виписок)</label>
+                            <input
+                              type="password"
+                              value={rcMonoApiToken}
+                              onChange={(e) => setRcMonoApiToken(e.target.value)}
+                              placeholder="Введіть ваш токен Monobank..."
+                              className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                            <p className="text-[10px] text-slate-450">Залиште порожнім, якщо не бажаєте змінювати поточний токен</p>
+                          </div>
+
+                          <div className="flex justify-end pt-2">
+                            <button
+                              type="submit"
+                              disabled={rcLoading}
+                              className="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white px-6 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/10 hover:scale-[1.01]"
+                            >
+                              {rcLoading ? "Збереження..." : "Зберегти зміни"}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+
+                    {/* Contacts sub-tab */}
+                    {rcSubTab === "contacts" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-4">
+                          <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                            Додати контакт правління / служби
+                          </h3>
+                          <form onSubmit={handleAddContact} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">ПІБ / Назва</label>
+                              <input
+                                type="text"
+                                value={contactName}
+                                onChange={(e) => setContactName(e.target.value)}
+                                placeholder="Голова правління, Диспетчер..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Роль / Опис</label>
+                              <input
+                                type="text"
+                                value={contactRole}
+                                onChange={(e) => setContactRole(e.target.value)}
+                                placeholder="Голова правління, Електрик..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Номер телефону</label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={contactPhone}
+                                  onChange={(e) => setContactPhone(e.target.value)}
+                                  placeholder="+380..."
+                                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  required
+                                />
+                                <button
+                                  type="submit"
+                                  className="flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 hover:scale-[1.01]"
+                                >
+                                  <Plus className="w-4 h-4 mr-1" />
+                                  Додати
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        </div>
+
+                        <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                  <th className="px-6 py-4">Назва / ПІБ</th>
+                                  <th className="px-6 py-4">Посада</th>
+                                  <th className="px-6 py-4">Телефон</th>
+                                  <th className="px-6 py-4 text-right">Дії</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                {isContactsLoading ? (
+                                  <tr>
+                                    <td colSpan={4} className="text-center py-8 text-slate-400">
+                                      <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500 mr-2"></div>
+                                      Завантаження контактів...
+                                    </td>
+                                  </tr>
+                                ) : contactsList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={4} className="text-center py-8 text-slate-400">Немає доданих контактів</td>
+                                  </tr>
+                                ) : (
+                                  contactsList.map((contact) => (
+                                    <tr key={contact.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                      <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">{contact.name}</td>
+                                      <td className="px-6 py-4 text-slate-700 dark:text-slate-300">{contact.role}</td>
+                                      <td className="px-6 py-4 font-semibold text-indigo-655 dark:text-indigo-400">
+                                        <a href={`tel:${contact.phone}`} className="hover:underline">{contact.phone}</a>
+                                      </td>
+                                      <td className="px-6 py-4 text-right">
+                                        <button
+                                          onClick={() => handleDeleteContact(contact.id)}
+                                          className="p-2 text-rose-605 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all"
+                                          title="Видалити контакт"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
+                    )}
+
+                    {/* Security devices sub-tab */}
+                    {rcSubTab === "security" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-4">
+                          <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                            Додати пристрій безпеки (камеру або ворота)
+                          </h3>
+                          <form onSubmit={handleAddSecurityDevice} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Назва пристрою</label>
+                              <input
+                                type="text"
+                                value={deviceName}
+                                onChange={(e) => setDeviceName(e.target.value)}
+                                placeholder="Камера паркінг, Шлагбаум в'їзд..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Тип пристрою</label>
+                              <select
+                                value={deviceType}
+                                onChange={(e) => setDeviceType(e.target.value)}
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              >
+                                <option value="camera">Камера CCTV</option>
+                                <option value="gate">Шлагбаум / Ворота</option>
+                              </select>
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                              <label className="text-xs font-bold text-slate-500">URL потоку або API керування (опціонально)</label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={deviceStreamUrl}
+                                  onChange={(e) => setDeviceStreamUrl(e.target.value)}
+                                  placeholder="rtsp://... або https://..."
+                                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                                <button
+                                  type="submit"
+                                  className="flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 hover:scale-[1.01]"
+                                >
+                                  <Plus className="w-4 h-4 mr-1" />
+                                  Додати
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        </div>
+
+                        <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                  <th className="px-6 py-4">Назва</th>
+                                  <th className="px-6 py-4">Тип</th>
+                                  <th className="px-6 py-4">Посилання / API</th>
+                                  <th className="px-6 py-4 text-right">Дії</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                {isSecurityLoading ? (
+                                  <tr>
+                                    <td colSpan={4} className="text-center py-8 text-slate-400">
+                                      <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500 mr-2"></div>
+                                      Завантаження пристроїв...
+                                    </td>
+                                  </tr>
+                                ) : securityDevicesList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={4} className="text-center py-8 text-slate-400">Немає доданих пристроїв безпеки</td>
+                                  </tr>
+                                ) : (
+                                  securityDevicesList.map((device) => (
+                                    <tr key={device.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                      <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">{device.name}</td>
+                                      <td className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-550">
+                                        {device.device_type === "camera" ? "📹 Камера" : "🚧 Шлагбаум/Ворота"}
+                                      </td>
+                                      <td className="px-6 py-4 text-slate-500 font-mono text-xs max-w-xs truncate">{device.stream_url || "—"}</td>
+                                      <td className="px-6 py-4 text-right">
+                                        <button
+                                          onClick={() => handleDeleteSecurityDevice(device.id)}
+                                          className="p-2 text-rose-605 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all"
+                                          title="Видалити пристрій"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Recreation zones sub-tab */}
+                    {rcSubTab === "zones" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-4">
+                          <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                            Додати зону відпочинку (альтанки, барбекю)
+                          </h3>
+                          <form onSubmit={handleAddZone} className="grid grid-cols-1 sm:grid-cols-5 gap-4 items-end">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Назва зони</label>
+                              <input
+                                type="text"
+                                value={zoneName}
+                                onChange={(e) => setZoneName(e.target.value)}
+                                placeholder="Альтанка №1..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Опис</label>
+                              <input
+                                type="text"
+                                value={zoneDescription}
+                                onChange={(e) => setZoneDescription(e.target.value)}
+                                placeholder="З мангалом на 10 осіб..."
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Місткість (осіб)</label>
+                              <input
+                                type="number"
+                                value={zoneCapacity || ""}
+                                onChange={(e) => setZoneCapacity(Number(e.target.value))}
+                                placeholder="10"
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Вартість (грн/год)</label>
+                              <input
+                                type="number"
+                                value={zonePricePerHour || ""}
+                                onChange={(e) => setZonePricePerHour(Number(e.target.value))}
+                                placeholder="150"
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Зображення URL (опціонально)</label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={zoneImageUrl}
+                                  onChange={(e) => setZoneImageUrl(e.target.value)}
+                                  placeholder="https://..."
+                                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                                <button
+                                  type="submit"
+                                  className="flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 hover:scale-[1.01]"
+                                >
+                                  <Plus className="w-4 h-4 mr-1" />
+                                  Додати
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        </div>
+
+                        <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                  <th className="px-6 py-4">Назва зони</th>
+                                  <th className="px-6 py-4">Опис</th>
+                                  <th className="px-6 py-4">Місткість</th>
+                                  <th className="px-6 py-4">Ціна</th>
+                                  <th className="px-6 py-4 text-right">Дії</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                {isZonesLoading ? (
+                                  <tr>
+                                    <td colSpan={5} className="text-center py-8 text-slate-400">
+                                      <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500 mr-2"></div>
+                                      Завантаження зон відпочинку...
+                                    </td>
+                                  </tr>
+                                ) : zonesList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={5} className="text-center py-8 text-slate-400">Немає створених зон відпочинку</td>
+                                  </tr>
+                                ) : (
+                                  zonesList.map((zone) => (
+                                    <tr key={zone.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                      <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">{zone.name}</td>
+                                      <td className="px-6 py-4 text-slate-700 dark:text-slate-300">{zone.description || "—"}</td>
+                                      <td className="px-6 py-4 font-semibold text-slate-900 dark:text-white">{zone.capacity} осіб</td>
+                                      <td className="px-6 py-4 font-bold text-emerald-600 dark:text-emerald-450">{zone.price_per_hour} грн/год</td>
+                                      <td className="px-6 py-4 text-right">
+                                        <button
+                                          onClick={() => handleDeleteZone(zone.id)}
+                                          className="p-2 text-rose-605 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all"
+                                          title="Видалити зону"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Service tickets sub-tab */}
+                    {rcSubTab === "tickets" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                  <th className="px-6 py-4">ID</th>
+                                  <th className="px-6 py-4">Об'єкт</th>
+                                  <th className="px-6 py-4">Послуга</th>
+                                  <th className="px-6 py-4">Опис</th>
+                                  <th className="px-6 py-4">Час</th>
+                                  <th className="px-6 py-4">Виконавець</th>
+                                  <th className="px-6 py-4">Вартість</th>
+                                  <th className="px-6 py-4">Статус</th>
+                                  <th className="px-6 py-4 text-right">Дії</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                {isTicketsLoading ? (
+                                  <tr>
+                                    <td colSpan={9} className="text-center py-8 text-slate-400">
+                                      <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500 mr-2"></div>
+                                      Завантаження заявок...
+                                    </td>
+                                  </tr>
+                                ) : serviceOrdersList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={9} className="text-center py-8 text-slate-400">Заявок від мешканців немає</td>
+                                  </tr>
+                                ) : (
+                                  serviceOrdersList.map((order) => {
+                                    let statusBadge = "";
+                                    let statusText = "";
+                                    switch (order.status) {
+                                      case "pending":
+                                        statusBadge = "bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20";
+                                        statusText = "В очікуванні";
+                                        break;
+                                      case "in_progress":
+                                        statusBadge = "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20";
+                                        statusText = "У процесі";
+                                        break;
+                                      case "completed":
+                                        statusBadge = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-450 border border-emerald-500/20";
+                                        statusText = "Виконано";
+                                        break;
+                                      case "cancelled":
+                                        statusBadge = "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20";
+                                        statusText = "Скасовано";
+                                        break;
+                                      default:
+                                        statusBadge = "bg-slate-100 text-slate-500";
+                                        statusText = order.status;
+                                    }
+                                    return (
+                                      <tr key={order.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                        <td className="px-6 py-4 font-mono text-xs text-slate-500">#{order.id}</td>
+                                        <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">{order.member_identifier}</td>
+                                        <td className="px-6 py-4 font-semibold text-indigo-655 dark:text-indigo-400 capitalize">{order.service_type}</td>
+                                        <td className="px-6 py-4 text-slate-700 dark:text-slate-300 max-w-xs truncate" title={order.description}>{order.description}</td>
+                                        <td className="px-6 py-4 text-slate-500 text-xs">{order.preferred_time || "—"}</td>
+                                        <td className="px-6 py-4 font-semibold text-slate-800 dark:text-slate-200">{order.contractor_name || "Не призначено"}</td>
+                                        <td className="px-6 py-4 font-bold text-slate-950 dark:text-slate-100">{order.price ? `${order.price} грн` : "—"}</td>
+                                        <td className="px-6 py-4">
+                                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${statusBadge}`}>
+                                            {statusText}
+                                          </span>
+                                        </td>
+                                        <td className="px-6 py-4 text-right">
+                                          <button
+                                            onClick={() => handleOpenEditTicket(order)}
+                                            className="flex items-center space-x-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ml-auto"
+                                          >
+                                            <Edit className="w-3.5 h-3.5" />
+                                            <span>Керувати</span>
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Documents sub-tab */}
+                    {rcSubTab === "documents" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl space-y-4">
+                          <h3 className="text-sm font-black text-slate-400 dark:text-slate-450 uppercase tracking-widest">
+                            Завантажити новий документ для мешканців
+                          </h3>
+                          <div className="flex flex-col sm:flex-row items-center gap-4">
+                            <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 dark:border-slate-800 hover:border-indigo-500 rounded-2xl p-6 cursor-pointer bg-slate-50/50 dark:bg-slate-900/30 w-full sm:w-80 transition-all">
+                              <Download className="w-8 h-8 text-slate-400 mb-2" />
+                              <span className="text-xs font-bold text-slate-500">Виберіть файл для завантаження</span>
+                              <input
+                                type="file"
+                                onChange={handleUploadDoc}
+                                disabled={docUploadLoading}
+                                className="hidden"
+                              />
+                            </label>
+                            {docUploadLoading && (
+                              <div className="flex items-center gap-2 text-xs text-slate-500 font-bold uppercase tracking-wider">
+                                <div className="w-4 h-4 border-b-2 border-indigo-500 rounded-full animate-spin"></div>
+                                Завантаження документа...
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                  <th className="px-6 py-4">Назва документа</th>
+                                  <th className="px-6 py-4">Тип</th>
+                                  <th className="px-6 py-4">Опис</th>
+                                  <th className="px-6 py-4">Дата</th>
+                                  <th className="px-6 py-4">Публічний для мешканців</th>
+                                  <th className="px-6 py-4 text-right">Дії</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                {isDocsLoading ? (
+                                  <tr>
+                                    <td colSpan={6} className="text-center py-8 text-slate-400">
+                                      <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500 mr-2"></div>
+                                      Завантаження документів...
+                                    </td>
+                                  </tr>
+                                ) : profileDocsList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={6} className="text-center py-8 text-slate-400">Немає завантажених документів</td>
+                                  </tr>
+                                ) : (
+                                  profileDocsList.map((doc) => (
+                                    <tr key={doc.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                      <td className="px-6 py-4 font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                                        <FileText className="w-4 h-4 text-indigo-550 shrink-0" />
+                                        <span className="truncate max-w-[200px]" title={doc.filename}>{doc.filename}</span>
+                                      </td>
+                                      <td className="px-6 py-4 text-xs font-bold uppercase text-slate-550">
+                                        {(() => {
+                                          switch (doc.document_type) {
+                                            case "regulatory": return "Статут/Звіт";
+                                            case "financial": return "Фінансовий";
+                                            case "info": return "Інформація";
+                                            default: return "Інше";
+                                          }
+                                        })()}
+                                      </td>
+                                      <td className="px-6 py-4 text-slate-700 dark:text-slate-300 max-w-xs truncate" title={doc.description}>{doc.description || "—"}</td>
+                                      <td className="px-6 py-4 text-slate-400 text-xs">{doc.upload_date}</td>
+                                      <td className="px-6 py-4">
+                                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${doc.is_public_to_residents ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-slate-100 dark:bg-slate-800 text-slate-455 border-slate-200 dark:border-slate-800"}`}>
+                                          {doc.is_public_to_residents ? "Публічний" : "Приватний"}
+                                        </span>
+                                      </td>
+                                      <td className="px-6 py-4 text-right">
+                                        <div className="flex justify-end gap-1.5">
+                                          <button
+                                            onClick={() => handleOpenEditDoc(doc)}
+                                            className="p-2 text-slate-450 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
+                                            title="Налаштувати доступ"
+                                          >
+                                            <Settings className="w-4 h-4" />
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeleteDoc(doc.id)}
+                                            className="p-2 text-rose-605 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all"
+                                            title="Видалити"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -1776,12 +2731,12 @@ export default function BillingPage() {
                             )}
                           </td>
                           <td className="px-6 py-4 font-bold">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs ${
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs border ${
                               hasDebt 
-                                ? "bg-rose-500/10 text-rose-600 dark:text-rose-400" 
+                                ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20" 
                                 : hasPrepay 
-                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                  : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                                  ? "bg-lime-500/10 text-lime-700 dark:text-lime-450 border-lime-500/20"
+                                  : "bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-800"
                             }`}>
                               {m.balance > 0 ? "+" : ""}
                               {m.balance.toLocaleString("uk-UA")} грн
@@ -2250,6 +3205,163 @@ export default function BillingPage() {
         )}
 
       </div>
+
+      {/* Document Metadata Modal */}
+      {docMetadataModalOpen && selectedDocForEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800/40">
+              <h3 className="text-base font-black text-slate-900 dark:text-white">Налаштування доступу документа</h3>
+              <button onClick={() => setDocMetadataModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDocMetadata} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Файл</label>
+                <div className="text-sm font-bold text-slate-800 dark:text-slate-250 truncate">{selectedDocForEdit.filename}</div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Опис документа</label>
+                <textarea
+                  value={docDescription}
+                  onChange={(e) => setDocDescription(e.target.value)}
+                  placeholder="Опис для відображення в кабінеті..."
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[80px]"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Категорія</label>
+                <select
+                  value={docType}
+                  onChange={(e) => setDocType(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="regulatory">Статутні/Протоколи</option>
+                  <option value="financial">Фінансові звіти/Реквізити</option>
+                  <option value="info">Інформаційні оголошення</option>
+                  <option value="other">Інше</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-3 py-2">
+                <input
+                  type="checkbox"
+                  id="docIsPublicCheck"
+                  checked={docIsPublic}
+                  onChange={(e) => setDocIsPublic(e.target.checked)}
+                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 dark:bg-slate-900 border-slate-300 dark:border-slate-800"
+                />
+                <label htmlFor="docIsPublicCheck" className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                  Показувати цей документ мешканцям в кабінеті
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800/40">
+                <button
+                  type="button"
+                  onClick={() => setDocMetadataModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-800"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                >
+                  Зберегти
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Service Order (Ticket) Management Modal */}
+      {ticketModalOpen && selectedTicketForEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-850 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800/40">
+              <h3 className="text-base font-black text-slate-900 dark:text-white">Керування заявкою мешканця</h3>
+              <button onClick={() => setTicketModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTicket} className="space-y-4">
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Створено об'єктом</div>
+                <div className="text-sm font-bold text-slate-805 dark:text-slate-200">{selectedTicketForEdit.member_identifier}</div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Опис проблеми</div>
+                <div className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800/40 p-3 rounded-xl min-h-[60px] max-h-40 overflow-y-auto">
+                  {selectedTicketForEdit.description}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Статус заявки</label>
+                <select
+                  value={ticketStatus}
+                  onChange={(e) => setTicketStatus(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="pending">В очікуванні (Pending)</option>
+                  <option value="in_progress">У процесі (In Progress)</option>
+                  <option value="completed">Виконано (Completed)</option>
+                  <option value="cancelled">Скасовано (Cancelled)</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Виконавець / Контрагент</label>
+                <select
+                  value={ticketContractor}
+                  onChange={(e) => setTicketContractor(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">Не призначено</option>
+                  {contractors.map((c) => (
+                    <option key={c.id} value={c.name}>{c.name} ({getContractorTypeLabel(c.type)})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">Вартість робіт (грн)</label>
+                <input
+                  type="number"
+                  value={ticketPrice || ""}
+                  onChange={(e) => setTicketPrice(Number(e.target.value))}
+                  placeholder="0"
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800/40">
+                <button
+                  type="button"
+                  onClick={() => setTicketModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-800"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+                >
+                  Зберегти зміни
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Add / Edit Member Modal */}
       {memberModalOpen && (

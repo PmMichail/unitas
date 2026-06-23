@@ -217,10 +217,16 @@ const defaultTemplates: Record<string, string> = {
 2.1. Отримуюча Сторона зобов'язується зберігати інформацію в таємниці та не розголошувати її третім особам без письмової згоди Розкриваючої Сторони.`
 };
 
+import ResidentSurveys from '../../components/resident/ResidentSurveys';
+
 export default function InvoicesScreen() {
   const { colors } = useTheme();
-  const { telegramId } = useAuth();
+  const { telegramId, isResident } = useAuth();
   const insets = useSafeAreaInsets();
+
+  if (isResident) {
+    return <ResidentSurveys />;
+  }
 
   const [profiles, setProfiles] = useState<ProfileData[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileData | null>(null);

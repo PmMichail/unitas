@@ -44,9 +44,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, Path } from 'react-native-svg';
 
+import ResidentDashboard from '../../components/resident/ResidentDashboard';
+
 export default function DashboardScreen() {
   const { colors, isDark } = useTheme();
-  const { telegramId, logout } = useAuth();
+  const { telegramId, logout, isResident } = useAuth();
+
+  if (isResident) {
+    return <ResidentDashboard />;
+  }
 
   const [profiles, setProfiles] = useState<ProfileData[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileData | null>(null);

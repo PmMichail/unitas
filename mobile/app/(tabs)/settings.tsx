@@ -7,6 +7,8 @@ import { Button } from '../../components/ui/Button';
 import { User, Moon, Sun, Fingerprint, LogOut, Info, Laptop, Globe } from 'lucide-react-native';
 import { api } from '../../services/api';
 
+import ResidentSettings from '../../components/resident/ResidentSettings';
+
 export default function SettingsScreen() {
   const { colors, themeMode, setThemeMode } = useTheme();
   const {
@@ -15,13 +17,18 @@ export default function SettingsScreen() {
     isBiometricSupported,
     isBiometricEnabled,
     setBiometricPreference,
+    isResident,
   } = useAuth();
+
+  if (isResident) {
+    return <ResidentSettings />;
+  }
 
   const [userConfig, setUserConfig] = useState<{ email: string; telegram_id: string | null; is_telegram_linked: boolean; link_code: string | null } | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadUserConfig = async () => {
-    if (!telegramId) return;
+    if (!telegramId || isResident) return;
     setLoading(true);
     try {
       const data = await api.getCurrentUser(telegramId);
@@ -34,8 +41,10 @@ export default function SettingsScreen() {
   };
 
   useEffect(() => {
-    loadUserConfig();
-  }, [telegramId]);
+    if (!isResident) {
+      loadUserConfig();
+    }
+  }, [telegramId, isResident]);
 
   const handleLogout = () => {
     Alert.alert(

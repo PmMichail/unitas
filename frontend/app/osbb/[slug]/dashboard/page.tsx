@@ -86,6 +86,37 @@ export default function ResidentDashboardPage() {
     loadData(savedToken);
   }, [slug]);
 
+  useEffect(() => {
+    if (!dashboard?.member?.id) return;
+    
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+    const wsProtocol = API_BASE_URL.startsWith("https") ? "wss" : "ws";
+    const wsHost = API_BASE_URL.replace(/^https?:\/\//, "");
+    const wsUrl = `${wsProtocol}://${wsHost}/ws/member/${dashboard.member.id}`;
+    
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.status === "blocked") {
+          localStorage.removeItem("member_token");
+          localStorage.removeItem("member_profile_slug");
+          router.push(`/osbb/${slug}/login?error=blocked`);
+        } else if (data.status === "pending") {
+          localStorage.setItem("pending_member_id", String(dashboard.member.id));
+          router.push(`/osbb/${slug}/pending`);
+        }
+      } catch (err) {
+        console.error("Error parsing WebSocket message:", err);
+      }
+    };
+    
+    return () => {
+      ws.close();
+    };
+  }, [dashboard?.member?.id, slug, router]);
+
   const logout = () => {
     localStorage.removeItem("member_token");
     localStorage.removeItem("member_profile_slug");

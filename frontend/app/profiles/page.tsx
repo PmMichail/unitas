@@ -901,7 +901,8 @@ export default function Profiles() {
                 onClick={() => handleOpenInvoices(profile)}
                 className="w-full mt-2 py-2 rounded-xl border border-amber-500/30 hover:border-amber-500 bg-amber-500/5 dark:bg-amber-950/10 text-xs font-bold text-amber-600 dark:text-amber-400 text-center transition-all flex items-center justify-center gap-1.5"
               >
-                <FileText className="w-3.5 h-3.5" />
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Регулярні рахунки</span>
               </button>
             </div>
           );

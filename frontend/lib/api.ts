@@ -1006,6 +1006,72 @@ export const api = {
     const formData = toFormData(data);
     const response = await client.post(`/api/contractors/${id}/transactions`, formData);
     return response.data;
+  },
+  getProfileContacts: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/contacts`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  createProfileContact: async (profileId: number, data: { name: string; role: string; phone: string }, userId?: number) => {
+    const response = await client.post(`/api/profiles/${profileId}/contacts`, data, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  deleteProfileContact: async (profileId: number, contactId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/contacts/${contactId}`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  getProfileSecurityDevices: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/security/devices`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  createProfileSecurityDevice: async (profileId: number, data: { name: string; device_type: string; stream_url?: string }, userId?: number) => {
+    const response = await client.post(`/api/profiles/${profileId}/security/devices`, data, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  deleteProfileSecurityDevice: async (profileId: number, deviceId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/security/devices/${deviceId}`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  getProfileRecreationZones: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/bookings/zones`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  createProfileRecreationZone: async (profileId: number, data: { name: string; description?: string; capacity: number; price_per_hour: number; image_url?: string }, userId?: number) => {
+    const response = await client.post(`/api/profiles/${profileId}/bookings/zones`, data, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  deleteProfileRecreationZone: async (profileId: number, zoneId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/bookings/zones/${zoneId}`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  getProfileServiceOrders: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/services/orders`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  updateProfileServiceOrder: async (profileId: number, orderId: number, data: { status: string; price: number; contractor_name?: string }, userId?: number) => {
+    const response = await client.post(`/api/profiles/${profileId}/services/orders/${orderId}/update`, data, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
   }
 };
 
@@ -1057,12 +1123,20 @@ export const invoicesApi = {
     const response = await client.post('/api/invoices', data);
     return response.data;
   },
-  
-  send: async (invoiceId: number, toEmail: string, subject?: string, message?: string) => {
+  send: async (
+    invoiceId: number,
+    toEmail: string,
+    subject?: string,
+    message?: string,
+    includeInvoice: boolean = true,
+    includeAct: boolean = true
+  ) => {
     const response = await client.post(`/api/invoices/${invoiceId}/send`, {
       toEmail,
       subject,
       message,
+      include_invoice: includeInvoice,
+      include_act: includeAct
     });
     return response.data;
   },
@@ -1132,20 +1206,50 @@ export const invoicesApi = {
     });
     return response.data;
   },
-  getProfileDocuments: async (profileId: number) => {
-    const response = await client.get(`/api/profiles/${profileId}/documents`);
+  getProfileDocuments: async (profileId: number, userId?: number) => {
+    const params = userId ? { user_id: userId } : undefined;
+    const response = await client.get(`/api/profiles/${profileId}/documents`, { params });
     return response.data;
   },
-  uploadProfileDocument: async (profileId: number, file: File) => {
+  uploadProfileDocument: async (
+    profileId: number,
+    file: File,
+    isPublicToResidents?: boolean,
+    documentType?: string,
+    description?: string,
+    userId?: number
+  ) => {
     const formData = new FormData();
     formData.append("file", file);
+    if (isPublicToResidents !== undefined) {
+      formData.append("is_public_to_residents", isPublicToResidents ? "true" : "false");
+    }
+    if (documentType) {
+      formData.append("document_type", documentType);
+    }
+    if (description) {
+      formData.append("description", description);
+    }
+    const params = userId ? { user_id: userId } : undefined;
     const response = await client.post(`/api/profiles/${profileId}/documents`, formData, {
-      headers: { "Content-Type": "multipart/form-data" }
+      headers: { "Content-Type": "multipart/form-data" },
+      params
     });
     return response.data;
   },
-  deleteProfileDocument: async (profileId: number, docId: number) => {
-    const response = await client.delete(`/api/profiles/${profileId}/documents/${docId}`);
+  deleteProfileDocument: async (profileId: number, docId: number, userId?: number) => {
+    const params = userId ? { user_id: userId } : undefined;
+    const response = await client.delete(`/api/profiles/${profileId}/documents/${docId}`, { params });
+    return response.data;
+  },
+  updateProfileDocumentMetadata: async (
+    profileId: number,
+    docId: number,
+    data: { is_public_to_residents: boolean; document_type: string; description?: string },
+    userId?: number
+  ) => {
+    const params = userId ? { user_id: userId } : undefined;
+    const response = await client.post(`/api/profiles/${profileId}/documents/${docId}/metadata`, data, { params });
     return response.data;
   },
   getProfileDocumentPdf: async (docId: number) => {

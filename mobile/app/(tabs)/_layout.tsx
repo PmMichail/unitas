@@ -1,10 +1,12 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeContext';
-import { LayoutDashboard, Briefcase, Receipt, FileText, Settings, Users } from 'lucide-react-native';
+import { useAuth } from '../../context/AuthContext';
+import { LayoutDashboard, Briefcase, Receipt, FileText, Settings, Users, MessageSquare, BarChart3 } from 'lucide-react-native';
 
 export default function TabLayout() {
   const { colors, isDark } = useTheme();
+  const { isResident } = useAuth();
 
   return (
     <Tabs
@@ -34,9 +36,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Дашборд',
+          title: isResident ? 'Кабінет' : 'Дашборд',
           headerShown: false,
-          tabBarLabel: 'Головна',
+          tabBarLabel: isResident ? 'Кабінет' : 'Головна',
           tabBarIcon: ({ color, size }) => <LayoutDashboard size={size} color={color} />,
         }}
       />
@@ -47,40 +49,41 @@ export default function TabLayout() {
           headerTitle: 'Податкові профілі',
           tabBarLabel: 'Профілі',
           tabBarIcon: ({ color, size }) => <Briefcase size={size} color={color} />,
+          href: isResident ? null : undefined,
         }}
       />
       <Tabs.Screen
         name="transactions"
         options={{
-          title: 'Транзакції',
-          headerTitle: 'Імпорт та облік транзакцій',
-          tabBarLabel: 'Операції',
-          tabBarIcon: ({ color, size }) => <Receipt size={size} color={color} />,
+          title: isResident ? 'Прозорість' : 'Транзакції',
+          headerTitle: isResident ? 'Реєстр прозорості' : 'Імпорт та облік транзакцій',
+          tabBarLabel: isResident ? 'Прозорість' : 'Операції',
+          tabBarIcon: ({ color, size }) => isResident ? <Users size={size} color={color} /> : <Receipt size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="invoices"
         options={{
-          title: 'Рахунки',
-          headerTitle: 'Рахунки (Сформувати та відправити)',
-          tabBarLabel: 'Рахунки',
-          tabBarIcon: ({ color, size }) => <FileText size={size} color={color} />,
+          title: isResident ? 'Опитування' : 'Рахунки',
+          headerTitle: isResident ? 'Опитування та голосування' : 'Рахунки (Сформувати та відправити)',
+          tabBarLabel: isResident ? 'Опитування' : 'Рахунки',
+          tabBarIcon: ({ color, size }) => isResident ? <BarChart3 size={size} color={color} /> : <FileText size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="billing"
         options={{
-          title: 'Білінг',
-          headerTitle: 'Облік мешканців та внесків',
-          tabBarLabel: 'Білінг',
-          tabBarIcon: ({ color, size }) => <Users size={size} color={color} />,
+          title: isResident ? 'Заявки' : 'Білінг',
+          headerTitle: isResident ? 'Технічна підтримка та заявки' : 'Облік мешканців та внесків',
+          tabBarLabel: isResident ? 'Заявки' : 'Білінг',
+          tabBarIcon: ({ color, size }) => isResident ? <MessageSquare size={size} color={color} /> : <Users size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Налаштування',
-          headerTitle: 'Налаштування системи',
+          headerTitle: isResident ? 'Налаштування кабінету' : 'Налаштування системи',
           tabBarLabel: 'Налаштування',
           tabBarIcon: ({ color, size }) => <Settings size={size} color={color} />,
         }}

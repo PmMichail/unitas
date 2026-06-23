@@ -45,11 +45,17 @@ import {
 const { ArrowLeft, ArrowRight } = require('lucide-react-native');
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import ResidentTransparency from '../../components/resident/ResidentTransparency';
+
 export default function TransactionsScreen() {
   const { colors } = useTheme();
-  const { telegramId } = useAuth();
+  const { telegramId, isResident } = useAuth();
   const { height: windowHeight } = useWindowDimensions();
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  if (isResident) {
+    return <ResidentTransparency />;
+  }
 
   useEffect(() => {
     const showSub = Keyboard.addListener(

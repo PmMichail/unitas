@@ -351,6 +351,34 @@ export default function SubscriptionPage() {
     );
   }
 
+  const getPlanName = (planCode: string) => {
+    switch (planCode) {
+      case "business":
+        return "Бізнес (для ФОП)";
+      case "basic":
+        return "Бізнес (для ОСББ)";
+      case "premium":
+        return "Преміум (для ОСББ)";
+      case "free":
+        return "Безкоштовний тариф (Free)";
+      default:
+        return planCode || "Безкоштовний тариф (Free)";
+    }
+  };
+
+  const getPeriodName = (period: string) => {
+    switch (period) {
+      case "yearly":
+        return "Річний";
+      case "half_yearly":
+        return "Піврічний";
+      case "monthly":
+        return "Місячний";
+      default:
+        return period || "";
+    }
+  };
+
   // Calculate savings on yearly and half-yearly plans
   const yearlySavings = Math.round((prices.monthly * 12) - prices.yearly);
   const yearlySavingsPercent = Math.round((yearlySavings / (prices.monthly * 12)) * 100);
@@ -358,8 +386,11 @@ export default function SubscriptionPage() {
   const halfYearlySavings = Math.round((prices.monthly * 6) - prices.half_yearly);
   const halfYearlySavingsPercent = Math.round((halfYearlySavings / (prices.monthly * 6)) * 100);
 
-  const isActiveBusiness = subscription?.plan === "business";
-  const isPendingBusiness = subscription?.status === "pending" && subscription?.plan === "business";
+  const paidPlans = ["business", "basic", "premium"];
+  const isPaidPlan = paidPlans.includes(subscription?.plan);
+  const isActiveBusiness = isPaidPlan && subscription?.status === "active";
+  const isPendingBusiness = isPaidPlan && subscription?.status === "pending";
+  const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
 
   const getDynamicPricing = () => {
     const plan = plans.find(p => p.id === selectedPlanId) || plans[0];
@@ -434,6 +465,83 @@ export default function SubscriptionPage() {
         </div>
       )}
 
+      {/* Pending Payment Notification Banner */}
+      {isPendingBusiness && (
+        <div className="p-5 bg-amber-500/10 border border-amber-500/30 text-amber-250 rounded-3xl flex flex-col sm:flex-row justify-between sm:items-center gap-4 animate-in fade-in duration-300">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 bg-amber-500/20 rounded-2xl border border-amber-500/25 shrink-0">
+              <Clock className="w-6 h-6 text-amber-450 animate-pulse" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-extrabold text-base text-white">Очікує оплати тарифу ⏳</h3>
+              <p className="text-xs text-slate-350">
+                Ви замовили тариф <span className="font-bold text-amber-450">{getPlanName(subscription?.plan)}</span> ({getPeriodName(subscription?.payment_period)}). 
+                Всі переваги платного тарифу стануть доступними автоматично після підтвердження оплати рахунку.
+              </p>
+              <p className="text-[11px] text-slate-450">
+                Поки що ваш кабінет працює в межах **Безкоштовного тарифу (Free)** (ліміт: 5 банківських виписок на місяць).
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 self-end sm:self-center shrink-0">
+            {paymentsList.find(p => p.status === "pending" && p.payment_type === "subscription") && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const pendingPay = paymentsList.find(p => p.status === "pending" && p.payment_type === "subscription");
+                  if (pendingPay?.liqpay_order_id) {
+                    setLoading(true);
+                    try {
+                      const res = await api.createPayment({
+                        profile_id: selectedProfile.id,
+                        plan_type: pendingPay.tax_type || "business",
+                        payment_period: pendingPay.period === "yearly" ? "yearly" : pendingPay.period === "half_yearly" ? "half_yearly" : "monthly"
+                      });
+                      if (res.payment_required) {
+                        if (res.pageUrl) {
+                          window.location.href = res.pageUrl;
+                        } else {
+                          setLiqpayForm(res);
+                        }
+                      }
+                    } catch (e) {
+                      alert("Не вдалося ініціювати платіж");
+                    } finally {
+                      setLoading(false);
+                    }
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-amber-550 to-amber-600 hover:from-amber-500 hover:to-amber-555 text-white text-xs font-bold rounded-xl border border-amber-600/30 transition-all cursor-pointer shadow flex items-center gap-1.5 active:scale-95"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>Сплатити тариф</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Expired Notification Banner */}
+      {subscription?.status === "expired" && (
+        <div className="p-5 bg-rose-500/10 border border-rose-500/30 text-rose-250 rounded-3xl flex flex-col sm:flex-row justify-between sm:items-center gap-4 animate-in fade-in duration-300">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 bg-rose-500/20 rounded-2xl border border-rose-500/25 shrink-0">
+              <AlertCircle className="w-6 h-6 text-rose-400" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-base text-white">Термін дії підписки закінчився ⚠️</h3>
+              <p className="text-xs text-slate-350 mt-0.5">
+                Ваш платний тариф <span className="font-bold text-rose-400">{getPlanName(subscription?.plan_type)}</span> закінчився{subscription?.expires_at ? ` ${new Date(subscription.expires_at).toLocaleDateString("uk-UA")}` : ""}.
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                Кабінет автоматично переведено на **Безкоштовний тариф (Free)**. Модуль білінгу мешканців та автоматичний імпорт виписок деактивовані.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+
       {/* Hidden LiqPay Submit Form */}
       {liqpayForm && (
         <form id="liqpay-submit-form" method="POST" action={liqpayForm.api_url}>
@@ -461,8 +569,27 @@ export default function SubscriptionPage() {
               <div className="text-left">
                 <p className="text-[9px] uppercase font-black tracking-widest text-slate-500">Поточний план</p>
                 <p className="text-xs font-bold text-amber-400">
-                  Business ({subscription.payment_period === "yearly" ? "Річний" : subscription.payment_period === "half_yearly" ? "Піврічний" : "Місячний"})
+                  {getPlanName(subscription.plan)} ({getPeriodName(subscription.payment_period)})
                 </p>
+              </div>
+            </div>
+          ) : isPendingBusiness ? (
+            <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2.5">
+              <div className="flex items-center gap-2 bg-slate-900/60 border border-slate-800 px-4 py-2 rounded-2xl">
+                <div className="w-2.5 h-2.5 rounded-full bg-slate-500" />
+                <div className="text-left">
+                  <p className="text-[9px] uppercase font-black tracking-widest text-slate-500">Поточний ліміт</p>
+                  <p className="text-xs font-bold text-slate-350">Безкоштовний тариф (Free)</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/35 px-4 py-2 rounded-2xl animate-pulse">
+                <Clock className="w-4 h-4 text-amber-400" />
+                <div className="text-left">
+                  <p className="text-[9px] uppercase font-black tracking-widest text-amber-505/85">Очікує оплати</p>
+                  <p className="text-xs font-bold text-amber-400">
+                    {getPlanName(subscription.plan)} ({getPeriodName(subscription.payment_period)})
+                  </p>
+                </div>
               </div>
             </div>
           ) : (
@@ -533,7 +660,6 @@ export default function SubscriptionPage() {
 
             {/* Plans Grid */}
             {(() => {
-              const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
               if (isOSBBOrST) {
                 return (
                   <div className="space-y-6">
@@ -887,7 +1013,7 @@ export default function SubscriptionPage() {
             <div className="space-y-4">
               <div className="flex justify-between items-center py-2 border-b border-slate-900/60">
                 <span className="text-xs text-slate-550">План</span>
-                <span className="text-xs font-bold text-white capitalize">{subscription?.plan}</span>
+                <span className="text-xs font-bold text-white capitalize">{getPlanName(subscription?.plan)}</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-slate-900/60">
                 <span className="text-xs text-slate-550">Статус підписки</span>
@@ -896,9 +1022,9 @@ export default function SubscriptionPage() {
                     ? "bg-emerald-500/10 text-emerald-450 border border-emerald-500/20" 
                     : subscription?.status === "pending"
                       ? "bg-amber-500/10 text-amber-450 border border-amber-500/20"
-                      : "bg-slate-800 text-slate-400"
+                      : "bg-rose-500/10 text-rose-455 border border-rose-500/20"
                 }`}>
-                  {subscription?.status === "active" ? "Активна" : subscription?.status === "pending" ? "Очікує оплати" : subscription?.status || "Free"}
+                  {subscription?.status === "active" ? "Активна" : subscription?.status === "pending" ? "Очікує оплати" : subscription?.status === "expired" ? "Термін закінчився" : subscription?.status || "Free"}
                 </span>
               </div>
               
@@ -932,6 +1058,83 @@ export default function SubscriptionPage() {
               )}
             </div>
           </div>
+
+          {/* Resident Cabinet Module Status (only for OSBB/ST) */}
+          {isOSBBOrST && (
+            <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-4 relative overflow-hidden">
+              <div className="absolute top-[-10%] right-[-10%] w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
+              
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Модуль мешканців</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Білінг-панель та кабінет ОСББ</p>
+                </div>
+                
+                {(() => {
+                  const isModuleActive = !!subscription?.is_member_module_active && subscription?.status === "active";
+                  const isModulePending = !!subscription?.is_member_module_active && subscription?.status === "pending";
+                  return (
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                      isModuleActive
+                        ? "bg-emerald-500/10 text-emerald-450 border border-emerald-500/20"
+                        : isModulePending
+                          ? "bg-amber-500/10 text-amber-450 border border-amber-500/20 animate-pulse"
+                          : "bg-rose-500/10 text-rose-455 border border-rose-500/20"
+                    }`}>
+                      {isModuleActive ? "Активний" : isModulePending ? "Очікує" : "Вимкнено"}
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <div className="space-y-3 pt-1">
+                {(() => {
+                  const isModuleActive = !!subscription?.is_member_module_active && subscription?.status === "active";
+                  const isModulePending = !!subscription?.is_member_module_active && subscription?.status === "pending";
+                  return (
+                    <>
+                      <div className="flex justify-between items-center text-xs border-b border-slate-900/60 pb-2">
+                        <span className="text-slate-550">Статус підключення:</span>
+                        <span className={`font-bold ${isModuleActive ? "text-emerald-400" : isModulePending ? "text-amber-400" : "text-slate-400"}`}>
+                          {isModuleActive 
+                            ? "✅ Підключено" 
+                            : isModulePending 
+                              ? "⏳ Очікує оплати підписки" 
+                              : "❌ Відключено"}
+                        </span>
+                      </div>
+
+                      {isModuleActive && subscription?.expires_at && (
+                        <div className="flex justify-between items-center text-xs border-b border-slate-900/60 pb-2">
+                          <span className="text-slate-550">Діє до:</span>
+                          <span className="font-bold text-white">
+                            {new Date(subscription.expires_at).toLocaleDateString("uk-UA")}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Explanation text */}
+                      <div className="p-3 bg-slate-900/40 border border-slate-900 rounded-2xl">
+                        <p className="text-xs text-slate-350 leading-relaxed font-medium">
+                          {isModuleActive ? (
+                            "Модуль білінгу мешканців активний. Мешканці мають доступ до особистих кабінетів, можуть передавати показання лічильників та переглядати рахунки."
+                          ) : isModulePending ? (
+                            `Ви замовили Кабінет мешканців у новому рахунку. Модуль буде активовано одразу після успішної оплати підписки за тарифом Business.`
+                          ) : subscription?.status === "expired" ? (
+                            `⚠️ Модуль вимкнено через закінчення терміну дії вашої підписки ${subscription.expires_at ? `(${new Date(subscription.expires_at).toLocaleDateString("uk-UA")})` : ""}. Оплатіть новий рахунок, щоб повернути доступ мешканцям.`
+                          ) : isPaidPlan && !subscription?.is_member_module_active ? (
+                            `ℹ️ Модуль вимкнено, оскільки його не було обрано при оформленні поточної підписки від ${subscription.last_payment_date ? new Date(subscription.last_payment_date).toLocaleDateString("uk-UA") : (subscription.created_at ? new Date(subscription.created_at).toLocaleDateString("uk-UA") : "початку дії підписки")}. Ви можете підключити його під час наступного продовження підписки.`
+                          ) : (
+                            "Цей модуль дозволяє мешканцям вашого ОСББ бачити свої квитанції, вносити показники лічильників та брати участь в опитуваннях. Модуль доступний лише в платних тарифах."
+                          )}
+                        </p>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
  
           {/* Usage limit bar */}
           {!isActiveBusiness && (

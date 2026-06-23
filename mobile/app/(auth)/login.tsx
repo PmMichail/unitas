@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,13 +14,30 @@ import {
   Pressable,
   Keyboard,
   TouchableWithoutFeedback,
+  Animated,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import * as Notifications from 'expo-notifications';
+import * as Location from 'expo-location';
 import { Card } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
 import { Button } from '../../components/ui/Button';
-import { Coins, Fingerprint, MessageSquare, ShieldCheck } from 'lucide-react-native';
+import { 
+  Coins, 
+  Fingerprint, 
+  MessageSquare, 
+  ShieldCheck, 
+  Search, 
+  Building2, 
+  User, 
+  Lock, 
+  Mail, 
+  Phone, 
+  PhoneCall, 
+  ChevronRight,
+  Clock
+} from 'lucide-react-native';
 import { api } from '../../services/api';
 
 export default function LoginScreen() {
@@ -36,10 +53,16 @@ export default function LoginScreen() {
     isBiometricEnabled,
     authenticateBiometrics,
     setBiometricPreference,
+    residentLogin,
+    residentRegister
   } = useAuth();
 
+  // Mode and Role States
+  const [userRole, setUserRole] = useState<'business' | 'resident'>('business');
   const [isRegister, setIsRegister] = useState(false);
   const [loginMode, setLoginMode] = useState<'email' | 'telegram'>('email');
+  
+  // Business State
   const [telegramInput, setTelegramInput] = useState('');
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -47,7 +70,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [useBioPref, setUseBioPref] = useState(isBiometricEnabled);
 
-  // Registration Form State
+  // Business Registration Form State
   const [regName, setRegName] = useState('');
   const [regTaxId, setRegTaxId] = useState('');
   const [regType, setRegType] = useState<'fop' | 'company'>('fop');
@@ -57,6 +80,23 @@ export default function LoginScreen() {
   const [regHasEmployees, setRegHasEmployees] = useState(false);
   const [regIsVatPayer, setRegIsVatPayer] = useState(false);
   const [regIsDirector, setRegIsDirector] = useState(true);
+
+  // Resident State
+  const [osbbQuery, setOsbbQuery] = useState('');
+  const [osbbResults, setOsbbResults] = useState<any[]>([]);
+  const [selectedOsbb, setSelectedOsbb] = useState<any | null>(null);
+  const [resAccountNumber, setResAccountNumber] = useState('');
+  const [resPassword, setResPassword] = useState('');
+  const [resFullName, setResFullName] = useState('');
+  const [resPhone, setResPhone] = useState('');
+  const [resEmail, setResEmail] = useState('');
+  const [locLoading, setLocLoading] = useState(false);
+
+  // Pending verification view state
+  const [isPendingVerification, setIsPendingVerification] = useState(false);
+  const [pendingMemberId, setPendingMemberId] = useState<number | null>(null);
+  const [pendingOsbbPhone, setPendingOsbbPhone] = useState('');
+  const [pendingOsbbSlug, setPendingOsbbSlug] = useState('');
 
   // Success Modal State
   const [successModalVisible, setSuccessModalVisible] = useState(false);
@@ -69,14 +109,106 @@ export default function LoginScreen() {
   const [verificationEmail, setVerificationEmail] = useState('');
   const [isTelegramLogin, setIsTelegramLogin] = useState(false);
 
+  // Secure Pulse Animation state
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
   useEffect(() => {
-    // Automatically trigger biometrics if enabled and not in register mode
-    if (!isRegister && isBiometricEnabled && isBiometricSupported) {
+    // Automatically trigger biometrics if enabled and not in register mode or pending
+    if (!isRegister && !isPendingVerification && isBiometricEnabled && isBiometricSupported && userRole === 'business') {
       setTimeout(() => {
         handleBiometrics();
       }, 500);
     }
-  }, [isBiometricEnabled, isBiometricSupported, isRegister]);
+  }, [isBiometricEnabled, isBiometricSupported, isRegister, isPendingVerification, userRole]);
+
+  // Secure Pulse Animation hook
+  useEffect(() => {
+    if (isPendingVerification) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.15,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1.0,
+            duration: 1500,
+            useNativeDriver: true,
+          })
+        ])
+      ).start();
+    }
+  }, [isPendingVerification]);
+
+  // WebSocket approval status monitor
+  useEffect(() => {
+    if (!isPendingVerification || !pendingMemberId) return;
+
+    const wsUrl = `wss://unitas-backend.fly.dev/ws/member/${pendingMemberId}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log('WS connection opened to listen for member approval');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.status === 'approved') {
+          Alert.alert(
+            'Профіль активовано!',
+            'Ваш доступ до кабінету успішно підтверджено. Проводимо автоматичний вхід.',
+            [
+              {
+                text: 'Увійти',
+                onPress: () => {
+                  setIsPendingVerification(false);
+                  residentLogin(pendingOsbbSlug, resAccountNumber.trim(), resPassword.trim());
+                }
+              }
+            ]
+          );
+        }
+      } catch (err) {
+        console.error('Error parsing WS message:', err);
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.warn('WS error:', e);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [isPendingVerification, pendingMemberId]);
+
+  // Push notification approval status monitor
+  useEffect(() => {
+    if (!isPendingVerification) return;
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data;
+      if (data?.status === 'approved') {
+        Alert.alert(
+          'Профіль активовано!',
+          'Ваш доступ до кабінету успішно підтверджено. Проводимо автоматичний вхід.',
+          [
+            {
+              text: 'Увійти',
+              onPress: () => {
+                setIsPendingVerification(false);
+                residentLogin(pendingOsbbSlug, resAccountNumber.trim(), resPassword.trim());
+              }
+            }
+          ]
+        );
+      }
+    });
+
+    return () => subscription.remove();
+  }, [isPendingVerification, pendingOsbbSlug, resAccountNumber, resPassword]);
 
   const handleBiometrics = async () => {
     const success = await authenticateBiometrics();
@@ -219,14 +351,11 @@ export default function LoginScreen() {
         reg_date: new Date().toISOString().split('T')[0],
       };
 
-      // Register account on backend
       await register(payload);
       
-      // Auto login
       setIsTelegramLogin(false);
       await login(emailInput.trim(), passwordInput.trim());
 
-      // Save biometric preferences
       if (isBiometricSupported) {
         await setBiometricPreference(useBioPref);
       }
@@ -239,6 +368,126 @@ export default function LoginScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Autocomplete OSBB Search
+  const handleSearchOsbb = async (text: string) => {
+    setOsbbQuery(text);
+    if (text.trim().length < 2) {
+      setOsbbResults([]);
+      return;
+    }
+    try {
+      const data = await api.searchOsbb(text);
+      setOsbbResults(data.results || []);
+    } catch (e) {
+      console.error('OSBB search query failed:', e);
+    }
+  };
+
+  const handleSearchNearby = async () => {
+    setLocLoading(true);
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync() as any;
+      if (status !== 'granted') {
+        Alert.alert('Помилка', 'Дозвіл на доступ до геолокації відхилено.');
+        setLocLoading(false);
+        return;
+      }
+
+      let location = await Location.getCurrentPositionAsync({});
+      const lat = location.coords.latitude;
+      const lon = location.coords.longitude;
+      
+      const data = await api.searchNearbyOsbb(lat, lon, 10000);
+      if (data.results && data.results.length > 0) {
+        setOsbbResults(data.results);
+      } else {
+        setOsbbResults([]);
+        Alert.alert('Пошук по гео', 'Поруч з вами не знайдено активних ОСББ.');
+      }
+    } catch (e: any) {
+      console.error('Nearby search failed:', e);
+      Alert.alert('Помилка', 'Не вдалося визначити місцезнаходження.');
+    } finally {
+      setLocLoading(false);
+    }
+  };
+
+  const selectOsbb = (osbb: any) => {
+    setSelectedOsbb(osbb);
+    setOsbbQuery('');
+    setOsbbResults([]);
+  };
+
+  const handleResidentLogin = async () => {
+    if (!selectedOsbb) {
+      Alert.alert('Помилка', 'Будь ласка, знайдіть та виберіть ваше ОСББ/організацію.');
+      return;
+    }
+    if (!resAccountNumber.trim() || !resPassword.trim()) {
+      Alert.alert('Помилка', 'Будь ласка, введіть особовий рахунок та пароль.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await residentLogin(selectedOsbb.slug, resAccountNumber.trim(), resPassword.trim());
+      if (response.status === 'pending') {
+        setPendingMemberId(response.member_id);
+        setPendingOsbbPhone(response.phone || '');
+        setPendingOsbbSlug(selectedOsbb.slug);
+        setIsPendingVerification(true);
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Помилка входу', e.message || 'Помилка авторизації.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResidentRegister = async () => {
+    if (!selectedOsbb) {
+      Alert.alert('Помилка', 'Будь ласка, знайдіть та виберіть ваше ОСББ/організацію.');
+      return;
+    }
+    if (!resAccountNumber.trim() || !resPassword.trim() || !resFullName.trim() || !resPhone.trim() || !resEmail.trim()) {
+      Alert.alert('Помилка', 'Будь ласка, заповніть обов\'язкові поля для первинної реєстрації мешканця.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        slug: selectedOsbb.slug,
+        account_number: resAccountNumber.trim(),
+        password: resPassword.trim(),
+        full_name: resFullName.trim(),
+        phone: resPhone.trim(),
+        email: resEmail.trim().toLowerCase(),
+      };
+      
+      const response = await residentRegister(payload);
+      if (response.status === 'pending') {
+        setPendingMemberId(response.member_id);
+        setPendingOsbbPhone(response.phone || '');
+        setPendingOsbbSlug(selectedOsbb.slug);
+        setIsPendingVerification(true);
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Помилка реєстрації', e.message || 'Не вдалося надіслати заявку на реєстрацію мешканця.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelPending = () => {
+    setIsPendingVerification(false);
+    setPendingMemberId(null);
+    setPendingOsbbPhone('');
+    setPendingOsbbSlug('');
   };
 
   const handleGuestLogin = async () => {
@@ -267,6 +516,55 @@ export default function LoginScreen() {
     setSuccessModalVisible(false);
   };
 
+  // Render Verification Screen (Pending Screen)
+  if (isPendingVerification) {
+    return (
+      <View style={[styles.pendingContainer, { backgroundColor: '#0B0C10' }]}>
+        <View style={styles.pendingCard}>
+          
+          {/* Animated Secure Pulse Indicator */}
+          <View style={styles.pulseContainer}>
+            <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }], borderColor: colors.primary + '40' }]} />
+            <Animated.View style={[styles.pulseInnerCircle, { transform: [{ scale: pulseAnim }], backgroundColor: colors.primaryMuted }]} />
+            <View style={[styles.pulseIconBg, { backgroundColor: colors.primary }]}>
+              <ShieldCheck size={38} color="#ffffff" />
+            </View>
+          </View>
+
+          <Text style={[styles.pendingTitle, { color: '#ffffff' }]}>Заявку надіслано</Text>
+          
+          <Text style={[styles.pendingDesc, { color: colors.textMuted }]}>
+            Дякуємо за реєстрацію! Для захисту фінансових та персональних даних вашої організації, ми наразі проводимо верифікацію особового рахунку. Адміністратор підтвердить ваш профіль найближчим часом. Ви отримаєте push-сповіщення.
+          </Text>
+
+          {/* SOS Help Buttons */}
+          <View style={styles.pendingActions}>
+            <Button
+              title="Зв'язатися з підтримкою (Telegram)"
+              onPress={handleOpenBot}
+              style={styles.sosButton}
+            />
+
+            {pendingOsbbPhone ? (
+              <Button
+                title={`Зателефонувати в ОСББ`}
+                onPress={() => Linking.openURL(`tel:${pendingOsbbPhone}`)}
+                variant="outline"
+                style={styles.sosPhoneButton}
+              />
+            ) : null}
+
+            <Pressable style={styles.pendingLogoutBtn} onPress={handleCancelPending}>
+              <Text style={[styles.pendingLogoutText, { color: colors.primary }]}>
+                Увійти в інший профіль
+              </Text>
+            </Pressable>
+          </View>
+
+        </View>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -275,375 +573,511 @@ export default function LoginScreen() {
     >
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <View style={[styles.iconContainer, { backgroundColor: colors.primaryMuted }]}>
-            <Coins size={44} color={colors.primary} />
-          </View>
-          <Text style={[styles.title, { color: colors.text }]}>UniTax</Text>
-          <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-            Ваш універсальний податковий AI-асистент
-          </Text>
-        </View>
-
-        {!isRegister ? (
-          /* Login View */
-          <Card style={styles.card}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Вхід у систему</Text>
-
-            {/* Login Mode Switcher */}
-            <View style={styles.segmentedContainer}>
-              <Pressable
-                style={[styles.segment, loginMode === 'email' && { backgroundColor: colors.primary }]}
-                onPress={() => setLoginMode('email')}
-              >
-                <Text style={[styles.segmentText, loginMode === 'email' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Email / Пароль
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.segment, loginMode === 'telegram' && { backgroundColor: colors.primary }]}
-                onPress={() => setLoginMode('telegram')}
-              >
-                <Text style={[styles.segmentText, loginMode === 'telegram' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Telegram ID
-                </Text>
-              </Pressable>
+          <View style={styles.header}>
+            <View style={[styles.iconContainer, { backgroundColor: colors.primaryMuted }]}>
+              <Coins size={44} color={colors.primary} />
             </View>
-
-            {loginMode === 'email' ? (
-              <>
-                <Text style={[styles.cardDesc, { color: colors.textMuted }]}>
-                  Введіть ваш Email та пароль для авторизації в UniTax.
-                </Text>
-
-                <Input
-                  label="Електронна пошта"
-                  placeholder="user@example.com"
-                  value={emailInput}
-                  onChangeText={setEmailInput}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-
-                <Input
-                  label="Пароль"
-                  placeholder="••••••••"
-                  value={passwordInput}
-                  onChangeText={setPasswordInput}
-                  secureTextEntry
-                  autoCapitalize="none"
-                />
-
-                <Pressable
-                  onPress={handleRequestTempPassword}
-                  style={{ marginTop: 2, marginBottom: 12, alignSelf: 'flex-end' }}
-                >
-                  <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' }}>
-                    Увійти за допомогою коду Telegram
-                  </Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.cardDesc, { color: colors.textMuted }]}>
-                  Введіть ваш Telegram ID. Код підтвердження буде надіслано в чат з ботом.
-                </Text>
-
-                <Input
-                  label="Telegram ID"
-                  placeholder="Наприклад: 123456789"
-                  value={telegramInput}
-                  onChangeText={setTelegramInput}
-                  keyboardType="number-pad"
-                />
-                
-                <Pressable onPress={handleOpenBot} style={{ marginBottom: 16 }}>
-                  <Text style={{ fontSize: 13, color: colors.primary, textDecorationLine: 'underline' }}>
-                    Як дізнатися мій ID? Відкрити бота
-                  </Text>
-                </Pressable>
-              </>
-            )}
-
-            {isBiometricSupported && loginMode === 'email' && (
-              <View style={styles.switchRow}>
-                <View style={styles.switchLabelContainer}>
-                  <Fingerprint size={20} color={colors.textMuted} style={styles.bioIcon} />
-                  <Text style={[styles.switchLabel, { color: colors.text }]}>
-                    Вхід за FaceID / TouchID
-                  </Text>
-                </View>
-                <Switch
-                  value={useBioPref}
-                  onValueChange={(val) => {
-                    setUseBioPref(val);
-                    setBiometricPreference(val);
-                  }}
-                  trackColor={{ false: '#767577', true: colors.primary }}
-                  thumbColor={useBioPref ? '#ffffff' : '#f4f3f4'}
-                />
-              </View>
-            )}
-
-            <Button
-              title="Увійти"
-              onPress={loginMode === 'email' ? handleLogin : handleTelegramLogin}
-              isLoading={loading}
-              style={styles.actionBtn}
-            />
-
-            {isBiometricSupported && isBiometricEnabled && loginMode === 'email' && (
-              <Button
-                title="Швидкий вхід з біометрією"
-                onPress={handleBiometrics}
-                variant="outline"
-                style={styles.secondaryBtn}
-              />
-            )}
-
-            <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
-              <Text style={[styles.toggleModeText, { color: colors.primary }]}>
-                Немає акаунта? Зареєструватися
-              </Text>
-            </Pressable>
-          </Card>
-        ) : (
-          /* Registration View */
-          <Card style={styles.card}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Реєстрація</Text>
-            <Text style={[styles.cardDesc, { color: colors.textMuted }]}>
-              Створіть свій податковий акаунт та перший бізнес-профіль.
+            <Text style={[styles.title, { color: colors.text }]}>UniTax</Text>
+            <Text style={[styles.subtitle, { color: colors.textMuted }]}>
+              Універсальна екосистема фінансового обліку
             </Text>
+          </View>
 
-            <Input
-              label="Електронна пошта (Email)"
-              placeholder="user@example.com"
-              value={emailInput}
-              onChangeText={setEmailInput}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-
-            <Input
-              label="Пароль"
-              placeholder="Мінімум 6 символів"
-              value={passwordInput}
-              onChangeText={setPasswordInput}
-              secureTextEntry
-              autoCapitalize="none"
-            />
-
-            <Input
-              label="Номер телефону (опціонально)"
-              placeholder="+380..."
-              value={phoneInput}
-              onChangeText={setPhoneInput}
-              keyboardType="phone-pad"
-            />
-
-            <Input
-              label="Назва компанії або ПІБ ФОП"
-              placeholder="Наприклад: ФОП Петренко Іван"
-              value={regName}
-              onChangeText={setRegName}
-            />
-
-            <Input
-              label="Код ЄДРПОУ / ІПН"
-              placeholder="8 або 10 цифр"
-              value={regTaxId}
-              onChangeText={setRegTaxId}
-              keyboardType="number-pad"
-              maxLength={10}
-            />
-
-            <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Тип суб'єкта</Text>
-            <View style={styles.segmentedContainer}>
+          {/* Main Card */}
+          <Card style={styles.card}>
+            {/* Global User Role Selector */}
+            <View style={styles.roleSegmentedContainer}>
               <Pressable
-                style={[styles.segment, regType === 'fop' && { backgroundColor: colors.primary }]}
+                style={[styles.roleSegment, userRole === 'business' && { backgroundColor: colors.primary }]}
                 onPress={() => {
-                  setRegType('fop');
-                  if (regTaxSystem === 'non_profit') {
-                    setRegTaxSystem('single_tax');
-                  }
+                  setUserRole('business');
+                  setIsRegister(false);
                 }}
               >
-                <Text style={[styles.segmentText, regType === 'fop' && { color: '#ffffff' }, { color: colors.text }]}>
-                  ФОП
+                <Text style={[styles.roleSegmentText, userRole === 'business' && { color: '#ffffff' }, { color: colors.text }]}>
+                  Кабінет підприємства
                 </Text>
               </Pressable>
               <Pressable
-                style={[styles.segment, regType === 'company' && { backgroundColor: colors.primary }]}
-                onPress={() => setRegType('company')}
+                style={[styles.roleSegment, userRole === 'resident' && { backgroundColor: colors.primary }]}
+                onPress={() => {
+                  setUserRole('resident');
+                  setIsRegister(false);
+                }}
               >
-                <Text style={[styles.segmentText, regType === 'company' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Юридична особа
+                <Text style={[styles.roleSegmentText, userRole === 'resident' && { color: '#ffffff' }, { color: colors.text }]}>
+                  Кабінет мешканця
                 </Text>
               </Pressable>
             </View>
 
-            {regType === 'company' && (
-              <View style={styles.switchRow}>
-                <Text style={[styles.switchLabel, { color: colors.text }]}>Я директор (підписант)</Text>
-                <Switch
-                  value={regIsDirector}
-                  onValueChange={setRegIsDirector}
-                  trackColor={{ false: '#767577', true: colors.primary }}
-                  thumbColor={regIsDirector ? '#ffffff' : '#f4f3f4'}
-                />
-              </View>
-            )}
-
-            <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Система оподаткування</Text>
-            <View style={styles.segmentedContainer}>
-              <Pressable
-                style={[styles.segment, regTaxSystem === 'single_tax' && { backgroundColor: colors.primary }]}
-                onPress={() => setRegTaxSystem('single_tax')}
-              >
-                <Text style={[styles.segmentText, regTaxSystem === 'single_tax' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Єдиний
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.segment, regTaxSystem === 'general_tax' && { backgroundColor: colors.primary }]}
-                onPress={() => setRegTaxSystem('general_tax')}
-              >
-                <Text style={[styles.segmentText, regTaxSystem === 'general_tax' && { color: '#ffffff' }, { color: colors.text }]}>
-                  Загальна
-                </Text>
-              </Pressable>
-              {regType === 'company' && (
-                <Pressable
-                  style={[styles.segment, regTaxSystem === 'non_profit' && { backgroundColor: colors.primary }]}
-                  onPress={() => setRegTaxSystem('non_profit')}
-                >
-                  <Text style={[styles.segmentText, regTaxSystem === 'non_profit' && { color: '#ffffff' }, { color: colors.text }]}>
-                    Неприбуткова
-                  </Text>
-                </Pressable>
-              )}
-            </View>
-
-            {regType === 'fop' && regTaxSystem === 'single_tax' && (
+            {userRole === 'business' ? (
+              /* --- Business Login Flow --- */
               <>
-                <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Група єдиного податку</Text>
-                <View style={styles.segmentedContainer}>
-                  {[1, 2, 3].map((g) => (
-                    <Pressable
-                      key={g}
-                      style={[styles.segment, regGroup === g && { backgroundColor: colors.primary }]}
-                      onPress={() => {
-                        setRegGroup(g);
-                        if (g === 1 || g === 2) setRegRate(0);
-                        if (g === 3) setRegRate(5);
-                      }}
-                    >
-                      <Text style={[styles.segmentText, regGroup === g && { color: '#ffffff' }, { color: colors.text }]}>
-                        Група {g}
+                <Text style={[styles.cardTitle, { color: colors.text }]}>
+                  {isRegister ? 'Реєстрація бізнесу' : 'Вхід у систему'}
+                </Text>
+
+                {!isRegister ? (
+                  <>
+                    <View style={styles.segmentedContainer}>
+                      <Pressable
+                        style={[styles.segment, loginMode === 'email' && { backgroundColor: colors.primary }]}
+                        onPress={() => setLoginMode('email')}
+                      >
+                        <Text style={[styles.segmentText, loginMode === 'email' && { color: '#ffffff' }, { color: colors.text }]}>
+                          Email / Пароль
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.segment, loginMode === 'telegram' && { backgroundColor: colors.primary }]}
+                        onPress={() => setLoginMode('telegram')}
+                      >
+                        <Text style={[styles.segmentText, loginMode === 'telegram' && { color: '#ffffff' }, { color: colors.text }]}>
+                          Telegram ID
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {loginMode === 'email' ? (
+                      <>
+                        <Input
+                          label="Електронна пошта"
+                          placeholder="user@example.com"
+                          value={emailInput}
+                          onChangeText={setEmailInput}
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                        />
+                        <Input
+                          label="Пароль"
+                          placeholder="••••••••"
+                          value={passwordInput}
+                          onChangeText={setPasswordInput}
+                          secureTextEntry
+                          autoCapitalize="none"
+                        />
+                        <Pressable
+                          onPress={handleRequestTempPassword}
+                          style={{ marginTop: 2, marginBottom: 12, alignSelf: 'flex-end' }}
+                        >
+                          <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' }}>
+                            Увійти за допомогою коду Telegram
+                          </Text>
+                        </Pressable>
+                      </>
+                    ) : (
+                      <>
+                        <Input
+                          label="Telegram ID"
+                          placeholder="Наприклад: 123456789"
+                          value={telegramInput}
+                          onChangeText={setTelegramInput}
+                          keyboardType="number-pad"
+                        />
+                        <Pressable onPress={handleOpenBot} style={{ marginBottom: 16 }}>
+                          <Text style={{ fontSize: 13, color: colors.primary, textDecorationLine: 'underline' }}>
+                            Як дізнатися мій ID? Відкрити бота
+                          </Text>
+                        </Pressable>
+                      </>
+                    )}
+
+                    {isBiometricSupported && loginMode === 'email' && (
+                      <View style={styles.switchRow}>
+                        <View style={styles.switchLabelContainer}>
+                          <Fingerprint size={20} color={colors.textMuted} style={styles.bioIcon} />
+                          <Text style={[styles.switchLabel, { color: colors.text }]}>
+                            Вхід за FaceID / TouchID
+                          </Text>
+                        </View>
+                        <Switch
+                          value={useBioPref}
+                          onValueChange={(val) => {
+                            setUseBioPref(val);
+                            setBiometricPreference(val);
+                          }}
+                          trackColor={{ false: '#767577', true: colors.primary }}
+                          thumbColor={useBioPref ? '#ffffff' : '#f4f3f4'}
+                        />
+                      </View>
+                    )}
+
+                    <Button
+                      title="Увійти"
+                      onPress={loginMode === 'email' ? handleLogin : handleTelegramLogin}
+                      isLoading={loading}
+                      style={styles.actionBtn}
+                    />
+
+                    {isBiometricSupported && isBiometricEnabled && loginMode === 'email' && (
+                      <Button
+                        title="Швидкий вхід з біометрією"
+                        onPress={handleBiometrics}
+                        variant="outline"
+                        style={styles.secondaryBtn}
+                      />
+                    )}
+
+                    <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
+                      <Text style={[styles.toggleModeText, { color: colors.primary }]}>
+                        Немає акаунта? Зареєструватися
                       </Text>
                     </Pressable>
-                  ))}
-                </View>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      label="Електронна пошта (Email)"
+                      placeholder="user@example.com"
+                      value={emailInput}
+                      onChangeText={setEmailInput}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    <Input
+                      label="Пароль"
+                      placeholder="Мінімум 6 символів"
+                      value={passwordInput}
+                      onChangeText={setPasswordInput}
+                      secureTextEntry
+                      autoCapitalize="none"
+                    />
+                    <Input
+                      label="Номер телефону (опціонально)"
+                      placeholder="+380..."
+                      value={phoneInput}
+                      onChangeText={setPhoneInput}
+                      keyboardType="phone-pad"
+                    />
+                    <Input
+                      label="Назва компанії або ПІБ ФОП"
+                      placeholder="Наприклад: ФОП Петренко Іван"
+                      value={regName}
+                      onChangeText={setRegName}
+                    />
+                    <Input
+                      label="Код ЄДРПОУ / ІПН"
+                      placeholder="8 або 10 цифр"
+                      value={regTaxId}
+                      onChangeText={setRegTaxId}
+                      keyboardType="number-pad"
+                      maxLength={10}
+                    />
+
+                    <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Тип суб'єкта</Text>
+                    <View style={styles.segmentedContainer}>
+                      <Pressable
+                        style={[styles.segment, regType === 'fop' && { backgroundColor: colors.primary }]}
+                        onPress={() => {
+                          setRegType('fop');
+                          if (regTaxSystem === 'non_profit') setRegTaxSystem('single_tax');
+                        }}
+                      >
+                        <Text style={[styles.segmentText, regType === 'fop' && { color: '#ffffff' }, { color: colors.text }]}>ФОП</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.segment, regType === 'company' && { backgroundColor: colors.primary }]}
+                        onPress={() => setRegType('company')}
+                      >
+                        <Text style={[styles.segmentText, regType === 'company' && { color: '#ffffff' }, { color: colors.text }]}>Юр. особа</Text>
+                      </Pressable>
+                    </View>
+
+                    {regType === 'company' && (
+                      <View style={styles.switchRow}>
+                        <Text style={[styles.switchLabel, { color: colors.text }]}>Я директор (підписант)</Text>
+                        <Switch
+                          value={regIsDirector}
+                          onValueChange={setRegIsDirector}
+                          trackColor={{ false: '#767577', true: colors.primary }}
+                          thumbColor={regIsDirector ? '#ffffff' : '#f4f3f4'}
+                        />
+                      </View>
+                    )}
+
+                    <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Система оподаткування</Text>
+                    <View style={styles.segmentedContainer}>
+                      <Pressable
+                        style={[styles.segment, regTaxSystem === 'single_tax' && { backgroundColor: colors.primary }]}
+                        onPress={() => setRegTaxSystem('single_tax')}
+                      >
+                        <Text style={[styles.segmentText, regTaxSystem === 'single_tax' && { color: '#ffffff' }, { color: colors.text }]}>Єдиний</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.segment, regTaxSystem === 'general_tax' && { backgroundColor: colors.primary }]}
+                        onPress={() => setRegTaxSystem('general_tax')}
+                      >
+                        <Text style={[styles.segmentText, regTaxSystem === 'general_tax' && { color: '#ffffff' }, { color: colors.text }]}>Загальна</Text>
+                      </Pressable>
+                      {regType === 'company' && (
+                        <Pressable
+                          style={[styles.segment, regTaxSystem === 'non_profit' && { backgroundColor: colors.primary }]}
+                          onPress={() => setRegTaxSystem('non_profit')}
+                        >
+                          <Text style={[styles.segmentText, regTaxSystem === 'non_profit' && { color: '#ffffff' }, { color: colors.text }]}>Неприбуткова</Text>
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {regType === 'fop' && regTaxSystem === 'single_tax' && (
+                      <>
+                        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Група єдиного податку</Text>
+                        <View style={styles.segmentedContainer}>
+                          {[1, 2, 3].map((g) => (
+                            <Pressable
+                              key={g}
+                              style={[styles.segment, regGroup === g && { backgroundColor: colors.primary }]}
+                              onPress={() => {
+                                setRegGroup(g);
+                                if (g === 1 || g === 2) setRegRate(0);
+                                if (g === 3) setRegRate(5);
+                              }}
+                            >
+                              <Text style={[styles.segmentText, regGroup === g && { color: '#ffffff' }, { color: colors.text }]}>Група {g}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </>
+                    )}
+
+                    <View style={styles.switchRow}>
+                      <Text style={[styles.switchLabel, { color: colors.text }]}>Наймані працівники</Text>
+                      <Switch
+                        value={regHasEmployees}
+                        onValueChange={setRegHasEmployees}
+                        trackColor={{ false: '#767577', true: colors.primary }}
+                        thumbColor={regHasEmployees ? '#ffffff' : '#f4f3f4'}
+                      />
+                    </View>
+
+                    <View style={styles.switchRow}>
+                      <Text style={[styles.switchLabel, { color: colors.text }]}>Платник ПДВ</Text>
+                      <Switch
+                        value={regIsVatPayer}
+                        onValueChange={setRegIsVatPayer}
+                        trackColor={{ false: '#767577', true: colors.primary }}
+                        thumbColor={regIsVatPayer ? '#ffffff' : '#f4f3f4'}
+                      />
+                    </View>
+
+                    <View style={styles.termsRow}>
+                      <Pressable
+                        onPress={() => setAgreeToTerms(!agreeToTerms)}
+                        style={[
+                          styles.checkbox,
+                          { borderColor: colors.textMuted },
+                          agreeToTerms && { backgroundColor: colors.primary, borderColor: colors.primary }
+                        ]}
+                      >
+                        {agreeToTerms && <Text style={styles.checkboxCheck}>✓</Text>}
+                      </Pressable>
+                      <View style={styles.termsTextContainer}>
+                        <Text style={[styles.termsText, { color: colors.textMuted }]}>
+                          Я погоджуюся з{' '}
+                          <Text style={[styles.linkText, { color: colors.primary }]} onPress={() => Linking.openURL('https://unitax.pro/terms')}>
+                            Публічною офертою
+                          </Text>{' '}
+                          та{' '}
+                          <Text style={[styles.linkText, { color: colors.primary }]} onPress={() => Linking.openURL('https://unitax.pro/privacy')}>
+                            Політикою конфіденційності
+                          </Text>
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Button
+                      title="Зареєструватися"
+                      onPress={handleRegister}
+                      isLoading={loading}
+                      style={styles.actionBtn}
+                    />
+
+                    <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(false)}>
+                      <Text style={[styles.toggleModeText, { color: colors.primary }]}>
+                        Вже є акаунт? Увійти
+                      </Text>
+                    </Pressable>
+                  </>
+                )}
+              </>
+            ) : (
+              /* --- Resident Login Flow --- */
+              <>
+                <Text style={[styles.cardTitle, { color: colors.text }]}>
+                  {isRegister ? 'Реєстрація мешканця' : 'Кабінет мешканця'}
+                </Text>
+
+                {/* Autocomplete OSBB Search Section */}
+                {!selectedOsbb ? (
+                  <View style={styles.searchSection}>
+                    <Text style={[styles.cardDesc, { color: colors.textMuted }]}>
+                      Знайдіть вашу житлову або садівничу організацію (ОСББ/СТ) за назвою або кодом ЄДРПОУ.
+                    </Text>
+                    
+                    <View style={styles.searchInputContainer}>
+                      <Search size={18} color={colors.textMuted} style={styles.searchIcon} />
+                      <Input
+                        placeholder="Введіть назву або ЄДРПОУ..."
+                        value={osbbQuery}
+                        onChangeText={handleSearchOsbb}
+                        style={styles.searchInput}
+                      />
+                    </View>
+
+                    <Pressable
+                      style={[styles.nearbyBtn, { borderColor: colors.primary }]}
+                      onPress={handleSearchNearby}
+                      disabled={locLoading}
+                    >
+                      {locLoading ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Text style={[styles.nearbyBtnText, { color: colors.primary }]}>
+                          📍 Знайти найближчі ОСББ
+                        </Text>
+                      )}
+                    </Pressable>
+
+                    {osbbResults.length > 0 && (
+                      <View style={[styles.searchResultsList, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }]}>
+                        {osbbResults.map((osbb) => (
+                          <Pressable 
+                            key={osbb.id} 
+                            style={styles.searchResultItem}
+                            onPress={() => selectOsbb(osbb)}
+                          >
+                            <Building2 size={16} color={colors.primary} style={styles.resultItemIcon} />
+                            <View style={styles.resultTextContainer}>
+                              <Text style={[styles.resultItemName, { color: colors.text }]}>{osbb.name}</Text>
+                              <Text style={[styles.resultItemAddress, { color: colors.textMuted }]}>{osbb.address || 'Немає адреси'}</Text>
+                            </View>
+                            <ChevronRight size={16} color={colors.textMuted} />
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                ) : (
+                  <View style={[styles.selectedOsbbContainer, { backgroundColor: colors.primaryMuted, borderColor: colors.primary + '30' }]}>
+                    <Building2 size={20} color={colors.primary} />
+                    <View style={styles.selectedOsbbText}>
+                      <Text style={[styles.selectedOsbbName, { color: colors.text }]}>{selectedOsbb.name}</Text>
+                      <Text style={[styles.selectedOsbbSub, { color: colors.textMuted }]}>{selectedOsbb.address}</Text>
+                    </View>
+                    <Pressable onPress={() => setSelectedOsbb(null)} style={styles.clearSelectedOsbb}>
+                      <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Змінити</Text>
+                    </Pressable>
+                  </View>
+                )}
+
+                {selectedOsbb && (
+                  <>
+                    {!isRegister ? (
+                      /* Resident Login Form */
+                      <>
+                        <Input
+                          label="Особовий рахунок / № квартири"
+                          placeholder="Наприклад: ZK-128 або 128"
+                          value={resAccountNumber}
+                          onChangeText={setResAccountNumber}
+                          autoCapitalize="characters"
+                        />
+                        <Input
+                          label="Пароль"
+                          placeholder="••••••••"
+                          value={resPassword}
+                          onChangeText={setResPassword}
+                          secureTextEntry
+                          autoCapitalize="none"
+                        />
+                        
+                        <Button
+                          title="Увійти як мешканець"
+                          onPress={handleResidentLogin}
+                          isLoading={loading}
+                          style={styles.actionBtn}
+                        />
+
+                        <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
+                          <Text style={[styles.toggleModeText, { color: colors.primary }]}>
+                            Перша реєстрація у будинку
+                          </Text>
+                        </Pressable>
+                      </>
+                    ) : (
+                      /* Resident Registration Form */
+                      <>
+                        <Input
+                          label="Особовий рахунок / № квартири"
+                          placeholder="Вкажіть ваш рахунок (наприклад, ZK-128 або 128)"
+                          value={resAccountNumber}
+                          onChangeText={setResAccountNumber}
+                          autoCapitalize="characters"
+                        />
+                        <Input
+                          label="Повне ім'я (ПІБ)"
+                          placeholder="Іванов Іван Іванович"
+                          value={resFullName}
+                          onChangeText={setResFullName}
+                        />
+                        <Input
+                          label="Номер телефону"
+                          placeholder="+380991234567"
+                          value={resPhone}
+                          onChangeText={setResPhone}
+                          keyboardType="phone-pad"
+                        />
+                        <Input
+                          label="Email"
+                          placeholder="user@example.com"
+                          value={resEmail}
+                          onChangeText={setResEmail}
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                        />
+                        <Input
+                          label="Пароль"
+                          placeholder="Мінімум 6 символів"
+                          value={resPassword}
+                          onChangeText={setResPassword}
+                          secureTextEntry
+                          autoCapitalize="none"
+                        />
+
+                        <Button
+                          title="Зареєструвати особовий рахунок"
+                          onPress={handleResidentRegister}
+                          isLoading={loading}
+                          style={styles.actionBtn}
+                        />
+
+                        <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(false)}>
+                          <Text style={[styles.toggleModeText, { color: colors.primary }]}>
+                            Вже зареєстровані? Увійти
+                          </Text>
+                        </Pressable>
+                      </>
+                    )}
+                  </>
+                )}
               </>
             )}
-
-            <View style={styles.switchRow}>
-              <Text style={[styles.switchLabel, { color: colors.text }]}>Наймані працівники</Text>
-              <Switch
-                value={regHasEmployees}
-                onValueChange={setRegHasEmployees}
-                trackColor={{ false: '#767577', true: colors.primary }}
-                thumbColor={regHasEmployees ? '#ffffff' : '#f4f3f4'}
-              />
-            </View>
-
-            <View style={styles.switchRow}>
-              <Text style={[styles.switchLabel, { color: colors.text }]}>Платник ПДВ</Text>
-              <Switch
-                value={regIsVatPayer}
-                onValueChange={setRegIsVatPayer}
-                trackColor={{ false: '#767577', true: colors.primary }}
-                thumbColor={regIsVatPayer ? '#ffffff' : '#f4f3f4'}
-              />
-            </View>
-
-            {isBiometricSupported && (
-              <View style={styles.switchRow}>
-                <View style={styles.switchLabelContainer}>
-                  <Fingerprint size={20} color={colors.textMuted} style={styles.bioIcon} />
-                  <Text style={[styles.switchLabel, { color: colors.text }]}>
-                    Вхід за FaceID / TouchID
-                  </Text>
-                </View>
-                <Switch
-                  value={useBioPref}
-                  onValueChange={setUseBioPref}
-                  trackColor={{ false: '#767577', true: colors.primary }}
-                  thumbColor={useBioPref ? '#ffffff' : '#f4f3f4'}
-                />
-              </View>
-            )}
-
-            {/* Agreement with Terms & Public Offer */}
-            <View style={styles.termsRow}>
-              <Pressable
-                onPress={() => setAgreeToTerms(!agreeToTerms)}
-                style={[
-                  styles.checkbox,
-                  { borderColor: colors.textMuted },
-                  agreeToTerms && { backgroundColor: colors.primary, borderColor: colors.primary }
-                ]}
-              >
-                {agreeToTerms && <Text style={styles.checkboxCheck}>✓</Text>}
-              </Pressable>
-              <View style={styles.termsTextContainer}>
-                <Text style={[styles.termsText, { color: colors.textMuted }]}>
-                  Я погоджуюся з{' '}
-                  <Text
-                    style={[styles.linkText, { color: colors.primary }]}
-                    onPress={() => Linking.openURL('https://unitax.pro/terms')}
-                  >
-                    Публічною офертою (договором про надання послуг)
-                  </Text>{' '}
-                  та{' '}
-                  <Text
-                    style={[styles.linkText, { color: colors.primary }]}
-                    onPress={() => Linking.openURL('https://unitax.pro/privacy')}
-                  >
-                    Політикою конфіденційності
-                  </Text>
-                </Text>
-              </View>
-            </View>
-
-            <Button
-              title="Зареєструватися"
-              onPress={handleRegister}
-              isLoading={loading}
-              style={styles.actionBtn}
-            />
-
-            <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(false)}>
-              <Text style={[styles.toggleModeText, { color: colors.primary }]}>
-                Вже є акаунт? Увійти
-              </Text>
-            </Pressable>
           </Card>
-        )}
 
-        <Card style={[styles.infoCard, { borderColor: colors.primaryMuted }]}>
-          <MessageSquare size={20} color={colors.primary} style={styles.infoIcon} />
-          <View style={styles.infoTextContainer}>
-            <Text style={[styles.infoTitle, { color: colors.text }]}>Потрібна допомога?</Text>
-            <Text style={[styles.infoText, { color: colors.textMuted }]}>
-              UniTax дозволяє авторизуватись за допомогою Email та пароля. Для вашої безпеки ви можете налаштувати 2FA вхід через Telegram у налаштуваннях профілю після входу.
-            </Text>
-          </View>
-        </Card>
-      </ScrollView>
+          <Card style={[styles.infoCard, { borderColor: colors.primaryMuted }]}>
+            <MessageSquare size={20} color={colors.primary} style={styles.infoIcon} />
+            <View style={styles.infoTextContainer}>
+              <Text style={[styles.infoTitle, { color: colors.text }]}>Потрібна допомога?</Text>
+              <Text style={[styles.infoText, { color: colors.textMuted }]}>
+                UniTax дозволяє швидко управляти підприємствами та вести облік внесків ОСББ. Мешканці можуть передавати показання та сплачувати рахунки безпосередньо голові правління через Mono Pay.
+              </Text>
+            </View>
+          </Card>
+        </ScrollView>
       </TouchableWithoutFeedback>
 
-      {/* Success Registration / Telegram Bot Linking Modal */}
+      {/* Success Registration Modal */}
       <Modal
         animationType="fade"
         transparent={true}
@@ -761,12 +1195,29 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 20,
     fontWeight: '700',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   cardDesc: {
     fontSize: 14,
-    marginBottom: 20,
+    marginBottom: 16,
     lineHeight: 20,
+  },
+  roleSegmentedContainer: {
+    flexDirection: 'row',
+    borderRadius: 10,
+    backgroundColor: 'rgba(120, 120, 128, 0.1)',
+    padding: 4,
+    marginBottom: 20,
+  },
+  roleSegment: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  roleSegmentText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   switchRow: {
     flexDirection: 'row',
@@ -836,9 +1287,9 @@ const styles = StyleSheet.create({
   segmentedContainer: {
     flexDirection: 'row',
     borderRadius: 8,
-    backgroundColor: 'rgba(120, 120, 128, 0.1)',
+    backgroundColor: 'rgba(120, 120, 128, 0.08)',
     padding: 2,
-    marginBottom: 8,
+    marginBottom: 16,
   },
   segment: {
     flex: 1,
@@ -918,6 +1369,188 @@ const styles = StyleSheet.create({
   },
   linkText: {
     textDecorationLine: 'underline',
+    fontWeight: '600',
+  },
+
+  // Resident autocomplete styles
+  searchSection: {
+    marginVertical: 8,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    borderColor: 'rgba(120, 120, 128, 0.2)',
+    paddingHorizontal: 12,
+    height: 48,
+    marginBottom: 8,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: '100%',
+    borderWidth: 0,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  searchResultsList: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(120, 120, 128, 0.1)',
+    overflow: 'hidden',
+    marginTop: 4,
+    maxHeight: 200,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(120, 120, 128, 0.08)',
+  },
+  resultItemIcon: {
+    marginRight: 10,
+  },
+  resultTextContainer: {
+    flex: 1,
+  },
+  resultItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  resultItemAddress: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  selectedOsbbContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginVertical: 12,
+  },
+  selectedOsbbText: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 10,
+  },
+  selectedOsbbName: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  selectedOsbbSub: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  clearSelectedOsbb: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+
+  // Pending approval screen styles
+  pendingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  pendingCard: {
+    width: '100%',
+    maxWidth: 400,
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(23, 29, 43, 0.75)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  pulseContainer: {
+    width: 100,
+    height: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  pulseCircle: {
+    position: 'absolute',
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    borderWidth: 2,
+  },
+  pulseInnerCircle: {
+    position: 'absolute',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+  },
+  pulseIconBg: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  pendingTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  pendingDesc: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 24,
+    paddingHorizontal: 8,
+  },
+  pendingActions: {
+    width: '100%',
+    gap: 12,
+  },
+  sosButton: {
+    width: '100%',
+  },
+  sosPhoneButton: {
+    width: '100%',
+  },
+  pendingLogoutBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  pendingLogoutText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  nearbyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 12,
+    marginBottom: 8,
+    gap: 6,
+  },
+  nearbyBtnText: {
+    fontSize: 14,
     fontWeight: '600',
   },
 });

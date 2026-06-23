@@ -87,11 +87,17 @@ interface Meter {
   last_reading_date?: string | null;
 }
 
+import ResidentTickets from '../../components/resident/ResidentTickets';
+
 export default function BillingScreen() {
   const { colors } = useTheme();
-  const { telegramId } = useAuth();
+  const { telegramId, isResident } = useAuth();
   const { height: windowHeight } = useWindowDimensions();
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  if (isResident) {
+    return <ResidentTickets />;
+  }
 
   useEffect(() => {
     const showSub = Keyboard.addListener(

@@ -5,7 +5,7 @@ import uuid
 import math
 from datetime import datetime, date, timedelta
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Header, Query
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, RedirectResponse
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, desc, UniqueConstraint, LargeBinary, or_
@@ -55,6 +55,34 @@ try:
 except Exception as e:
     logger.warning(f"Redis connection failed, caching will be disabled: {e}")
     redis_client = None
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[int, list[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, member_id: int):
+        await websocket.accept()
+        if member_id not in self.active_connections:
+            self.active_connections[member_id] = []
+        self.active_connections[member_id].append(websocket)
+        logger.info(f"WebSocket connected for member_id: {member_id}. Active: {len(self.active_connections[member_id])}")
+
+    def disconnect(self, websocket: WebSocket, member_id: int):
+        if member_id in self.active_connections:
+            self.active_connections[member_id].remove(websocket)
+            if not self.active_connections[member_id]:
+                del self.active_connections[member_id]
+            logger.info(f"WebSocket disconnected for member_id: {member_id}")
+
+    async def send_personal_message(self, message: dict, member_id: int):
+        if member_id in self.active_connections:
+            for connection in self.active_connections[member_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception as e:
+                    logger.warning(f"Error sending WebSocket message: {e}")
+
+websocket_manager = ConnectionManager()
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     # R is Earth's radius in kilometers
@@ -428,6 +456,10 @@ class Meter(Base):
     member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="SET NULL"), nullable=True)
     tariff = Column(Float, default=0.0)
     initial_reading = Column(Float, default=0.0)
+    is_smart = Column(Boolean, default=False)
+    smart_device_model = Column(String(100), nullable=True)
+    smart_device_status = Column(String(20), default="offline")
+    last_sync_at = Column(DateTime, nullable=True)
 
 class MeterReading(Base):
     __tablename__ = "meter_readings"
@@ -865,6 +897,86 @@ class ProfileDocument(Base):
     content_type = Column(String, nullable=True)
     file_content = Column(LargeBinary, nullable=True)
     upload_date = Column(Date, default=date.today)
+    is_public_to_residents = Column(Boolean, default=False)
+    document_type = Column(String, default="other") # 'minutes', 'budget', 'report', 'extract', 'other'
+    description = Column(String, nullable=True)
+
+class ResidentNotificationSetting(Base):
+    __tablename__ = "resident_notification_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"), unique=True)
+    email_reminders_enabled = Column(Boolean, default=True)
+    push_reminders_enabled = Column(Boolean, default=True)
+    payment_reminder_days = Column(Integer, default=3)
+    meter_reminder_days = Column(Integer, default=2)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class SecurityDevice(Base):
+    __tablename__ = "security_devices"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    device_type = Column(String, nullable=False) # 'camera', 'door', 'barrier'
+    stream_url = Column(String, nullable=True) # loop video / HLS URL
+    status = Column(String, default="active") # 'active', 'maintenance', 'offline'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class RecreationZone(Base):
+    __tablename__ = "recreation_zones"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    image_url = Column(String, nullable=True)
+    capacity = Column(Integer, default=4)
+    price_per_hour = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class RecreationBooking(Base):
+    __tablename__ = "recreation_bookings"
+    id = Column(Integer, primary_key=True, index=True)
+    zone_id = Column(Integer, ForeignKey("recreation_zones.id", ondelete="CASCADE"))
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"))
+    booking_date = Column(Date, nullable=False)
+    start_time = Column(String(5), nullable=False) # 'HH:MM'
+    end_time = Column(String(5), nullable=False) # 'HH:MM'
+    status = Column(String(20), default="pending") # 'pending', 'approved', 'rejected', 'cancelled'
+    total_price = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ServiceOrder(Base):
+    __tablename__ = "service_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"))
+    service_type = Column(String(50), nullable=False) # 'cleaning', 'plumbing', 'electrical', 'repair', 'other'
+    description = Column(Text, nullable=False)
+    preferred_time = Column(String(100), nullable=True)
+    status = Column(String(20), default="new") # 'new', 'assigned', 'in_progress', 'completed', 'cancelled'
+    price = Column(Float, default=0.0)
+    contractor_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SmartHeatingDevice(Base):
+    __tablename__ = "smart_heating_devices"
+    id = Column(Integer, primary_key=True, index=True)
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"), unique=True)
+    room_name = Column(String(100), default="Вітальня")
+    current_temperature = Column(Float, default=21.5)
+    target_temperature = Column(Float, default=22.0)
+    mode = Column(String(20), default="eco") # 'eco', 'comfort', 'off', 'schedule'
+    status = Column(String(20), default="idle") # 'heating', 'idle', 'offline'
+    last_sync_at = Column(DateTime, default=datetime.utcnow)
+
+class OSBBContact(Base):
+    __tablename__ = "osbb_contacts"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    name = Column(String(100), nullable=False)
+    role = Column(String(100), nullable=False)
+    phone = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class SupportMessage(Base):
     __tablename__ = "support_messages"
@@ -964,7 +1076,21 @@ migrations = [
     "ALTER TABLE employees ADD COLUMN active_months_json TEXT DEFAULT NULL",
     "ALTER TABLE profiles ADD COLUMN organization_subtype TEXT DEFAULT NULL",
     "ALTER TABLE profiles ADD COLUMN non_profit_code TEXT DEFAULT NULL",
-    "ALTER TABLE parsed_payments ADD COLUMN member_id INTEGER DEFAULT NULL"
+    "ALTER TABLE parsed_payments ADD COLUMN member_id INTEGER DEFAULT NULL",
+    "ALTER TABLE profile_documents ADD COLUMN is_public_to_residents BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE profile_documents ADD COLUMN document_type TEXT DEFAULT 'other'",
+    "ALTER TABLE profile_documents ADD COLUMN description TEXT DEFAULT NULL",
+    "ALTER TABLE meters ADD COLUMN is_smart BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE meters ADD COLUMN smart_device_model TEXT DEFAULT NULL",
+    "ALTER TABLE meters ADD COLUMN smart_device_status TEXT DEFAULT 'offline'",
+    "ALTER TABLE meters ADD COLUMN last_sync_at TIMESTAMP DEFAULT NULL",
+    "CREATE TABLE IF NOT EXISTS resident_notification_settings (id INTEGER PRIMARY KEY, member_id INTEGER UNIQUE, email_reminders_enabled BOOLEAN DEFAULT TRUE, push_reminders_enabled BOOLEAN DEFAULT TRUE, payment_reminder_days INTEGER DEFAULT 3, meter_reminder_days INTEGER DEFAULT 2, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS security_devices (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, device_type TEXT NOT NULL, stream_url TEXT, status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS recreation_zones (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, description TEXT, image_url TEXT, capacity INTEGER DEFAULT 4, price_per_hour FLOAT DEFAULT 0.0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS recreation_bookings (id INTEGER PRIMARY KEY, zone_id INTEGER, member_id INTEGER, booking_date DATE NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL, status TEXT DEFAULT 'pending', total_price FLOAT DEFAULT 0.0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(zone_id) REFERENCES recreation_zones(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY, profile_id INTEGER, member_id INTEGER, service_type TEXT NOT NULL, description TEXT NOT NULL, preferred_time TEXT, status TEXT DEFAULT 'new', price FLOAT DEFAULT 0.0, contractor_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS smart_heating_devices (id INTEGER PRIMARY KEY, member_id INTEGER UNIQUE, room_name TEXT DEFAULT 'Вітальня', current_temperature FLOAT DEFAULT 21.5, target_temperature FLOAT DEFAULT 22.0, mode TEXT DEFAULT 'eco', status TEXT DEFAULT 'idle', last_sync_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS osbb_contacts (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, role TEXT NOT NULL, phone TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
 ]
 
 with engine.connect() as conn:
@@ -1976,8 +2102,38 @@ def run_periodic_scheduler():
             deactivate_expired_modules()
         except Exception as e:
             print(f"[SCHEDULER LOOP ERROR DEACTIVATION] {e}")
-        # Run checks every 12 hours (43200 seconds)
-        time.sleep(43200)
+            
+        # Process recurring invoices at 9:00 AM Kiev time
+        try:
+            kiev_now = get_kiev_now()
+            if kiev_now.hour >= 9:
+                today_str = kiev_now.strftime("%Y-%m-%d")
+                db = SessionLocal()
+                try:
+                    cfg = db.query(SystemConfig).filter(SystemConfig.key == "last_processed_recurring_invoices_date").first()
+                    if not cfg:
+                        cfg = SystemConfig(key="last_processed_recurring_invoices_date", value="")
+                        db.add(cfg)
+                        db.commit()
+                        db.refresh(cfg)
+                    
+                    if cfg.value != today_str:
+                        print(f"[SCHEDULER] Starting auto processing of recurring invoices for date: {today_str} (Kyiv time: {kiev_now})")
+                        res = process_recurring_invoices(db)
+                        print(f"[SCHEDULER] Auto processing completed: {res}")
+                        
+                        cfg.value = today_str
+                        db.commit()
+                except Exception as e:
+                    print(f"[SCHEDULER ERROR RECURRING] {e}")
+                    db.rollback()
+                finally:
+                    db.close()
+        except Exception as e:
+            print(f"[SCHEDULER LOOP ERROR RECURRING OUTER] {e}")
+
+        # Run checks every 15 minutes (900 seconds)
+        time.sleep(900)
 
 @app.on_event("startup")
 def on_startup():
@@ -4004,23 +4160,6 @@ def download_report_file(report_id: int, file_format: str, user_id: Optional[int
         import io
         import os
         
-        def get_cyrillic_font():
-            font_paths = [
-                "/System/Library/Fonts/Supplemental/Arial.ttf",
-                "/System/Library/Fonts/Helvetica.dfont",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-            ]
-            for path in font_paths:
-                if os.path.exists(path):
-                    try:
-                        pdfmetrics.registerFont(TTFont("CyrillicFont", path))
-                        return "CyrillicFont"
-                    except Exception:
-                        pass
-            return "Helvetica"
-            
         font_name = get_cyrillic_font()
         
         buffer = io.BytesIO()
@@ -7666,9 +7805,9 @@ def search_osbb(query: str = Query(..., min_length=2), db: Session = Depends(get
     profiles = db.query(Profile).filter(
         Profile.organization_subtype.in_(['osbb', 'st', 'go', 'bf', 'jbk']),
         or_(
-            Profile.name.ilike(f"%{query_clean}%"),
-            Profile.address.ilike(f"%{query_clean}%"),
-            Profile.tax_id.ilike(f"%{query_clean}%")
+            func.lower(Profile.name).like(f"%{query_clean}%"),
+            func.lower(Profile.address).like(f"%{query_clean}%"),
+            func.lower(Profile.tax_id).like(f"%{query_clean}%")
         )
     ).limit(10).all()
     
@@ -7742,6 +7881,27 @@ def get_osbb_by_slug(slug: str, db: Session = Depends(get_db)):
         "organization_subtype": profile.organization_subtype
     }
 
+def save_push_token_internal(db: Session, member_id: int, profile_id: int, token: Optional[str], platform: Optional[str]):
+    if not token:
+        return
+    token_clean = token.strip()
+    if not token_clean:
+        return
+    existing = db.query(ResidentPushToken).filter(ResidentPushToken.token == token_clean).first()
+    if existing:
+        existing.member_id = member_id
+        existing.profile_id = profile_id
+        existing.platform = platform
+        existing.updated_at = datetime.utcnow()
+    else:
+        db.add(ResidentPushToken(
+            member_id=member_id,
+            profile_id=profile_id,
+            token=token_clean,
+            platform=platform
+        ))
+    db.commit()
+
 @app.post("/api/auth/member/register")
 def member_register(
     slug: str = Form(...),
@@ -7750,6 +7910,8 @@ def member_register(
     full_name: str = Form(...),
     phone: str = Form(...),
     email: str = Form(...),
+    push_token: Optional[str] = Form(None),
+    platform: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Register a resident account - sets password, details, and creates pending status"""
@@ -7792,6 +7954,9 @@ def member_register(
     member.account_number = f"{slug.upper()}-{account_number}"  # Generate unique account number
     db.commit()
     
+    if push_token:
+        save_push_token_internal(db, member.id, profile.id, push_token, platform)
+    
     if member.email:
         import threading
         threading.Thread(
@@ -7808,7 +7973,9 @@ def member_register(
     return {
         "status": "pending",
         "message": "Заявку надіслано голові правління. Очікуйте підтвердження.",
-        "account_number": member.account_number
+        "account_number": member.account_number,
+        "member_id": member.id,
+        "phone": profile.phone or ""
     }
 
 @app.post("/api/auth/member/reset-password")
@@ -7845,7 +8012,9 @@ def member_reset_password(
     
     return {
         "status": "pending",
-        "message": "Пароль змінено. Очікуйте на повторне підтвердження головою правління."
+        "message": "Пароль змінено. Очікуйте на повторне підтвердження головою правління.",
+        "member_id": member.id,
+        "phone": profile.phone or ""
     }
 
 @app.post("/api/auth/member/login")
@@ -7853,6 +8022,8 @@ def member_login(
     slug: str = Form(...),
     account_number: str = Form(...),
     password: str = Form(...),
+    push_token: Optional[str] = Form(None),
+    platform: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Login for resident - validates slug, account_number, and password"""
@@ -7886,11 +8057,17 @@ def member_login(
     if member.password_hash != hashed:
         raise HTTPException(status_code=401, detail="Невірний пароль")
     
+    if push_token:
+        save_push_token_internal(db, member.id, profile.id, push_token, platform)
+    
     # Check status
-    if member.status == "pending":
+    if member.status == "pending" or member.status == "pending_approval":
         return {
             "status": "pending",
-            "message": "Заявку надіслано голові правління. Очікуйте підтвердження."
+            "message": "Заявку надіслано голові правління. Очікуйте підтвердження.",
+            "member_id": member.id,
+            "slug": profile.slug,
+            "phone": profile.phone or ""
         }
     elif member.status == "blocked":
         raise HTTPException(status_code=403, detail="Акаунт заблоковано. Зверніться до голови правління.")
@@ -7968,6 +8145,42 @@ def verify_member_token(
         raise HTTPException(status_code=403, detail="Member account is not approved")
     return {"member": member, "profile_id": profile_id, "member_id": payload.get("member_id")}
 
+def send_expo_push_notification(tokens: List[str], title: str, body: str, data: Optional[dict] = None):
+    import urllib.request
+    import json
+    
+    url = "https://exp.host/--/api/v2/push/send"
+    payload = []
+    for token in tokens:
+        if token.startswith("ExponentPushToken") or token.startswith("ExpoPushToken") or token.startswith("token:"):
+            # Clean token format if needed
+            to_val = token
+            if token.startswith("token:"):
+                to_val = token.replace("token:", "", 1)
+            payload.append({
+                "to": to_val,
+                "title": title,
+                "body": body,
+                "sound": "default",
+                "data": data or {}
+            })
+            
+    if not payload:
+        return
+        
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res_body = response.read().decode("utf-8")
+            logger.info(f"Expo push notification response: {res_body}")
+    except Exception as e:
+        logger.error(f"Failed to send Expo push notification: {e}")
+
 def notify_resident(db: Session, member: UnitOrMember, subject: str, body: str):
     if member.email:
         try:
@@ -7981,7 +8194,17 @@ def notify_resident(db: Session, member: UnitOrMember, subject: str, body: str):
             logger.error(f"Failed to queue resident email notification: {e}")
     push_tokens = db.query(ResidentPushToken).filter(ResidentPushToken.member_id == member.id).all()
     if push_tokens:
-        logger.info(f"Push notification queued for member={member.id}, tokens={len(push_tokens)}, subject={subject}")
+        token_strings = [t.token for t in push_tokens]
+        logger.info(f"Sending push notification for member={member.id}, tokens={len(token_strings)}, subject={subject}")
+        try:
+            import threading
+            threading.Thread(
+                target=send_expo_push_notification,
+                args=(token_strings, subject, body, {"status": member.status}),
+                daemon=True
+            ).start()
+        except Exception as e:
+            logger.error(f"Failed to spawn push notification thread: {e}")
 
 @app.post("/api/member/push-token")
 def save_member_push_token(
@@ -8490,7 +8713,7 @@ def get_members_moderation(profile_id: int, status: Optional[str] = None, user_i
     } for m in members]
 
 @app.post("/api/profiles/{profile_id}/members/{member_id}/moderation")
-def update_member_moderation_status(
+async def update_member_moderation_status(
     profile_id: int,
     member_id: int,
     status: str = Form(...),
@@ -8513,6 +8736,10 @@ def update_member_moderation_status(
         member.verified_at = datetime.utcnow()
         member.verified_by = verified_by
     db.commit()
+    
+    # Notify WebSocket connection
+    await websocket_manager.send_personal_message({"status": status, "message": "Статус оновлено"}, member.id)
+
     if status == "approved":
         notify_resident(
             db,
@@ -8528,6 +8755,49 @@ def update_member_moderation_status(
             f"Ваш доступ до кабінету мешканця {profile.name} заблоковано. Зверніться до голови правління для уточнення."
         )
     return {"status": "success", "member_id": member.id, "member_status": member.status}
+
+@app.put("/api/profiles/{profile_id}/moderation/approve/{member_id}")
+async def approve_member_profile(
+    profile_id: int,
+    member_id: int,
+    verified_by: Optional[int] = Form(None),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == member_id, UnitOrMember.profile_id == profile_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Мешканця не знайдено")
+    
+    member.status = "approved"
+    member.verified_at = datetime.utcnow()
+    member.verified_by = verified_by
+    db.commit()
+    
+    # Notify WebSocket connection
+    await websocket_manager.send_personal_message({"status": "approved", "message": "Схвалено адміністрацією"}, member.id)
+
+    notify_resident(
+        db,
+        member,
+        f"{profile.name}: доступ до кабінету підтверджено",
+        f"Ваш доступ до кабінету мешканця {profile.name} підтверджено. Тепер ви можете увійти та переглядати баланс, лічильники, голосування і заявки."
+    )
+    return {"status": "success", "member_id": member.id, "member_status": member.status}
+
+@app.websocket("/ws/member/{member_id}")
+async def websocket_endpoint(websocket: WebSocket, member_id: int):
+    await websocket_manager.connect(websocket, member_id)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(websocket, member_id)
 
 @app.get("/api/member/dashboard")
 def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
@@ -8583,7 +8853,7 @@ def submit_member_meter_reading(
     if last_reading and last_reading.is_locked:
         raise HTTPException(status_code=403, detail="Період закрито, показник заблоковано")
     if reading_value < previous_value:
-        raise HTTPException(status_code=400, detail="Нове показання не може бути меншим за попереднє")
+        raise HTTPException(status_code=420, detail="Нові показання не можуть бути меншими за попередні!")
     parsed_date = datetime.strptime(reading_date, "%Y-%m-%d").date() if reading_date else date.today()
     charge_amount = max(0.0, reading_value - previous_value) * (meter.tariff or 0.0)
     reading = MeterReading(
@@ -8715,6 +8985,461 @@ def create_member_ticket(
             daemon=True
         ).start()
     return {"status": "success", "id": ticket.id}
+
+# 1. Document Management Endpoints
+@app.get("/api/member/documents")
+def get_member_documents(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    docs = db.query(ProfileDocument).filter(
+        ProfileDocument.profile_id == auth["profile_id"],
+        ProfileDocument.is_public_to_residents == True
+    ).order_by(ProfileDocument.upload_date.desc()).all()
+    if not docs:
+        default_docs = [
+            ProfileDocument(profile_id=auth["profile_id"], filename="Протокол_загальних_зборів_2026_05.pdf", content_type="application/pdf", file_content=b"Mock PDF content for minutes", is_public_to_residents=True, document_type="minutes", description="Рішення щодо тарифів на утримання прибудинкової території та капітального ремонту."),
+            ProfileDocument(profile_id=auth["profile_id"], filename="Кошторис_витрат_ОСББ_2026.pdf", content_type="application/pdf", file_content=b"Mock PDF content for budget", is_public_to_residents=True, document_type="budget", description="Річний бюджет доходів та витрат на обслуговування будинку."),
+            ProfileDocument(profile_id=auth["profile_id"], filename="Фінансовий_звіт_за_2025_рік.pdf", content_type="application/pdf", file_content=b"Mock PDF content for financial report", is_public_to_residents=True, document_type="report", description="Звіт про використання фондів та фінансовий баланс за попередній рік.")
+        ]
+        db.add_all(default_docs)
+        db.commit()
+        docs = db.query(ProfileDocument).filter(
+            ProfileDocument.profile_id == auth["profile_id"],
+            ProfileDocument.is_public_to_residents == True
+        ).all()
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "content_type": d.content_type,
+            "upload_date": d.upload_date.strftime("%Y-%m-%d") if d.upload_date else "",
+            "document_type": d.document_type or "other",
+            "description": d.description or ""
+        }
+        for d in docs
+    ]
+
+@app.get("/api/member/documents/{doc_id}/download")
+def download_member_document(
+    doc_id: int,
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    from fastapi.responses import Response
+    import urllib.parse
+    doc = db.query(ProfileDocument).filter(
+        ProfileDocument.id == doc_id,
+        ProfileDocument.profile_id == auth["profile_id"],
+        ProfileDocument.is_public_to_residents == True
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не знайдено або доступ заборонено")
+    safe_filename = urllib.parse.quote(doc.filename)
+    return Response(
+        content=doc.file_content,
+        media_type=doc.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}"}
+    )
+
+# 2. Personalized Reminders Settings
+@app.get("/api/member/notifications/settings")
+def get_member_notification_settings(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    settings = db.query(ResidentNotificationSetting).filter(ResidentNotificationSetting.member_id == auth["member_id"]).first()
+    if not settings:
+        settings = ResidentNotificationSetting(member_id=auth["member_id"])
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return {
+        "email_reminders_enabled": settings.email_reminders_enabled,
+        "push_reminders_enabled": settings.push_reminders_enabled,
+        "payment_reminder_days": settings.payment_reminder_days,
+        "meter_reminder_days": settings.meter_reminder_days
+    }
+
+@app.post("/api/member/notifications/settings")
+def update_member_notification_settings(
+    email_reminders_enabled: bool = Form(...),
+    push_reminders_enabled: bool = Form(...),
+    payment_reminder_days: int = Form(...),
+    meter_reminder_days: int = Form(...),
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    settings = db.query(ResidentNotificationSetting).filter(ResidentNotificationSetting.member_id == auth["member_id"]).first()
+    if not settings:
+        settings = ResidentNotificationSetting(member_id=auth["member_id"])
+        db.add(settings)
+    settings.email_reminders_enabled = email_reminders_enabled
+    settings.push_reminders_enabled = push_reminders_enabled
+    settings.payment_reminder_days = payment_reminder_days
+    settings.meter_reminder_days = meter_reminder_days
+    db.commit()
+    return {"status": "success"}
+
+@app.post("/api/member/notifications/test")
+def trigger_test_member_notification(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    subject = "Тестове нагадування ОСББ"
+    body = "Привіт! Це тестове автоматичне нагадування щодо передачі показників лічильників та оплати внесків. Кабінет працює справно!"
+    notify_resident(db, member, subject, body)
+    return {"status": "success", "message": "Сповіщення надіслано успішно"}
+
+@app.post("/api/member/notifications/check-reminders")
+def simulate_notification_check(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    settings = db.query(ResidentNotificationSetting).filter(ResidentNotificationSetting.member_id == member.id).first()
+    if not settings:
+        settings = ResidentNotificationSetting(member_id=member.id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+        
+    notifications_sent = []
+    
+    # 1. Check payment deadline if balance is negative
+    if (member.balance or 0.0) < 0:
+        if settings.push_reminders_enabled or settings.email_reminders_enabled:
+            subject = "Нагадування про оплату внесків"
+            body = f"Шановний мешканець! Нагадуємо про необхідність оплати внесків ОСББ. Ваша заборгованість становить {abs(round(member.balance, 2))} грн. Будь ласка, здійсніть оплату найближчим часом."
+            notify_resident(db, member, subject, body)
+            notifications_sent.append("payment_reminder")
+            
+    # 2. Check meter reading status for this month
+    own_meters = db.query(Meter).filter(Meter.member_id == member.id).all()
+    unsubmitted_meters = []
+    current_month_start = date.today().replace(day=1)
+    for meter in own_meters:
+        has_reading = db.query(MeterReading).filter(
+            MeterReading.meter_id == meter.id,
+            MeterReading.reading_date >= current_month_start
+        ).first()
+        if not has_reading:
+            unsubmitted_meters.append(meter.name)
+            
+    if unsubmitted_meters and (settings.push_reminders_enabled or settings.email_reminders_enabled):
+        subject = "Подача показників лічильників"
+        body = f"Нагадуємо про необхідність передати показники для лічильників: {', '.join(unsubmitted_meters)} до кінця місяця."
+        notify_resident(db, member, subject, body)
+        notifications_sent.append("meter_reading_reminder")
+        
+    return {"status": "success", "notifications_sent": notifications_sent}
+
+# 3. Security Systems Integration
+@app.get("/api/member/security/devices")
+def get_member_security_devices(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    devices = db.query(SecurityDevice).filter(SecurityDevice.profile_id == auth["profile_id"]).all()
+    if not devices:
+        default_devices = [
+            SecurityDevice(profile_id=auth["profile_id"], name="Камера в'їзної зони (Шлагбаум)", device_type="camera", stream_url="https://assets.mixkit.co/videos/preview/mixkit-street-traffic-with-cars-and-buses-in-a-city-43187-large.mp4"),
+            SecurityDevice(profile_id=auth["profile_id"], name="Камера дитячого майданчика", device_type="camera", stream_url="https://assets.mixkit.co/videos/preview/mixkit-kids-playing-in-a-playground-33827-large.mp4"),
+            SecurityDevice(profile_id=auth["profile_id"], name="Камера входу (Під'їзд 1)", device_type="camera", stream_url="https://assets.mixkit.co/videos/preview/mixkit-man-walking-past-security-camera-monitor-43100-large.mp4"),
+            SecurityDevice(profile_id=auth["profile_id"], name="Ворота в'їзні (Головні)", device_type="barrier", status="active"),
+            SecurityDevice(profile_id=auth["profile_id"], name="Двері під'їзду №1", device_type="door", status="active")
+        ]
+        db.add_all(default_devices)
+        db.commit()
+        devices = db.query(SecurityDevice).filter(SecurityDevice.profile_id == auth["profile_id"]).all()
+        
+    return [
+        {
+            "id": d.id,
+            "name": d.name,
+            "device_type": d.device_type,
+            "stream_url": d.stream_url,
+            "status": d.status
+        }
+        for d in devices
+    ]
+
+@app.post("/api/member/security/unlock/{device_id}")
+def unlock_member_security_device(
+    device_id: int,
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    device = db.query(SecurityDevice).filter(
+        SecurityDevice.id == device_id,
+        SecurityDevice.profile_id == auth["profile_id"]
+    ).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Пристрій безпеки не знайдено")
+    if device.device_type not in ["door", "barrier"]:
+        raise HTTPException(status_code=400, detail="Цей пристрій не підтримує відмикання")
+    return {"status": "success", "message": f"{device.name} відчинено успішно!"}
+
+# 4. Service Booking (Zones & Third-Party)
+@app.get("/api/member/bookings/zones")
+def get_member_recreation_zones(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    zones = db.query(RecreationZone).filter(RecreationZone.profile_id == auth["profile_id"]).all()
+    if not zones:
+        default_zones = [
+            RecreationZone(profile_id=auth["profile_id"], name="Альтанка з мангалом (BBQ Zone 1)", description="Комфортна альтанка на 8 осіб з власним барбекю-комплексом та дровами.", capacity=8, price_per_hour=100.0, image_url="https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&w=500&q=80"),
+            RecreationZone(profile_id=auth["profile_id"], name="Спортивний корт (Теніс/Баскетбол)", description="Спортивний майданчик з професійним покриттям та нічним освітленням.", capacity=10, price_per_hour=50.0, image_url="https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?auto=format&fit=crop&w=500&q=80"),
+            RecreationZone(profile_id=auth["profile_id"], name="Дитяча ігрова кімната (Kids Hub)", description="Простір для дитячих свят, настільних ігор та розвитку під наглядом.", capacity=12, price_per_hour=80.0, image_url="https://images.unsplash.com/photo-1566847438217-76e82d383f84?auto=format&fit=crop&w=500&q=80")
+        ]
+        db.add_all(default_zones)
+        db.commit()
+        zones = db.query(RecreationZone).filter(RecreationZone.profile_id == auth["profile_id"]).all()
+        
+    return [
+        {
+            "id": z.id,
+            "name": z.name,
+            "description": z.description,
+            "capacity": z.capacity,
+            "price_per_hour": z.price_per_hour,
+            "image_url": z.image_url
+        }
+        for z in zones
+    ]
+
+@app.get("/api/member/bookings/my")
+def get_my_bookings(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    bookings = db.query(RecreationBooking).filter(RecreationBooking.member_id == auth["member_id"]).order_by(RecreationBooking.created_at.desc()).all()
+    return [
+        {
+            "id": b.id,
+            "zone_id": b.zone_id,
+            "zone_name": db.query(RecreationZone.name).filter(RecreationZone.id == b.zone_id).scalar() or "Зона відпочинку",
+            "booking_date": b.booking_date.strftime("%Y-%m-%d"),
+            "start_time": b.start_time,
+            "end_time": b.end_time,
+            "status": b.status,
+            "total_price": b.total_price,
+            "created_at": b.created_at.isoformat() if b.created_at else None
+        }
+        for b in bookings
+    ]
+
+@app.post("/api/member/bookings")
+def create_member_booking(
+    zone_id: int = Form(...),
+    booking_date: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    zone = db.query(RecreationZone).filter(RecreationZone.id == zone_id, RecreationZone.profile_id == auth["profile_id"]).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="Зону відпочинку не знайдено")
+        
+    parsed_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
+    
+    try:
+        sh, sm = map(int, start_time.split(':'))
+        eh, em = map(int, end_time.split(':'))
+        hours = (eh - sh) + (em - sm)/60.0
+    except:
+        hours = 2.0
+    if hours <= 0:
+        raise HTTPException(status_code=400, detail="Час завершення має бути пізнішим за час початку")
+        
+    total_price = hours * zone.price_per_hour
+    
+    overlap = db.query(RecreationBooking).filter(
+        RecreationBooking.zone_id == zone_id,
+        RecreationBooking.booking_date == parsed_date,
+        RecreationBooking.status != "cancelled",
+        ((RecreationBooking.start_time < end_time) & (RecreationBooking.end_time > start_time))
+    ).first()
+    if overlap:
+        raise HTTPException(status_code=400, detail="Обраний час вже заброньовано іншим мешканцем")
+        
+    booking = RecreationBooking(
+        zone_id=zone_id,
+        member_id=auth["member_id"],
+        booking_date=parsed_date,
+        start_time=start_time,
+        end_time=end_time,
+        status="approved",
+        total_price=total_price
+    )
+    db.add(booking)
+    db.commit()
+    db.refresh(booking)
+    
+    notify_resident(
+        db,
+        auth["member"],
+        "Бронювання підтверджено",
+        f"Ви успішно забронювали {zone.name} на {booking_date} з {start_time} по {end_time}."
+    )
+    return {"status": "success", "id": booking.id}
+
+@app.post("/api/member/bookings/{booking_id}/cancel")
+def cancel_member_booking(
+    booking_id: int,
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    booking = db.query(RecreationBooking).filter(
+        RecreationBooking.id == booking_id,
+        RecreationBooking.member_id == auth["member_id"]
+    ).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Бронювання не знайдено")
+    booking.status = "cancelled"
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/member/services/my")
+def get_my_services(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    services = db.query(ServiceOrder).filter(ServiceOrder.member_id == auth["member_id"]).order_by(ServiceOrder.created_at.desc()).all()
+    return [
+        {
+            "id": s.id,
+            "service_type": s.service_type,
+            "description": s.description,
+            "preferred_time": s.preferred_time,
+            "status": s.status,
+            "price": s.price,
+            "contractor_name": s.contractor_name,
+            "created_at": s.created_at.isoformat() if s.created_at else None
+        }
+        for s in services
+    ]
+
+@app.post("/api/member/services/order")
+def create_member_service_order(
+    service_type: str = Form(...),
+    description: str = Form(...),
+    preferred_time: Optional[str] = Form(None),
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    order = ServiceOrder(
+        profile_id=auth["profile_id"],
+        member_id=auth["member_id"],
+        service_type=service_type,
+        description=description,
+        preferred_time=preferred_time,
+        status="new",
+        price=150.0 if service_type == "cleaning" else 200.0,
+        contractor_name="ФОП Шевченко (черговий майстер)"
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    
+    notify_resident(
+        db,
+        auth["member"],
+        "Послугу замовлено",
+        f"Ваше замовлення на послугу '{service_type}' успішно створено. Черговий майстер зв'яжеться з вами."
+    )
+    return {"status": "success", "id": order.id}
+
+# 5. Smart Home Automation (Heating & Meters)
+@app.get("/api/member/smart/heating")
+def get_member_heating_device(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    device = db.query(SmartHeatingDevice).filter(SmartHeatingDevice.member_id == auth["member_id"]).first()
+    if not device:
+        device = SmartHeatingDevice(member_id=auth["member_id"])
+        db.add(device)
+        db.commit()
+        db.refresh(device)
+    return {
+        "room_name": device.room_name,
+        "current_temperature": device.current_temperature,
+        "target_temperature": device.target_temperature,
+        "mode": device.mode,
+        "status": device.status
+    }
+
+@app.post("/api/member/smart/heating/control")
+def control_member_heating(
+    target_temperature: float = Form(...),
+    mode: str = Form(...),
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    if mode not in ["eco", "comfort", "off", "schedule"]:
+        raise HTTPException(status_code=400, detail="Невідомий режим опалення")
+    device = db.query(SmartHeatingDevice).filter(SmartHeatingDevice.member_id == auth["member_id"]).first()
+    if not device:
+        device = SmartHeatingDevice(member_id=auth["member_id"])
+        db.add(device)
+    device.target_temperature = target_temperature
+    device.mode = mode
+    device.last_sync_at = datetime.utcnow()
+    if mode == "off":
+        device.status = "idle"
+    elif device.current_temperature < target_temperature:
+        device.status = "heating"
+    else:
+        device.status = "idle"
+    db.commit()
+    return {
+        "status": "success",
+        "current_temperature": device.current_temperature,
+        "target_temperature": device.target_temperature,
+        "mode": device.mode,
+        "device_status": device.status
+    }
+
+@app.get("/api/member/smart/meters/logs")
+def get_smart_meters_transmission_logs(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    smart_meters = db.query(Meter).filter(
+        Meter.member_id == auth["member_id"],
+        Meter.is_smart == True
+    ).all()
+    
+    if not smart_meters:
+        water_meter = db.query(Meter).filter(
+            Meter.member_id == auth["member_id"],
+            Meter.type == "water"
+        ).first()
+        if water_meter:
+            water_meter.is_smart = True
+            water_meter.smart_device_model = "Aqara Smart Meter Reader V1"
+            water_meter.smart_device_status = "online"
+            water_meter.last_sync_at = datetime.utcnow()
+            db.commit()
+            smart_meters = [water_meter]
+            
+    result = []
+    for meter in smart_meters:
+        readings = db.query(MeterReading).filter(MeterReading.meter_id == meter.id).order_by(MeterReading.reading_date.desc()).all()
+        result.append({
+            "meter_name": meter.name,
+            "meter_type": meter.type,
+            "smart_device_model": meter.smart_device_model,
+            "smart_device_status": meter.smart_device_status,
+            "last_sync_at": meter.last_sync_at.isoformat() if meter.last_sync_at else None,
+            "readings": [
+                {
+                    "reading_date": r.reading_date.strftime("%Y-%m-%d"),
+                    "reading_value": r.reading_value,
+                    "charge_amount": r.charge_amount
+                }
+                for r in readings[:3]
+            ]
+        })
+    return result
+
+@app.get("/api/member/contacts")
+def get_member_contacts(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    contacts = db.query(OSBBContact).filter(OSBBContact.profile_id == auth["profile_id"]).all()
+    if not contacts:
+        default_contacts = [
+            OSBBContact(profile_id=auth["profile_id"], name="Коваленко Олександр Петрович", role="Голова правління ОСББ", phone="+380671112233"),
+            OSBBContact(profile_id=auth["profile_id"], name="Дмитрук Ольга Василівна", role="Бухгалтер правління", phone="+380974445566"),
+            OSBBContact(profile_id=auth["profile_id"], name="Комісія (Черговий член)", role="Ревізійна комісія", phone="+380509998877"),
+            OSBBContact(profile_id=auth["profile_id"], name="Аварійна служба (Цілодобово)", role="Аварійна служба", phone="+380442223344"),
+            OSBBContact(profile_id=auth["profile_id"], name="Охорона / Шлагбаум", role="Диспетчер охорони", phone="+380635556677"),
+        ]
+        db.add_all(default_contacts)
+        db.commit()
+        contacts = db.query(OSBBContact).filter(OSBBContact.profile_id == auth["profile_id"]).all()
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "role": c.role,
+            "phone": c.phone
+        }
+        for c in contacts
+    ]
 
 from pydantic import BaseModel
 class BotLinkRequest(BaseModel):
@@ -9241,6 +9966,15 @@ def get_cyrillic_font():
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     import os
+    
+    local_tmp_path = "/tmp/DejaVuSans.ttf"
+    if os.path.exists(local_tmp_path):
+        try:
+            pdfmetrics.registerFont(TTFont("CyrillicFont", local_tmp_path))
+            return "CyrillicFont"
+        except Exception:
+            pass
+
     font_paths = [
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Helvetica.dfont",
@@ -9255,7 +9989,43 @@ def get_cyrillic_font():
                 return "CyrillicFont"
             except Exception:
                 pass
+
+    # Try downloading it dynamically if missing
+    try:
+        import requests
+        print("[FONTS] Cyrillic font not found. Downloading DejaVuSans.ttf dynamically...")
+        url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/resources/ttf/DejaVuSans.ttf"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            with open(local_tmp_path, "wb") as f:
+                f.write(r.content)
+            pdfmetrics.registerFont(TTFont("CyrillicFont", local_tmp_path))
+            print("[FONTS] DejaVuSans.ttf downloaded and registered successfully.")
+            return "CyrillicFont"
+    except Exception as de:
+        print(f"[FONTS ERROR] Failed to download font: {de}")
+
     return "Helvetica"
+
+def get_kiev_now():
+    from datetime import datetime, timedelta
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo("Europe/Kiev")
+        return datetime.now(tz)
+    except Exception:
+        utc = datetime.utcnow()
+        if 3 < utc.month < 10:
+            offset = 3
+        elif utc.month == 3:
+            last_sunday = 31 - (datetime(utc.year, 3, 31).weekday() + 1) % 7
+            offset = 3 if utc.day >= last_sunday else 2
+        elif utc.month == 10:
+            last_sunday = 31 - (datetime(utc.year, 10, 31).weekday() + 1) % 7
+            offset = 2 if utc.day >= last_sunday else 3
+        else:
+            offset = 2
+        return utc + timedelta(hours=offset)
 
 def number_to_words_ua(amount: float) -> str:
     units_m = ["", "один", "два", "три", "чотири", "п'ять", "шість", "сім", "вісім", "дев'ять"]
@@ -10273,7 +11043,7 @@ def get_all_attachments_for_invoice(inv: Invoice, act: Optional[ServiceAct], pro
     label = inv.document_type or "document"
     if inv.status == "signed":
         # Get unsigned PDF bytes
-        if getattr(inv, 'file_content', None) is not None:
+        if getattr(inv, 'file_content', None) is not None and len(inv.file_content) > 0:
             raw_pdf_bytes = inv.file_content
         else:
             import os
@@ -10286,7 +11056,7 @@ def get_all_attachments_for_invoice(inv: Invoice, act: Optional[ServiceAct], pro
         attachments.append((f"{label}_{inv.invoice_number}.pdf", raw_pdf_bytes))
         
         # Get signed p7m bytes
-        if getattr(inv, 'signed_file_content', None) is not None:
+        if getattr(inv, 'signed_file_content', None) is not None and len(inv.signed_file_content) > 0:
             signed_bytes = inv.signed_file_content
         else:
             import os
@@ -10306,7 +11076,7 @@ def get_all_attachments_for_invoice(inv: Invoice, act: Optional[ServiceAct], pro
         doc_label = "Waybill" if inv.document_type == "waybill" else "Act"
         if act.status == "signed":
             # Get unsigned PDF bytes
-            if getattr(act, 'file_content', None) is not None:
+            if getattr(act, 'file_content', None) is not None and len(act.file_content) > 0:
                 raw_pdf_bytes = act.file_content
             else:
                 import os
@@ -10322,7 +11092,7 @@ def get_all_attachments_for_invoice(inv: Invoice, act: Optional[ServiceAct], pro
             attachments.append((f"{doc_label}_{act.act_number}.pdf", raw_pdf_bytes))
             
             # Get signed p7m bytes
-            if getattr(act, 'signed_file_content', None) is not None:
+            if getattr(act, 'signed_file_content', None) is not None and len(act.signed_file_content) > 0:
                 signed_bytes = act.signed_file_content
             else:
                 import os
@@ -10498,8 +11268,9 @@ def send_invoice_now(
 
 @app.post("/api/invoices/process-recurring")
 def process_recurring_invoices(db: Session = Depends(get_db)):
-    current_day = date.today().day
-    current_month = date.today().month
+    kiev_now = get_kiev_now()
+    current_day = kiev_now.day
+    current_month = kiev_now.month
     from sqlalchemy import or_
     recs = db.query(RecurringInvoice).filter(
         RecurringInvoice.is_active == True,
@@ -10513,7 +11284,7 @@ def process_recurring_invoices(db: Session = Depends(get_db)):
             Invoice.profile_id == rec.profile_id,
             Invoice.client_email == rec.client_email,
             Invoice.amount == rec.amount,
-            Invoice.send_date == date.today()
+            Invoice.send_date == kiev_now.date()
         ).first()
         if already_sent:
             continue
@@ -10529,7 +11300,7 @@ def process_recurring_invoices(db: Session = Depends(get_db)):
             amount=rec.amount,
             service_name=rec.service_name,
             invoice_number=inv_num,
-            send_date=date.today(),
+            send_date=kiev_now.date(),
             client_address=rec.client_address
         )
         db.add(invoice)
@@ -10543,7 +11314,7 @@ def process_recurring_invoices(db: Session = Depends(get_db)):
                 invoice_id=invoice.id,
                 profile_id=rec.profile_id,
                 act_number=act_num,
-                created_at=date.today()
+                created_at=kiev_now.date()
             )
             db.add(act)
             db.commit()
@@ -10954,6 +11725,8 @@ class SendInvoiceRequest(BaseModel):
     toEmail: str
     subject: Optional[str] = None
     message: Optional[str] = None
+    include_invoice: Optional[bool] = True
+    include_act: Optional[bool] = True
 
 @app.get("/api/invoices")
 def get_all_invoices(
@@ -11162,7 +11935,7 @@ def get_invoice_pdf_endpoint(invoice_id: int, user_id: Optional[int] = None, db:
         raise HTTPException(status_code=403, detail="Access denied: invoice does not belong to this user")
         
     try:
-        if getattr(inv, 'file_content', None) is not None:
+        if getattr(inv, 'file_content', None) is not None and len(inv.file_content) > 0:
             pdf_bytes = inv.file_content
         else:
             import os
@@ -11260,7 +12033,16 @@ def send_invoice_api(
     act = db.query(ServiceAct).filter(ServiceAct.invoice_id == inv.id).first()
     attachments = []
     try:
-        attachments = get_all_attachments_for_invoice(inv, act, profile, db)
+        all_atts = get_all_attachments_for_invoice(inv, act, profile, db)
+        for filename, content in all_atts:
+            is_invoice_file = "invoice" in filename.lower() or "contract" in filename.lower() or "document" in filename.lower()
+            is_act_file = "act" in filename.lower() or "waybill" in filename.lower()
+            
+            if is_invoice_file and not getattr(req, "include_invoice", True):
+                continue
+            if is_act_file and not getattr(req, "include_act", True):
+                continue
+            attachments.append((filename, content))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate PDFs: {str(e)}")
         
@@ -12045,6 +12827,9 @@ class SendProfileDocumentRequest(BaseModel):
 async def upload_profile_document(
     profile_id: int,
     file: UploadFile = File(...),
+    is_public_to_residents: Optional[bool] = Form(False),
+    document_type: Optional[str] = Form("other"),
+    description: Optional[str] = Form(None),
     user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
@@ -12060,7 +12845,10 @@ async def upload_profile_document(
         profile_id=profile_id,
         filename=file.filename,
         content_type=file.content_type,
-        file_content=content
+        file_content=content,
+        is_public_to_residents=is_public_to_residents,
+        document_type=document_type,
+        description=description
     )
     db.add(doc)
     db.commit()
@@ -12086,7 +12874,10 @@ def list_profile_documents(
             "id": d.id,
             "filename": d.filename,
             "content_type": d.content_type,
-            "upload_date": d.upload_date.strftime("%Y-%m-%d") if d.upload_date else ""
+            "upload_date": d.upload_date.strftime("%Y-%m-%d") if d.upload_date else "",
+            "is_public_to_residents": bool(d.is_public_to_residents),
+            "document_type": d.document_type or "other",
+            "description": d.description or ""
         }
         for d in docs
     ]
@@ -12114,6 +12905,211 @@ def delete_profile_document(
     db.delete(doc)
     db.commit()
     return {"status": "success", "message": "Документ видалено"}
+
+class DocumentMetadataRequest(BaseModel):
+    is_public_to_residents: bool
+    document_type: str
+    description: Optional[str] = None
+
+@app.post("/api/profiles/{profile_id}/documents/{doc_id}/metadata")
+def update_profile_document_metadata(
+    profile_id: int,
+    doc_id: int,
+    req: DocumentMetadataRequest,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    doc = db.query(ProfileDocument).filter(
+        ProfileDocument.id == doc_id,
+        ProfileDocument.profile_id == profile_id
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc.is_public_to_residents = req.is_public_to_residents
+    doc.document_type = req.document_type
+    doc.description = req.description
+    db.commit()
+    return {"status": "success"}
+
+# --- ADMIN CONTACTS ---
+class OSBBContactCreateRequest(BaseModel):
+    name: str
+    role: str
+    phone: str
+
+@app.get("/api/profiles/{profile_id}/contacts")
+def list_profile_contacts(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    contacts = db.query(OSBBContact).filter(OSBBContact.profile_id == profile_id).all()
+    return [{"id": c.id, "name": c.name, "role": c.role, "phone": c.phone} for c in contacts]
+
+@app.post("/api/profiles/{profile_id}/contacts")
+def create_profile_contact(profile_id: int, req: OSBBContactCreateRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    contact = OSBBContact(profile_id=profile_id, name=req.name, role=req.role, phone=req.phone)
+    db.add(contact)
+    db.commit()
+    return {"status": "success", "id": contact.id}
+
+@app.delete("/api/profiles/{profile_id}/contacts/{contact_id}")
+def delete_profile_contact(profile_id: int, contact_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    contact = db.query(OSBBContact).filter(OSBBContact.id == contact_id, OSBBContact.profile_id == profile_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    db.delete(contact)
+    db.commit()
+    return {"status": "success"}
+
+# --- ADMIN SECURITY DEVICES ---
+class SecurityDeviceCreateRequest(BaseModel):
+    name: str
+    device_type: str
+    stream_url: Optional[str] = None
+
+@app.get("/api/profiles/{profile_id}/security/devices")
+def list_profile_security_devices(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    devices = db.query(SecurityDevice).filter(SecurityDevice.profile_id == profile_id).all()
+    return [{"id": d.id, "name": d.name, "device_type": d.device_type, "stream_url": d.stream_url, "status": d.status} for d in devices]
+
+@app.post("/api/profiles/{profile_id}/security/devices")
+def create_profile_security_device(profile_id: int, req: SecurityDeviceCreateRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    device = SecurityDevice(profile_id=profile_id, name=req.name, device_type=req.device_type, stream_url=req.stream_url)
+    db.add(device)
+    db.commit()
+    return {"status": "success", "id": device.id}
+
+@app.delete("/api/profiles/{profile_id}/security/devices/{device_id}")
+def delete_profile_security_device(profile_id: int, device_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    device = db.query(SecurityDevice).filter(SecurityDevice.id == device_id, SecurityDevice.profile_id == profile_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    db.delete(device)
+    db.commit()
+    return {"status": "success"}
+
+# --- ADMIN RECREATION ZONES ---
+class RecreationZoneCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    capacity: int
+    price_per_hour: float
+    image_url: Optional[str] = None
+
+@app.get("/api/profiles/{profile_id}/bookings/zones")
+def list_profile_recreation_zones(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    zones = db.query(RecreationZone).filter(RecreationZone.profile_id == profile_id).all()
+    return [{"id": z.id, "name": z.name, "description": z.description, "capacity": z.capacity, "price_per_hour": z.price_per_hour, "image_url": z.image_url} for z in zones]
+
+@app.post("/api/profiles/{profile_id}/bookings/zones")
+def create_profile_recreation_zone(profile_id: int, req: RecreationZoneCreateRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    zone = RecreationZone(profile_id=profile_id, name=req.name, description=req.description, capacity=req.capacity, price_per_hour=req.price_per_hour, image_url=req.image_url)
+    db.add(zone)
+    db.commit()
+    return {"status": "success", "id": zone.id}
+
+@app.delete("/api/profiles/{profile_id}/bookings/zones/{zone_id}")
+def delete_profile_recreation_zone(profile_id: int, zone_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    zone = db.query(RecreationZone).filter(RecreationZone.id == zone_id, RecreationZone.profile_id == profile_id).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    db.delete(zone)
+    db.commit()
+    return {"status": "success"}
+
+# --- ADMIN SERVICE ORDERS ---
+class ServiceOrderUpdateRequest(BaseModel):
+    status: str
+    price: float
+    contractor_name: Optional[str] = None
+
+@app.get("/api/profiles/{profile_id}/services/orders")
+def list_profile_service_orders(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    orders = db.query(ServiceOrder).filter(ServiceOrder.profile_id == profile_id).all()
+    result = []
+    for o in orders:
+        member = db.query(UnitOrMember).filter(UnitOrMember.id == o.member_id).first()
+        result.append({
+            "id": o.id,
+            "member_id": o.member_id,
+            "member_identifier": member.identifier if member else "Невідомий",
+            "service_type": o.service_type,
+            "description": o.description,
+            "preferred_time": o.preferred_time,
+            "status": o.status,
+            "price": o.price,
+            "contractor_name": o.contractor_name,
+            "created_at": o.created_at.isoformat() if o.created_at else None
+        })
+    return result
+
+@app.post("/api/profiles/{profile_id}/services/orders/{order_id}/update")
+def update_profile_service_order(profile_id: int, order_id: int, req: ServiceOrderUpdateRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.profile_id == profile_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Service order not found")
+    order.status = req.status
+    order.price = req.price
+    order.contractor_name = req.contractor_name
+    db.commit()
+    return {"status": "success"}
 
 from fastapi.responses import Response
 @app.get("/api/profiles/documents/{doc_id}/download")
@@ -15245,13 +16241,39 @@ async def get_current_subscription(profile_id: int, user_id: Optional[int] = Non
         Subscription.status.in_(["active", "pending"])
     ).order_by(Subscription.id.desc()).first()
     if not sub:
-        return {"plan": "free", "plan_type": "free", "payment_period": None, "expires_at": None, "auto_renew": False, "status": "active"}
+        return {
+            "plan": "free",
+            "plan_type": "free",
+            "payment_period": None,
+            "expires_at": None,
+            "auto_renew": False,
+            "status": "active",
+            "is_member_module_active": False,
+            "has_resident_cabinet": False,
+            "last_payment_date": None,
+            "last_payment_amount": None,
+            "created_at": None,
+            "updated_at": None
+        }
     
     from datetime import datetime
     if sub.expires_at and sub.expires_at < datetime.utcnow() and sub.status == "active":
         sub.status = "expired"
         db.commit()
-        return {"plan": "free", "plan_type": "free", "payment_period": None, "expires_at": sub.expires_at.isoformat(), "auto_renew": getattr(sub, "auto_renew", False), "status": "expired"}
+        return {
+            "plan": "free",
+            "plan_type": "free",
+            "payment_period": None,
+            "expires_at": sub.expires_at.isoformat(),
+            "auto_renew": getattr(sub, "auto_renew", False),
+            "status": "expired",
+            "is_member_module_active": False,
+            "has_resident_cabinet": False,
+            "last_payment_date": sub.last_payment_date.isoformat() if getattr(sub, "last_payment_date", None) else None,
+            "last_payment_amount": getattr(sub, "last_payment_amount", None),
+            "created_at": sub.created_at.isoformat() if getattr(sub, "created_at", None) else None,
+            "updated_at": sub.updated_at.isoformat() if getattr(sub, "updated_at", None) else None
+        }
         
     return {
         "plan": sub.plan,
@@ -15259,7 +16281,13 @@ async def get_current_subscription(profile_id: int, user_id: Optional[int] = Non
         "payment_period": sub.payment_period,
         "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
         "auto_renew": getattr(sub, "auto_renew", False),
-        "status": sub.status
+        "status": sub.status,
+        "is_member_module_active": getattr(sub, "is_member_module_active", False),
+        "has_resident_cabinet": getattr(sub, "has_resident_cabinet", False),
+        "last_payment_date": sub.last_payment_date.isoformat() if getattr(sub, "last_payment_date", None) else None,
+        "last_payment_amount": getattr(sub, "last_payment_amount", None),
+        "created_at": sub.created_at.isoformat() if getattr(sub, "created_at", None) else None,
+        "updated_at": sub.updated_at.isoformat() if getattr(sub, "updated_at", None) else None
     }
 
 @app.post("/api/subscription/upgrade/{profile_id}")

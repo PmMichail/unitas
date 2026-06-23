@@ -39,11 +39,11 @@ export const darkColors: ThemeColors = {
 };
 
 export const lightColors: ThemeColors = {
-  background: '#f8fafc', // Slate 50
-  card: '#ffffff',
-  cardBorder: '#e2e8f0', // Slate 200
-  text: '#0f172a', // Slate 900
-  textMuted: '#64748b', // Slate 500
+  background: '#f2f2f7', // Soft light gray (prevents "washed out" paper white)
+  card: '#ffffff', // Clean white card widgets
+  cardBorder: 'rgba(0, 0, 0, 0.05)', // Subtle shadow borders for depth
+  text: '#1c1c1e', // Dark text
+  textMuted: '#68686e', // Softer description text
   primary: '#4f46e5', // Indigo 600
   primaryMuted: 'rgba(79, 70, 229, 0.08)',
   success: '#059669', // Emerald 600
@@ -52,8 +52,8 @@ export const lightColors: ThemeColors = {
   errorMuted: 'rgba(217, 29, 72, 0.08)',
   warning: '#d97706', // Amber 600
   warningMuted: 'rgba(217, 119, 6, 0.08)',
-  border: '#e2e8f0',
-  inputBg: '#f1f5f9',
+  border: '#e5e5ea',
+  inputBg: '#e5e5ea', // Darker input field background for clear separation
 };
 
 interface ThemeContextType {

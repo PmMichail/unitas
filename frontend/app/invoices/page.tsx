@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useApp } from "@/context/AppContext";
-import { invoicesApi, certificatesApi } from "@/lib/api";
+import { invoicesApi, certificatesApi, api } from "@/lib/api";
 import Link from "next/link";
 import { 
   FileText, 
@@ -24,7 +24,8 @@ import {
   Loader2,
   Sparkles,
   AlertCircle,
-  Briefcase
+  Briefcase,
+  Calendar
 } from "lucide-react";
 
 const defaultTemplates: Record<string, string> = {
@@ -204,7 +205,30 @@ export default function InvoicesList() {
   const [loading, setLoading] = useState(true);
   
   // Tabs
-  const [activeTab, setActiveTab] = useState<"list" | "upload" | "template" | "company_docs">("list");
+  const [activeTab, setActiveTab] = useState<"list" | "upload" | "template" | "company_docs" | "recurring">("list");
+  
+  // Recurring/Automated Invoices States
+  const [recurringInvoices, setRecurringInvoices] = useState<any[]>([]);
+  const [recurringLoading, setRecurringLoading] = useState(false);
+  const [recFormOpen, setRecFormOpen] = useState(false);
+  const [isSendConfirmOpen, setIsSendConfirmOpen] = useState(false);
+  const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
+  const [sendIncludeAct, setSendIncludeAct] = useState(true);
+  const [sendingInvoice, setSendingInvoice] = useState(false);
+
+  // New Recurring Form states
+  const [recClientEmail, setRecClientEmail] = useState("");
+  const [recClientTg, setRecClientTg] = useState("");
+  const [recAmount, setRecAmount] = useState("");
+  const [recServiceName, setRecServiceName] = useState("");
+  const [recIncludeAct, setRecIncludeAct] = useState(true);
+  const [recSendDay, setRecSendDay] = useState("1");
+  const [recPeriodicity, setRecPeriodicity] = useState<"monthly" | "specific">("monthly");
+  const [recSendMonth, setRecSendMonth] = useState<number | null>(null);
+  const [recClientName, setRecClientName] = useState("");
+  const [recClientTaxId, setRecClientTaxId] = useState("");
+  const [recDocumentType, setRecDocumentType] = useState("act");
+  const [recClientAddress, setRecClientAddress] = useState("");
   
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -254,6 +278,8 @@ export default function InvoicesList() {
   const [emailMessage, setEmailMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [modalMessage, setModalMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [includeInvoice, setIncludeInvoice] = useState(true);
+  const [includeAct, setIncludeAct] = useState(true);
 
   // Modal states for KEP signing
   const [signModalOpen, setSignModalOpen] = useState(false);
@@ -292,18 +318,111 @@ export default function InvoicesList() {
     }
   }, [selectedProfile]);
 
+  const fetchRecurringInvoices = useCallback(async () => {
+    if (!selectedProfile) return;
+    setRecurringLoading(true);
+    try {
+      const data = await api.getRecurringInvoices(selectedProfile.id);
+      setRecurringInvoices(data);
+    } catch (err) {
+      console.error("Failed to fetch recurring invoices:", err);
+      setRecurringInvoices([]);
+    } finally {
+      setRecurringLoading(false);
+    }
+  }, [selectedProfile]);
+
+  const handleSaveRecurringInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    try {
+      await api.createRecurringInvoice({
+        profile_id: selectedProfile.id,
+        client_email: recClientEmail,
+        client_telegram_id: recClientTg || undefined,
+        amount: parseFloat(recAmount),
+        service_name: recServiceName,
+        send_day: parseInt(recSendDay, 10),
+        send_month: recPeriodicity === "specific" ? recSendMonth : null,
+        include_act: recIncludeAct,
+        client_name: recClientName,
+        client_tax_id: recClientTaxId || undefined,
+        document_type: recDocumentType,
+        client_address: recClientAddress || undefined
+      });
+      setRecFormOpen(false);
+      fetchRecurringInvoices();
+      // Reset form
+      setRecClientEmail("");
+      setRecClientTg("");
+      setRecAmount("");
+      setRecServiceName("");
+      setRecIncludeAct(true);
+      setRecSendDay("1");
+      setRecPeriodicity("monthly");
+      setRecSendMonth(null);
+      setRecClientName("");
+      setRecClientTaxId("");
+      setRecDocumentType("act");
+      setRecClientAddress("");
+    } catch (err) {
+      console.error("Failed to create recurring invoice:", err);
+      alert("Не вдалося створити шаблон регулярного рахунку");
+    }
+  };
+
+  const handleDeleteRecurringInvoice = async (id: number) => {
+    if (!confirm("Ви впевнені, що хочете видалити цей шаблон регулярного рахунку?")) return;
+    try {
+      await api.deleteRecurringInvoice(id);
+      fetchRecurringInvoices();
+    } catch (err) {
+      console.error("Failed to delete recurring invoice:", err);
+      alert("Не вдалося видалити шаблон");
+    }
+  };
+
+  const handleOpenSendConfirm = (id: number, includeAct: boolean) => {
+    setTargetInvoiceId(id);
+    setSendIncludeAct(includeAct);
+    setIsSendConfirmOpen(true);
+  };
+
+  const handleConfirmSendInvoice = async () => {
+    if (!targetInvoiceId || !selectedProfile) return;
+    setSendingInvoice(true);
+    try {
+      const rec = recurringInvoices.find(item => item.id === targetInvoiceId);
+      const dayParam = rec ? rec.send_day : undefined;
+      const monthParam = rec ? rec.send_month : undefined;
+      
+      await api.sendInvoiceNow(targetInvoiceId, dayParam, monthParam, sendIncludeAct);
+      alert("Рахунок успішно згенеровано та надіслано клієнту!");
+      setIsSendConfirmOpen(false);
+      fetchRecurringInvoices();
+    } catch (err: any) {
+      console.error("Failed to trigger manual invoice generation:", err);
+      alert(err.response?.data?.detail || "Помилка при ручному запуску генерації");
+    } finally {
+      setSendingInvoice(false);
+    }
+  };
+
   useEffect(() => {
     fetchInvoices();
     if (selectedProfile) {
       fetchProfileDocs();
+      fetchRecurringInvoices();
     }
-  }, [selectedProfile, fetchInvoices, fetchProfileDocs]);
+  }, [selectedProfile, fetchInvoices, fetchProfileDocs, fetchRecurringInvoices]);
 
   useEffect(() => {
     if (activeTab === "company_docs") {
       fetchProfileDocs();
+    } else if (activeTab === "recurring") {
+      fetchRecurringInvoices();
     }
-  }, [activeTab, fetchProfileDocs]);
+  }, [activeTab, fetchProfileDocs, fetchRecurringInvoices]);
 
   useEffect(() => {
     if (defaultTemplates[templateName]) {
@@ -428,28 +547,42 @@ export default function InvoicesList() {
     }
   };
 
-  const openSendModal = (invoice: any) => {
+  const openSendModal = (invoice: any, forceIncludeInvoice?: boolean, forceIncludeAct?: boolean) => {
     setCurrentInvoice(invoice);
     setToEmail(invoice.client_email || "");
     
-    const docLabel = invoice.act 
-      ? (invoice.document_type === "waybill" ? " та видаткова накладна" : " та акт виконаних робіт")
-      : "";
+    const showInvoice = forceIncludeInvoice !== undefined ? forceIncludeInvoice : true;
+    const showAct = forceIncludeAct !== undefined ? forceIncludeAct : !!invoice.act;
     
-    const titleSubject = invoice.document_type === "contract" 
-      ? `Документ №${invoice.invoice_number}`
-      : `Рахунок №${invoice.invoice_number}${docLabel}`;
+    setIncludeInvoice(showInvoice);
+    setIncludeAct(showAct);
+    
+    let titleSubject = "";
+    let initialMsg = "";
+    
+    const docLabel = (invoice.document_type === "waybill" ? "видаткова накладна" : "акт виконаних робіт");
+    const docLabelCapital = (invoice.document_type === "waybill" ? "Видаткова накладна" : "Акт виконаних робіт");
+    
+    if (showInvoice && showAct && invoice.act) {
+      titleSubject = invoice.document_type === "contract" 
+        ? `Документ №${invoice.invoice_number}`
+        : `Рахунок №${invoice.invoice_number} та ${docLabel}`;
+      initialMsg = invoice.document_type === "contract"
+        ? `Доброго дня!\n\nВам надіслано документ: ${invoice.service_name} №${invoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+        : `Доброго дня!\n\nВам виставлено рахунок №${invoice.invoice_number} на суму ${invoice.amount.toLocaleString("uk-UA")} грн.\nТакож додається ${docLabel} №${invoice.act.act_number}.\n\nДокументи у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+    } else if (!showInvoice && showAct && invoice.act) {
+      titleSubject = `${docLabelCapital} №${invoice.act.act_number} до рахунку №${invoice.invoice_number}`;
+      initialMsg = `Доброго дня!\n\nВам надіслано ${docLabel} №${invoice.act.act_number} до рахунку №${invoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`;
+    } else {
+      titleSubject = invoice.document_type === "contract" 
+        ? `Документ №${invoice.invoice_number}`
+        : `Рахунок №${invoice.invoice_number}`;
+      initialMsg = invoice.document_type === "contract"
+        ? `Доброго дня!\n\nВам надіслано документ: ${invoice.service_name} №${invoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+        : `Доброго дня!\n\nВам виставлено рахунок №${invoice.invoice_number} на суму ${invoice.amount.toLocaleString("uk-UA")} грн.\n\nРахунок у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+    }
       
     setEmailSubject(titleSubject);
-    
-    const docDesc = invoice.act 
-      ? (invoice.document_type === "waybill" ? "\nТакож додається видаткова накладна №" + invoice.act.act_number + "." : "\nТакож додається акт виконаних робіт №" + invoice.act.act_number + ".")
-      : "";
-      
-    const initialMsg = invoice.document_type === "contract"
-      ? `Доброго дня!\n\nВам надіслано документ: ${invoice.service_name} №${invoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
-      : `Доброго дня!\n\nВам виставлено рахунок №${invoice.invoice_number} на суму ${invoice.amount.toLocaleString("uk-UA")} грн.${docDesc}\n\nДокументи у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
-      
     setEmailMessage(initialMsg);
     setModalMessage(null);
     setSendModalOpen(true);
@@ -460,7 +593,14 @@ export default function InvoicesList() {
     setIsSending(true);
     setModalMessage(null);
     try {
-      await invoicesApi.send(currentInvoice.id, toEmail, emailSubject, emailMessage);
+      await invoicesApi.send(
+        currentInvoice.id,
+        toEmail,
+        emailSubject,
+        emailMessage,
+        includeInvoice,
+        includeAct
+      );
       setModalMessage({ text: "Документ успішно надіслано контрагенту!", type: "success" });
       setTimeout(() => {
         setSendModalOpen(false);
@@ -764,6 +904,17 @@ export default function InvoicesList() {
           Всі збережені та відправлені
         </button>
         <button
+          onClick={() => setActiveTab("recurring")}
+          className={`py-3 px-6 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ${
+            activeTab === "recurring"
+              ? "border-indigo-550 text-indigo-400"
+              : "border-transparent text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Calendar className="w-4 h-4" />
+          Регулярні платежі (Авто-відправка)
+        </button>
+        <button
           onClick={() => setActiveTab("upload")}
           className={`py-3 px-6 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ${
             activeTab === "upload"
@@ -915,6 +1066,15 @@ export default function InvoicesList() {
                                   >
                                     <Download className="w-3.5 h-3.5" />
                                   </button>
+
+                                  {/* Send Invoice email */}
+                                  <button
+                                    onClick={() => openSendModal(inv, true, false)}
+                                    className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-indigo-400 rounded-md transition-colors"
+                                    title="Надіслати тільки рахунок"
+                                  >
+                                    <Send className="w-3.5 h-3.5" />
+                                  </button>
                                   
                                   {/* Sign Button */}
                                   {!(inv.is_signed || inv.status === "signed") ? (
@@ -954,6 +1114,15 @@ export default function InvoicesList() {
                                       title="Завантажити PDF"
                                     >
                                       <Download className="w-3.5 h-3.5" />
+                                    </button>
+
+                                    {/* Send Act email */}
+                                    <button
+                                      onClick={() => openSendModal(inv, false, true)}
+                                      className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-indigo-400 rounded-md transition-colors"
+                                      title={inv.document_type === "waybill" ? "Надіслати накладну на email" : "Надіслати акт на email"}
+                                    >
+                                      <Send className="w-3.5 h-3.5" />
                                     </button>
                                     
                                     {/* Sign Act Button */}
@@ -1017,6 +1186,361 @@ export default function InvoicesList() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Tab: Recurring / Automated Invoices */}
+      {activeTab === "recurring" && (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-900/40 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-6 gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-indigo-400" />
+                Авто-відправка рахунків (Регулярні платежі)
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Налаштуйте автоматичну відправку рахунків та супутніх актів/накладних вашим клієнтам за графіком.
+              </p>
+            </div>
+            {selectedProfile && !recFormOpen && (
+              <button
+                onClick={() => setRecFormOpen(true)}
+                className="px-4 py-2.5 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-lg transition-all flex items-center gap-1.5 self-start sm:self-auto"
+              >
+                <Plus className="w-4 h-4" />
+                Створити шаблон
+              </button>
+            )}
+          </div>
+
+          {!selectedProfile ? (
+            <div className="py-16 text-center border border-dashed border-slate-800 rounded-3xl bg-slate-900/10">
+              <Briefcase className="w-12 h-12 text-slate-650 mx-auto mb-3" />
+              <p className="text-sm font-bold text-slate-350">Профіль не вибрано</p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                Будь ласка, оберіть активний профіль компанії або ФОП у верхньому меню, щоб керувати регулярними платежами.
+              </p>
+            </div>
+          ) : recFormOpen ? (
+            /* Creation Form */
+            <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-6">
+              <form onSubmit={handleSaveRecurringInvoice} className="space-y-4">
+                <h4 className="text-sm font-bold text-slate-100">Новий шаблон авто-надсилання рахунків</h4>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Назва або ПІБ клієнта</label>
+                    <input
+                      type="text"
+                      placeholder="Наприклад: ТОВ 'Вектор' або Фізична особа"
+                      value={recClientName}
+                      onChange={(e) => setRecClientName(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">ЄДРПОУ / ІПН клієнта</label>
+                    <input
+                      type="text"
+                      placeholder="Наприклад: 12345678"
+                      value={recClientTaxId}
+                      onChange={(e) => setRecClientTaxId(e.target.value.replace(/\D/g, ""))}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Тип документа</label>
+                    <select
+                      value={recDocumentType}
+                      onChange={(e) => setRecDocumentType(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    >
+                      <option value="act">Послуга (Акт виконаних робіт)</option>
+                      <option value="waybill">Товар (Видаткова накладна)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Email клієнта *</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="client@company.com"
+                      value={recClientEmail}
+                      onChange={(e) => setRecClientEmail(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Telegram ID клієнта (опціонально)</label>
+                    <input
+                      type="text"
+                      placeholder="58291038"
+                      value={recClientTg}
+                      onChange={(e) => setRecClientTg(e.target.value.replace(/\D/g, ""))}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Адреса клієнта (для рахунку/акту)</label>
+                    <input
+                      type="text"
+                      placeholder="вул. Шевченка, 10, м. Львів"
+                      value={recClientAddress}
+                      onChange={(e) => setRecClientAddress(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Сума рахунку (грн) *</label>
+                    <input
+                      type="number"
+                      required
+                      step="0.01"
+                      placeholder="15000"
+                      value={recAmount}
+                      onChange={(e) => setRecAmount(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Опис послуги / Назва товару *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Інформаційно-консультаційні послуги"
+                      value={recServiceName}
+                      onChange={(e) => setRecServiceName(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 rounded-xl bg-slate-950/40 border border-slate-800">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-slate-200">Генерувати акт виконаних робіт / накладну</span>
+                    <span className="text-[10px] text-slate-400">Автоматично створювати та надсилати акт разом із рахунком</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={recIncludeAct}
+                    onChange={(e) => setRecIncludeAct(e.target.checked)}
+                    className="w-5 h-5 text-indigo-650 border-slate-800 rounded focus:ring-indigo-500/20 bg-slate-950/60 cursor-pointer"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Періодичність</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setRecPeriodicity("monthly"); setRecSendMonth(null); }}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${
+                        recPeriodicity === "monthly"
+                          ? "bg-indigo-500/10 border-indigo-500 text-indigo-400"
+                          : "border-slate-800 text-slate-400 hover:bg-slate-800"
+                      }`}
+                    >
+                      Щомісячно
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setRecPeriodicity("specific"); setRecSendMonth(new Date().getMonth() + 1); }}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${
+                        recPeriodicity === "specific"
+                          ? "bg-indigo-500/10 border-indigo-500 text-indigo-400"
+                          : "border-slate-800 text-slate-400 hover:bg-slate-800"
+                      }`}
+                    >
+                      Один раз на рік
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {recPeriodicity === "specific" && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Місяць відправки (1-12) *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="12"
+                        required
+                        value={recSendMonth || ""}
+                        onChange={(e) => setRecSendMonth(parseInt(e.target.value, 10) || null)}
+                        className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                      />
+                    </div>
+                  )}
+                  <div className={recPeriodicity === "monthly" ? "col-span-2" : ""}>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Число відправки щомісяця (1-28) *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="28"
+                      required
+                      placeholder="1"
+                      value={recSendDay}
+                      onChange={(e) => setRecSendDay(e.target.value)}
+                      className="block w-full px-4 py-2.5 bg-slate-950/60 border border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setRecFormOpen(false)}
+                    className="flex-1 py-2.5 rounded-xl border border-slate-850 hover:bg-slate-800 text-slate-400 text-xs font-bold transition-all"
+                  >
+                    Скасувати
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 rounded-xl bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold transition-all shadow-lg"
+                  >
+                    Створити шаблон
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            /* Schedules List */
+            <div className="space-y-4">
+              {recurringLoading ? (
+                <div className="py-16 text-center">
+                  <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mx-auto" />
+                </div>
+              ) : recurringInvoices.length === 0 ? (
+                <div className="py-16 text-center border border-dashed border-slate-800 rounded-3xl bg-slate-900/10">
+                  <Clock className="w-12 h-12 text-slate-650 mx-auto mb-3" />
+                  <p className="text-sm font-bold text-slate-350">Немає створених регулярних рахунків</p>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                    Створіть свій перший шаблон авто-надсилання регулярних рахунків контрагентам!
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {recurringInvoices.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-5 rounded-3xl border border-slate-800/80 bg-slate-900/30 backdrop-blur-xl flex flex-col justify-between space-y-4 hover:border-slate-700/80 transition-all shadow-md relative"
+                    >
+                      <div>
+                        <div className="flex justify-between items-start">
+                          <h4 className="font-bold text-slate-100 text-sm truncate max-w-[200px]" title={item.service_name}>
+                            {item.service_name}
+                          </h4>
+                          <span className="text-[10px] bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-md font-bold">
+                            {item.document_type === "waybill" ? "Товар + Накладна" : "Послуга + Акт"}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1 truncate">
+                          Клієнт: {item.client_name || "Не вказано"} ({item.client_email})
+                        </p>
+                        {item.client_telegram_id && (
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            Telegram ID: {item.client_telegram_id}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-4 mt-3">
+                          <span className="text-sm font-extrabold text-indigo-400">
+                            {item.amount.toLocaleString("uk-UA")} ₴
+                          </span>
+                          <span className="text-[10px] text-slate-400 bg-slate-950/60 border border-slate-850 px-2 py-0.5 rounded-md font-bold flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            {item.send_month ? `${item.send_month}-го місяця, ` : "Щомісяця, "}{item.send_day}-го числа
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2 pt-3.5 border-t border-slate-800/80">
+                        <button
+                          onClick={() => handleOpenSendConfirm(item.id, false)}
+                          className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-450 hover:text-white rounded-lg text-[10px] font-bold transition-all text-center"
+                        >
+                          Надіслати зараз
+                        </button>
+                        {item.include_act && (
+                          <button
+                            onClick={() => handleOpenSendConfirm(item.id, true)}
+                            className="flex-[1.2] py-1.5 bg-indigo-650/20 hover:bg-indigo-650/30 border border-indigo-500/20 text-indigo-400 hover:text-indigo-350 rounded-lg text-[10px] font-bold transition-all text-center"
+                          >
+                            Надіслати рахунок + акт
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteRecurringInvoice(item.id)}
+                          className="p-1.5 border border-slate-850 hover:border-rose-500/20 text-slate-500 hover:text-rose-450 hover:bg-rose-500/5 rounded-lg transition-all"
+                          title="Видалити шаблон"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Immediate Send Confirmation Dialog */}
+      {isSendConfirmOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+            <div>
+              <h3 className="text-lg font-bold text-slate-100">Підтвердження ручного запуску регулярного платежу</h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Буде негайно згенеровано та надіслано рахунок (та супутній Акт/Накладну, якщо вибрано) на email клієнта.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/40 border border-slate-800">
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-slate-200">Генерувати акт виконаних робіт / накладну</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={sendIncludeAct}
+                onChange={(e) => setSendIncludeAct(e.target.checked)}
+                className="w-5 h-5 text-indigo-650 border-slate-800 rounded cursor-pointer"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsSendConfirmOpen(false)}
+                className="flex-1 py-2 rounded-xl border border-slate-850 hover:bg-slate-800 text-slate-400 text-xs font-bold transition-all"
+              >
+                Скасувати
+              </button>
+              <button
+                onClick={handleConfirmSendInvoice}
+                disabled={sendingInvoice}
+                className="flex-1 py-2 rounded-xl bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+              >
+                {sendingInvoice ? (
+                  <>
+                    <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                    <span>Надсилання...</span>
+                  </>
+                ) : (
+                  <span>Надіслати зараз</span>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1506,6 +2030,92 @@ export default function InvoicesList() {
                 />
               </div>
 
+              {currentInvoice?.act && (
+                <div className="flex gap-4 p-3 bg-slate-950/40 rounded-xl border border-slate-850">
+                  <label className="flex items-center space-x-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeInvoice}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setIncludeInvoice(val);
+                        const docLabel = (currentInvoice.document_type === "waybill" ? "видаткова накладна" : "акт виконаних робіт");
+                        const docLabelCapital = (currentInvoice.document_type === "waybill" ? "Видаткова накладна" : "Акт виконаних робіт");
+                        
+                        let titleSubject = "";
+                        let initialMsg = "";
+                        
+                        if (val && includeAct) {
+                          titleSubject = currentInvoice.document_type === "contract"
+                            ? `Документ №${currentInvoice.invoice_number}`
+                            : `Рахунок №${currentInvoice.invoice_number} та ${docLabel}`;
+                          initialMsg = currentInvoice.document_type === "contract"
+                            ? `Доброго дня!\n\nВам надіслано документ: ${currentInvoice.service_name} №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+                            : `Доброго дня!\n\nВам виставлено рахунок №${currentInvoice.invoice_number} на суму ${currentInvoice.amount.toLocaleString("uk-UA")} грн.\nТакож додається ${docLabel} №${currentInvoice.act.act_number}.\n\nДокументи у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        } else if (!val && includeAct) {
+                          titleSubject = `${docLabelCapital} №${currentInvoice.act.act_number} до рахунку №${currentInvoice.invoice_number}`;
+                          initialMsg = `Доброго дня!\n\nВам надіслано ${docLabel} №${currentInvoice.act.act_number} до рахунку №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        } else {
+                          titleSubject = currentInvoice.document_type === "contract"
+                            ? `Документ №${currentInvoice.invoice_number}`
+                            : `Рахунок №${currentInvoice.invoice_number}`;
+                          initialMsg = currentInvoice.document_type === "contract"
+                            ? `Доброго дня!\n\nВам надіслано документ: ${currentInvoice.service_name} №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+                            : `Доброго дня!\n\nВам виставлено рахунок №${currentInvoice.invoice_number} на суму ${currentInvoice.amount.toLocaleString("uk-UA")} грн.\n\nРахунок у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        }
+                        setEmailSubject(titleSubject);
+                        setEmailMessage(initialMsg);
+                      }}
+                      className="rounded border-slate-800 text-indigo-650 focus:ring-indigo-500/20 bg-slate-950/60 w-4 h-4 cursor-pointer"
+                    />
+                    <span className="text-xs font-medium text-slate-350">
+                      {currentInvoice?.document_type === "contract" ? "Договір" : "Рахунок"}
+                    </span>
+                  </label>
+                  
+                  <label className="flex items-center space-x-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeAct}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setIncludeAct(val);
+                        const docLabel = (currentInvoice.document_type === "waybill" ? "видаткова накладна" : "акт виконаних робіт");
+                        const docLabelCapital = (currentInvoice.document_type === "waybill" ? "Видаткова накладна" : "Акт виконаних робіт");
+                        
+                        let titleSubject = "";
+                        let initialMsg = "";
+                        
+                        if (includeInvoice && val) {
+                          titleSubject = currentInvoice.document_type === "contract"
+                            ? `Документ №${currentInvoice.invoice_number}`
+                            : `Рахунок №${currentInvoice.invoice_number} та ${docLabel}`;
+                          initialMsg = currentInvoice.document_type === "contract"
+                            ? `Доброго дня!\n\nВам надіслано документ: ${currentInvoice.service_name} №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+                            : `Доброго дня!\n\nВам виставлено рахунок №${currentInvoice.invoice_number} на суму ${currentInvoice.amount.toLocaleString("uk-UA")} грн.\nТакож додається ${docLabel} №${currentInvoice.act.act_number}.\n\nДокументи у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        } else if (!includeInvoice && val) {
+                          titleSubject = `${docLabelCapital} №${currentInvoice.act.act_number} до рахунку №${currentInvoice.invoice_number}`;
+                          initialMsg = `Доброго дня!\n\nВам надіслано ${docLabel} №${currentInvoice.act.act_number} до рахунку №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        } else {
+                          titleSubject = currentInvoice.document_type === "contract"
+                            ? `Документ №${currentInvoice.invoice_number}`
+                            : `Рахунок №${currentInvoice.invoice_number}`;
+                          initialMsg = currentInvoice.document_type === "contract"
+                            ? `Доброго дня!\n\nВам надіслано документ: ${currentInvoice.service_name} №${currentInvoice.invoice_number}.\n\nФайл прикріплено до листа.\n\nДякуємо за співпрацю!`
+                            : `Доброго дня!\n\nВам виставлено рахунок №${currentInvoice.invoice_number} на суму ${currentInvoice.amount.toLocaleString("uk-UA")} грн.\n\nРахунок у форматі PDF прикріплено до листа.\n\nДякуємо за співпрацю!`;
+                        }
+                        setEmailSubject(titleSubject);
+                        setEmailMessage(initialMsg);
+                      }}
+                      className="rounded border-slate-800 text-indigo-650 focus:ring-indigo-500/20 bg-slate-950/60 w-4 h-4 cursor-pointer"
+                    />
+                    <span className="text-xs font-medium text-slate-350">
+                      {currentInvoice?.document_type === "waybill" ? "Видаткова накладна" : "Акт виконаних робіт"}
+                    </span>
+                  </label>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Тема листа</label>
                 <input
@@ -1536,7 +2146,7 @@ export default function InvoicesList() {
               </button>
               <button
                 onClick={handleSendInvoice}
-                disabled={isSending}
+                disabled={isSending || (!includeInvoice && !includeAct)}
                 className="px-4 py-2 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-lg transition-all flex items-center gap-1.5"
               >
                 {isSending ? (

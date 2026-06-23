@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 
-const API_BASE_URL = 'https://unitas-backend.fly.dev';
+const API_BASE_URL = 'http://192.168.0.132:8000';
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -664,6 +664,179 @@ export const api = {
       profile_id: profileId,
       text,
     });
+    return response.data;
+  },
+
+  // Resident Member APIs
+  searchOsbb: async (query: string) => {
+    const response = await client.get(`/api/osbb/search`, { params: { query } });
+    return response.data;
+  },
+
+  getOsbbBySlug: async (slug: string) => {
+    const response = await client.get(`/api/osbb/by-slug/${slug}`);
+    return response.data;
+  },
+
+  memberRegister: async (data: { slug: string; account_number: string; password: string; full_name?: string; phone?: string; email?: string; push_token?: string; platform?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/auth/member/register`, formData);
+    return response.data;
+  },
+
+  memberLogin: async (data: { slug: string; account_number: string; password: string; push_token?: string; platform?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/auth/member/login`, formData);
+    return response.data;
+  },
+
+  getMemberDashboard: async (token: string) => {
+    const response = await client.get(`/api/member/dashboard`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  submitMemberMeterReading: async (token: string, meterId: number, data: { reading_value: number; reading_date?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/meters/${meterId}/readings`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberTransparency: async (token: string) => {
+    const response = await client.get(`/api/member/transparency`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberNeighbors: async (token: string) => {
+    const response = await client.get(`/api/member/neighbors`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberSurveys: async (token: string) => {
+    const response = await client.get(`/api/member/surveys`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  voteMemberSurvey: async (token: string, surveyId: number, data: { vote: string; comment?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/surveys/${surveyId}/vote`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberTickets: async (token: string) => {
+    const response = await client.get(`/api/member/tickets`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberTicket: async (token: string, data: { title: string; description: string; photo_url?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/tickets`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberMonoInvoice: async (token: string, data: { amount: number; charge_type?: string; description?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/billing/invoice`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  saveMemberPushToken: async (token: string, data: { token: string; platform?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/push-token`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  // Premium Features
+  getMemberDocuments: async (token: string) => {
+    const response = await client.get(`/api/member/documents`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberNotificationSettings: async (token: string) => {
+    const response = await client.get(`/api/member/notifications/settings`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  updateMemberNotificationSettings: async (token: string, data: { email_reminders_enabled: boolean; push_reminders_enabled: boolean; payment_reminder_days: number; meter_reminder_days: number }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/notifications/settings`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  triggerTestMemberNotification: async (token: string) => {
+    const response = await client.post(`/api/member/notifications/test`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  simulateNotificationCheck: async (token: string) => {
+    const response = await client.post(`/api/member/notifications/check-reminders`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberSecurityDevices: async (token: string) => {
+    const response = await client.get(`/api/member/security/devices`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  unlockMemberSecurityDevice: async (token: string, deviceId: number) => {
+    const response = await client.post(`/api/member/security/unlock/${deviceId}`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberRecreationZones: async (token: string) => {
+    const response = await client.get(`/api/member/bookings/zones`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMyBookings: async (token: string) => {
+    const response = await client.get(`/api/member/bookings/my`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberBooking: async (token: string, data: { zone_id: number; booking_date: string; start_time: string; end_time: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/bookings`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  cancelMemberBooking: async (token: string, bookingId: number) => {
+    const response = await client.post(`/api/member/bookings/${bookingId}/cancel`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMyServices: async (token: string) => {
+    const response = await client.get(`/api/member/services/my`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberServiceOrder: async (token: string, data: { service_type: string; description: string; preferred_time?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/services/order`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberHeatingDevice: async (token: string) => {
+    const response = await client.get(`/api/member/smart/heating`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  controlMemberHeating: async (token: string, data: { target_temperature: number; mode: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/smart/heating/control`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getSmartMetersTransmissionLogs: async (token: string) => {
+    const response = await client.get(`/api/member/smart/meters/logs`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberContacts: async (token: string) => {
+    const response = await client.get(`/api/member/contacts`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  searchNearbyOsbb: async (lat: number, lon: number, radius?: number) => {
+    const response = await client.get(`/api/osbb/nearby`, { params: { lat, lon, radius } });
     return response.data;
   },
 };
