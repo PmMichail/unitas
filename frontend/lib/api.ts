@@ -109,6 +109,55 @@ export const api = {
     return response.data;
   },
 
+  getMemberContacts: async (token: string) => {
+    const response = await client.get("/api/member/contacts", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberSecurityDevices: async (token: string) => {
+    const response = await client.get("/api/member/security/devices", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  unlockMemberSecurityDevice: async (token: string, deviceId: number) => {
+    const response = await client.post(`/api/member/security/unlock/${deviceId}`, {}, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberRecreationZones: async (token: string) => {
+    const response = await client.get("/api/member/bookings/zones", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberBookings: async (token: string) => {
+    const response = await client.get("/api/member/bookings/my", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberBooking: async (token: string, data: { zone_id: number; booking_date: string; start_time: string; end_time: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post("/api/member/bookings", formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  cancelMemberBooking: async (token: string, bookingId: number) => {
+    const response = await client.post(`/api/member/bookings/${bookingId}/cancel`, {}, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberDocuments: async (token: string) => {
+    const response = await client.get("/api/member/documents", { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  downloadMemberDocument: async (token: string, docId: number) => {
+    const response = await client.get(`/api/member/documents/${docId}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+
   // Profiles
   getProfiles: async (telegramId: string) => {
     const response = await client.get(`/api/profiles`, {
