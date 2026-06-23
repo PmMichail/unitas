@@ -1605,7 +1605,7 @@ export default function BillingPage() {
                   : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-250"
               }`}
             >
-              Зіставлення платежів ({transactions.filter(t => t.direction === "in").length})
+              Розрахунки ({transactions.filter(t => t.direction === "in").length})
             </button>
             <button
               onClick={() => setActiveTab("meters")}
