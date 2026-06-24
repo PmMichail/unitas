@@ -92,6 +92,29 @@ export default function LoginScreen() {
   const [resEmail, setResEmail] = useState('');
   const [locLoading, setLocLoading] = useState(false);
 
+  // Address and Role Select States for Registration
+  const [streetsData, setStreetsData] = useState<any>(null);
+  const [selectedStreet, setSelectedStreet] = useState('');
+  const [selectedNumber, setSelectedNumber] = useState('');
+  const [resRole, setResRole] = useState<'tenant' | 'owner'>('tenant');
+  const [streetModalVisible, setStreetModalVisible] = useState(false);
+  const [numberModalVisible, setNumberModalVisible] = useState(false);
+  const [roleModalVisible, setRoleModalVisible] = useState(false);
+
+  // Fetch available OSBB addresses for registration
+  useEffect(() => {
+    const loadAddresses = async () => {
+      if (!selectedOsbb || !isRegister) return;
+      try {
+        const data = await api.getOsbbAvailableAddresses(selectedOsbb.slug);
+        setStreetsData(data);
+      } catch (err: any) {
+        console.error("Failed to load available addresses", err);
+      }
+    };
+    loadAddresses();
+  }, [selectedOsbb, isRegister]);
+
   // Pending verification view state
   const [isPendingVerification, setIsPendingVerification] = useState(false);
   const [pendingMemberId, setPendingMemberId] = useState<number | null>(null);
@@ -452,8 +475,12 @@ export default function LoginScreen() {
       Alert.alert('Помилка', 'Будь ласка, знайдіть та виберіть ваше ОСББ/організацію.');
       return;
     }
-    if (!resAccountNumber.trim() || !resPassword.trim() || !resFullName.trim() || !resPhone.trim() || !resEmail.trim()) {
-      Alert.alert('Помилка', 'Будь ласка, заповніть обов\'язкові поля для первинної реєстрації мешканця.');
+    if (!selectedNumber) {
+      Alert.alert('Помилка', 'Будь ласка, оберіть вашу адресу (номер будинку / ділянки)');
+      return;
+    }
+    if (!resPassword.trim() || !resFullName.trim() || !resPhone.trim() || !resEmail.trim()) {
+      Alert.alert('Помилка', 'Будь ласка, заповніть всі обов\'язкові поля для первинної реєстрації мешканця.');
       return;
     }
 
@@ -461,7 +488,9 @@ export default function LoginScreen() {
     try {
       const payload = {
         slug: selectedOsbb.slug,
-        account_number: resAccountNumber.trim(),
+        street: selectedStreet && selectedStreet !== 'no_street' ? selectedStreet : undefined,
+        house_number: selectedNumber,
+        role: resRole,
         password: resPassword.trim(),
         full_name: resFullName.trim(),
         phone: resPhone.trim(),
@@ -1008,19 +1037,54 @@ export default function LoginScreen() {
                     ) : (
                       /* Resident Registration Form */
                       <>
-                        <Input
-                          label="Особовий рахунок / № квартири"
-                          placeholder="Вкажіть ваш рахунок (наприклад, ZK-128 або 128)"
-                          value={resAccountNumber}
-                          onChangeText={setResAccountNumber}
-                          autoCapitalize="characters"
-                        />
-                        <Input
-                          label="Повне ім'я (ПІБ)"
-                          placeholder="Іванов Іван Іванович"
-                          value={resFullName}
-                          onChangeText={setResFullName}
-                        />
+                        <Text style={[styles.fieldLabel, { color: colors.text }]}>Вулиця</Text>
+                        <Pressable 
+                          style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
+                          onPress={() => setStreetModalVisible(true)}
+                        >
+                          <Text style={[styles.selectorBtnText, { color: selectedStreet ? colors.text : colors.textMuted }]}>
+                            {selectedStreet === 'no_street' ? 'Без вулиці' : selectedStreet || 'Оберіть вулицю...'}
+                          </Text>
+                          <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
+                        </Pressable>
+
+                        <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Номер будинку / ділянки</Text>
+                        <Pressable 
+                          style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }, !selectedStreet && { opacity: 0.5 }]} 
+                          onPress={() => {
+                            if (!selectedStreet) {
+                              Alert.alert('Помилка', 'Спочатку оберіть вулицю.');
+                              return;
+                            }
+                            setNumberModalVisible(true);
+                          }}
+                          disabled={!selectedStreet}
+                        >
+                          <Text style={[styles.selectorBtnText, { color: selectedNumber ? colors.text : colors.textMuted }]}>
+                            {selectedNumber ? `${selectedNumber}` : 'Оберіть номер...'}
+                          </Text>
+                          <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
+                        </Pressable>
+
+                        <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Ваш статус (Роль)</Text>
+                        <Pressable 
+                          style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
+                          onPress={() => setRoleModalVisible(true)}
+                        >
+                          <Text style={[styles.selectorBtnText, { color: colors.text }]}>
+                            {resRole === 'owner' ? 'Власник' : 'Мешканець (орендар, член родини)'}
+                          </Text>
+                          <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
+                        </Pressable>
+
+                        <View style={{ marginTop: 12 }}>
+                          <Input
+                            label="Повне ім'я (ПІБ)"
+                            placeholder="Іванов Іван Іванович"
+                            value={resFullName}
+                            onChangeText={setResFullName}
+                          />
+                        </View>
                         <Input
                           label="Номер телефону"
                           placeholder="+380991234567"
@@ -1154,6 +1218,170 @@ export default function LoginScreen() {
           </Card>
         </View>
       </Modal>
+
+      {/* Street Selection Modal */}
+      <Modal
+        visible={streetModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setStreetModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Card style={[styles.modalCard, { backgroundColor: colors.background, borderColor: colors.cardBorder, maxHeight: '80%', padding: 20 }]}>
+            <Text style={[styles.modalTitle, { color: colors.text, marginBottom: 12, fontSize: 18, fontWeight: 'bold' }]}>Оберіть вулицю</Text>
+            <ScrollView style={{ width: '100%', marginBottom: 12 }}>
+              {streetsData?.streets && Object.keys(streetsData.streets).map((st) => (
+                <Pressable
+                  key={st}
+                  style={({ pressed }) => [
+                    styles.modalItem,
+                    { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
+                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+                  ]}
+                  onPress={() => {
+                    setSelectedStreet(st);
+                    setSelectedNumber('');
+                    setStreetModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>{st}</Text>
+                </Pressable>
+              ))}
+              {streetsData?.no_street_properties?.length > 0 && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modalItem,
+                    { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
+                    pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+                  ]}
+                  onPress={() => {
+                    setSelectedStreet('no_street');
+                    setSelectedNumber('');
+                    setStreetModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>Без вулиці</Text>
+                </Pressable>
+              )}
+            </ScrollView>
+            <Button
+              title="Скасувати"
+              onPress={() => setStreetModalVisible(false)}
+              variant="outline"
+              style={{ width: '100%' }}
+            />
+          </Card>
+        </View>
+      </Modal>
+
+      {/* Number Selection Modal */}
+      <Modal
+        visible={numberModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setNumberModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Card style={[styles.modalCard, { backgroundColor: colors.background, borderColor: colors.cardBorder, maxHeight: '80%', padding: 20 }]}>
+            <Text style={[styles.modalTitle, { color: colors.text, marginBottom: 12, fontSize: 18, fontWeight: 'bold' }]}>Оберіть номер будинку / ділянки</Text>
+            <ScrollView style={{ width: '100%', marginBottom: 12 }}>
+              {selectedStreet === 'no_street'
+                ? streetsData?.no_street_properties?.map((p: any) => (
+                    <Pressable
+                      key={p.identifier}
+                      style={({ pressed }) => [
+                        styles.modalItem,
+                        { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
+                        pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+                      ]}
+                      onPress={() => {
+                        setSelectedNumber(p.identifier);
+                        setNumberModalVisible(false);
+                      }}
+                    >
+                      <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>
+                        {p.property_type} {p.number}
+                      </Text>
+                    </Pressable>
+                  ))
+                : selectedStreet &&
+                  streetsData?.streets?.[selectedStreet]?.map((p: any) => (
+                    <Pressable
+                      key={p.identifier}
+                      style={({ pressed }) => [
+                        styles.modalItem,
+                        { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
+                        pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+                      ]}
+                      onPress={() => {
+                        setSelectedNumber(p.identifier);
+                        setNumberModalVisible(false);
+                      }}
+                    >
+                      <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>
+                        {p.property_type} {p.number}
+                      </Text>
+                    </Pressable>
+                  ))}
+            </ScrollView>
+            <Button
+              title="Скасувати"
+              onPress={() => setNumberModalVisible(false)}
+              variant="outline"
+              style={{ width: '100%' }}
+            />
+          </Card>
+        </View>
+      </Modal>
+
+      {/* Role Selection Modal */}
+      <Modal
+        visible={roleModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setRoleModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Card style={[styles.modalCard, { backgroundColor: colors.background, borderColor: colors.cardBorder, padding: 20 }]}>
+            <Text style={[styles.modalTitle, { color: colors.text, marginBottom: 16, fontSize: 18, fontWeight: 'bold' }]}>Оберіть ваш статус</Text>
+            
+            <Pressable
+              style={({ pressed }) => [
+                styles.modalItem,
+                { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 16 },
+                pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+              ]}
+              onPress={() => {
+                setResRole('tenant');
+                setRoleModalVisible(false);
+              }}
+            >
+              <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>Мешканець (орендар, член родини)</Text>
+            </Pressable>
+            
+            <Pressable
+              style={({ pressed }) => [
+                styles.modalItem,
+                { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 16 },
+                pressed && { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }
+              ]}
+              onPress={() => {
+                setResRole('owner');
+                setRoleModalVisible(false);
+              }}
+            >
+              <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>Власник</Text>
+            </Pressable>
+            
+            <Button
+              title="Скасувати"
+              onPress={() => setRoleModalVisible(false)}
+              variant="outline"
+              style={{ width: '100%', marginTop: 16 }}
+            />
+          </Card>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1161,6 +1389,41 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+    opacity: 0.7,
+  },
+  selectorBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  selectorBtnText: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  modalScroll: {
+    maxHeight: 250,
+    width: '100%',
+  },
+  modalItem: {
+    width: '100%',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+  },
+  modalItemText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   scrollContainer: {
     flexGrow: 1,

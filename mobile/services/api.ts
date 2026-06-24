@@ -678,6 +678,11 @@ export const api = {
     return response.data;
   },
 
+  getOsbbAvailableAddresses: async (slug: string) => {
+    const response = await client.get(`/api/osbb/by-slug/${slug}/available-addresses`);
+    return response.data;
+  },
+
   memberRegister: async (data: { slug: string; account_number: string; password: string; full_name?: string; phone?: string; email?: string; push_token?: string; platform?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/auth/member/register`, formData);
