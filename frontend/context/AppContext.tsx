@@ -39,6 +39,8 @@ interface Profile {
   is_member_module_active?: boolean;
   slug?: string;
   color_theme?: string;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 interface SubscriptionInfo {

@@ -53,7 +53,7 @@ export const api = {
     return response.data;
   },
 
-  memberLogin: async (data: { slug: string; account_number: string; password: string }) => {
+  memberLogin: async (data: { slug: string; phone: string; password: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/auth/member/login`, formData);
     return response.data;
@@ -237,6 +237,8 @@ export const api = {
       mono_api_token?: string;
       slug?: string;
       color_theme?: string;
+      lat?: number | null;
+      lon?: number | null;
     }
   ) => {
     const formData = toFormData(data);
@@ -269,6 +271,7 @@ export const api = {
     user_id?: number;
     property_type?: string;
     parent_id?: number;
+    role?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/profiles/${profileId}/members`, formData);
@@ -299,6 +302,7 @@ export const api = {
     user_id?: number;
     property_type?: string;
     parent_id?: number;
+    role?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.put(`/api/profiles/${profileId}/members/${memberId}`, formData);
@@ -307,6 +311,32 @@ export const api = {
 
   deleteMember: async (profileId: number, memberId: number, userId?: number) => {
     const response = await client.delete(`/api/profiles/${profileId}/members/${memberId}`, {
+      params: userId ? { user_id: userId } : undefined,
+    });
+    return response.data;
+  },
+
+  getProfileSurveys: async (profileId: number, userId?: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/surveys`, {
+      params: userId ? { user_id: userId } : undefined,
+    });
+    return response.data;
+  },
+
+  createProfileSurvey: async (profileId: number, data: { title: string; description?: string; ends_at?: string; user_id?: number }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/profiles/${profileId}/surveys`, formData);
+    return response.data;
+  },
+
+  closeProfileSurvey: async (profileId: number, surveyId: number, userId?: number) => {
+    const formData = toFormData({ user_id: userId });
+    const response = await client.post(`/api/profiles/${profileId}/surveys/${surveyId}/close`, formData);
+    return response.data;
+  },
+
+  deleteProfileSurvey: async (profileId: number, surveyId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/surveys/${surveyId}`, {
       params: userId ? { user_id: userId } : undefined,
     });
     return response.data;
@@ -658,6 +688,25 @@ export const api = {
     return response.data;
   },
 
+  updateRecurringInvoice: async (id: number, data: {
+    profile_id: number;
+    client_email: string;
+    client_telegram_id?: string;
+    amount: number;
+    service_name: string;
+    send_day: number;
+    include_act: boolean;
+    send_month?: number | null;
+    client_name?: string;
+    client_tax_id?: string;
+    document_type: string;
+    client_address?: string;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/invoices/recurring/${id}`, formData);
+    return response.data;
+  },
+
   deleteRecurringInvoice: async (id: number) => {
     const response = await client.delete(`/api/invoices/recurring/${id}`);
     return response.data;
@@ -681,6 +730,21 @@ export const api = {
 
   getInvoicesHistory: async (profileId: number) => {
     const response = await client.get(`/api/invoices/${profileId}`);
+    return response.data;
+  },
+
+  updateInvoice: async (id: number, data: {
+    invoice_number: string;
+    service_name: string;
+    amount: number;
+    client_email: string;
+    client_name?: string;
+    client_tax_id?: string;
+    client_address?: string;
+    due_date?: string;
+  }) => {
+    const formData = toFormData(data);
+    const response = await client.put(`/api/invoices/${id}`, formData);
     return response.data;
   },
 

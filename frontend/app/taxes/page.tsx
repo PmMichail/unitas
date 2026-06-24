@@ -233,7 +233,8 @@ export default function TaxesPage() {
     setGeneratingId(liability.id);
     setErrorMsg(null);
     try {
-      const response = await fetch("https://unitas-backend.fly.dev/api/payments/create", {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+      const response = await fetch(`${apiBase}/api/payments/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

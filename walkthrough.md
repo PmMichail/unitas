@@ -112,3 +112,31 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
 - **Yearly**: Payment set to `paid`, subscription activated for `yearly`, expires in **365 days**.
 - Resident cabinet and member modules were correctly enabled on the profile.
 
+
+## 5. UniTax Resident Search, Geolocation, and Member Enhancements
+
+### 1. Resident Login & Unique Phone Constraint
+- Modified the login flow under `/osbb/[slug]/login` to authenticate using **phone number** instead of account number, matching the backend refactoring.
+- Added strict uniqueness constraint: a phone number can only be registered to a single member property across the platform, preventing duplicate resident registrations.
+
+### 2. Tenant Voting Restrictions & Quorum Calculation
+- Restricted members with the role of `'tenant'` ("Мешканець") from participating in surveys.
+- Disabled voting buttons on the resident dashboard (`/osbb/[slug]/dashboard`) and added tooltip warnings for tenant accounts.
+- Updated the quorum calculation algorithm to exclude tenant-occupied properties from the eligible area, ensuring quorum is calculated based solely on owner areas.
+
+### 3. Survey Management and Geolocation Pinning
+- Implemented surveys/polls management cabinet for accountants to list, create, close, and delete polls.
+- Added Geolocation card in the accountant's cabinet to capture and lock the OSBB coordinates via `navigator.geolocation`.
+- Fixed a backend `NameError: name 'starting_debt_pdfo' is not defined` inside `update_profile_endpoint`.
+
+### 4. Geolocation Search on Resident Search Page
+- Added "Пошук" (Search) button next to the search input on `/osbb/search`.
+- Integrated "Найближчі ОСББ" (Nearby OSBBs) button querying `/api/osbb/nearby` to list associations within close range of the resident's current coordinates.
+
+---
+
+## E2E Validation Results
+- Created an automated integration test script `scratch/test_member_enhancements.py` testing registration, duplicate phone checks, survey creation, voting rules, quorum calculations, profile updates, and nearby geolocation search.
+- **Result**: All checks executed and passed successfully.
+- Verified Next.js build compilation with 100% success (`npm run build` completed successfully).
+

@@ -556,6 +556,182 @@ class UniversalParser:
             print(f"[Monobank Parser Error] {e}")
             return self._parse_with_ai(file_path, f"Помилка парсингу Monobank: {str(e)}")
 
+    def _parse_oschadbank_pdf(self, file_path):
+        """Парсинг PDF виписок Ощадбанку за допомогою pdfplumber та геометричного аналізу"""
+        import pdfplumber
+        transactions = []
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page_idx, page in enumerate(pdf.pages):
+                    words = page.extract_words(x_tolerance=3, y_tolerance=3)
+                    if not words:
+                        continue
+                    
+                    # Sort words by top, then by x0
+                    words_sorted = sorted(words, key=lambda w: (w["top"], w["x0"]))
+                    
+                    # Group into lines (tolerance 3.0 to keep lines separate)
+                    lines = []
+                    current_line = []
+                    for w in words_sorted:
+                        if not current_line:
+                            current_line.append(w)
+                        else:
+                            first_top = current_line[0]["top"]
+                            if abs(w["top"] - first_top) < 3.0:
+                                current_line.append(w)
+                            else:
+                                lines.append(current_line)
+                                current_line = [w]
+                    if current_line:
+                        lines.append(current_line)
+                        
+                    # Classify words on each line into columns
+                    rows = []
+                    for line in lines:
+                        line_sorted = sorted(line, key=lambda w: w["x0"])
+                        row = {
+                            "date": [],
+                            "time": [],
+                            "details": [],
+                            "amount": [],
+                            "currency": [],
+                            "valdate": [],
+                            "comm": [],
+                            "net": []
+                        }
+                        for w in line_sorted:
+                            x0 = w["x0"]
+                            text = w["text"]
+                            if x0 < 80:
+                                row["date"].append(text)
+                            elif 80 <= x0 < 120:
+                                row["time"].append(text)
+                            elif 120 <= x0 < 280:
+                                row["details"].append(text)
+                            elif 280 <= x0 < 335:
+                                row["amount"].append(text)
+                            elif 335 <= x0 < 365:
+                                row["currency"].append(text)
+                            elif 365 <= x0 < 420:
+                                row["valdate"].append(text)
+                            elif 420 <= x0 < 500:
+                                row["comm"].append(text)
+                            else:
+                                row["net"].append(text)
+                        
+                        avg_top = sum([w["top"] for w in line]) / len(line)
+                        
+                        rows.append({
+                            "top": avg_top,
+                            "date": "".join(row["date"]).strip(),
+                            "time": "".join(row["time"]).strip(),
+                            "details": " ".join(row["details"]).strip(),
+                            "amount": "".join(row["amount"]).strip(),
+                            "currency": "".join(row["currency"]).strip(),
+                            "valdate": "".join(row["valdate"]).strip(),
+                            "comm": "".join(row["comm"]).strip(),
+                            "net": "".join(row["net"]).strip()
+                        })
+                    
+                    # Find transaction headers (rows where date matches DD/MM/YY or DD/MM/YYYY and time matches HH:MM)
+                    tx_headers = []
+                    for idx, r in enumerate(rows):
+                        date_str = r["date"]
+                        time_str = r["time"]
+                        if re.match(r"^\d{2}/\d{2}/\d{2,4}$", date_str) and re.match(r"^\d{2}:\d{2}$", time_str):
+                            tx_headers.append((idx, r["top"]))
+                    
+                    if not tx_headers:
+                        continue
+                        
+                    first_tx_top = tx_headers[0][1]
+                    last_tx_top = tx_headers[-1][1]
+                    
+                    # Calculate midpoints
+                    midpoints = []
+                    for i in range(len(tx_headers) - 1):
+                        midpoints.append((tx_headers[i][1] + tx_headers[i+1][1]) / 2.0)
+                        
+                    # Initialize page transactions structure
+                    page_txs = []
+                    for header_idx, _ in tx_headers:
+                        h_row = rows[header_idx]
+                        page_txs.append({
+                            "date": h_row["date"],
+                            "time": h_row["time"],
+                            "details_parts": [h_row["details"]] if h_row["details"] else [],
+                            "amount_str": h_row["net"] if h_row["net"] else h_row["amount"],
+                            "currency": h_row["currency"]
+                        })
+                        
+                    # Distribute details to corresponding transactions based on midpoint boundaries
+                    for r in rows:
+                        line_top = r["top"]
+                        if line_top < first_tx_top - 5:
+                            continue
+                        if line_top > last_tx_top + 60:
+                            continue
+                            
+                        # Find matching tx index
+                        tx_idx = len(tx_headers) - 1
+                        for i, mid in enumerate(midpoints):
+                            if line_top < mid:
+                                tx_idx = i
+                                break
+                        
+                        # Ignore total summary rows, section headers, column headers, etc.
+                        text_clean = r["details"].lower() or r["date"].lower()
+                        ignore_purpose_keywords = [
+                            "всього", "всьго", "кредит", "дебет", "комісія", "комісiя",
+                            "транзакції по", "транзакцiї по", "card #", "account #",
+                            "дата", "деталі транзакції", "деталi транзакцiї", "сума"
+                        ]
+                        if any(kw in text_clean for kw in ignore_purpose_keywords):
+                            continue
+                        
+                        # Filter out lines that do not contain any letters in details
+                        if r["details"] and not re.search(r"[a-zA-Zа-яА-ЯёЁіІїЇєЄґҐ]", r["details"]):
+                            continue
+                        
+                        # Append purpose details if it's not the header row itself
+                        is_header_row = any(abs(line_top - h_top) < 1.0 for _, h_top in tx_headers)
+                        if not is_header_row and r["details"]:
+                            page_txs[tx_idx]["details_parts"].append(r["details"])
+                    
+                    # Process and format the transactions
+                    for tx in page_txs:
+                        purpose = " ".join(tx["details_parts"]).strip()
+                        purpose = re.sub(r"\s+", " ", purpose)
+                        
+                        amount_val = self._clean_number(tx["amount_str"])
+                        
+                        # Reformat date DD/MM/YY to YYYY-MM-DD
+                        date_str = tx["date"]
+                        parts = date_str.split("/")
+                        if len(parts) == 3:
+                            d, m, y = parts
+                            if len(y) == 2:
+                                y = "20" + y
+                            date_str = f"{y}-{m}-{d}"
+                        
+                        direction = "in" if amount_val > 0 else "out"
+                        
+                        tx_dict = self._create_transaction_dict(
+                            date=date_str,
+                            amount=amount_val,
+                            purpose=purpose,
+                            contragent=self._extract_contragent(purpose),
+                            bank_name="Ощадбанк"
+                        )
+                        tx_dict["bank_name"] = "Ощадбанк"
+                        transactions.append(tx_dict)
+            
+            return transactions
+        except Exception as e:
+            print(f"[Oschadbank Parser Error] {e}")
+            return self._parse_with_ai(file_path, f"Помилка парсингу Ощадбанк: {str(e)}")
+
     def _parse_pdf(self, file_path):
         """Парсинг PDF виписок за допомогою pypdf (Приват24, А-Банк тощо)"""
         transactions = []
@@ -603,6 +779,14 @@ class UniversalParser:
                 if match_tax_id:
                     self.statement_tax_id = match_tax_id.group(1)
                 return self._parse_monobank_pdf(file_path)
+            elif "ощад" in text.lower() or "oschad" in text.lower():
+                bank_name = "Ощадбанк"
+                self.bank_name = bank_name
+                # Спробуємо знайти tax_id за допомогою розширеного регулярного виразу
+                match_tax_id = re.search(r"(?:єдрпоу|рнокпп|клієнт:?)\s*:?\s*(\d{8,10})", text, re.IGNORECASE)
+                if match_tax_id:
+                    self.statement_tax_id = match_tax_id.group(1)
+                return self._parse_oschadbank_pdf(file_path)
             elif "райффайзен" in text.lower() or "aval" in text.lower():
                 bank_name = "Райффайзен"
             elif "пумб" in text.lower():

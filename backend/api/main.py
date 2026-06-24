@@ -409,6 +409,7 @@ class UnitOrMember(Base):
     verified_at = Column(DateTime, nullable=True)
     verified_by = Column(Integer, nullable=True) # ID of admin who approved
     flat_area = Column(Float, nullable=True) # Area for quorum calculation
+    role = Column(String(20), default='owner') # owner (власник) / tenant (мешканець)
 
     profile = relationship("Profile", back_populates="units_or_members")
 
@@ -1093,16 +1094,78 @@ migrations = [
     "CREATE TABLE IF NOT EXISTS osbb_contacts (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, role TEXT NOT NULL, phone TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
 ]
 
-with engine.connect() as conn:
-    for m in migrations:
-        try:
-            conn.execute(text(m))
-            conn.commit()
-        except Exception:
+import re
+from sqlalchemy import text
+
+def run_migrations_safely(engine_to_use, migration_list):
+    try:
+        with engine_to_use.connect() as conn:
+            existing_cols = {}
+            is_sqlite = "sqlite" in str(engine_to_use.url)
+            
             try:
-                conn.rollback()
-            except Exception:
-                pass
+                if is_sqlite:
+                    tables_res = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).all()
+                    for t_row in tables_res:
+                        t_name = t_row[0]
+                        cols_res = conn.execute(text(f"PRAGMA table_info('{t_name}')")).all()
+                        existing_cols[t_name.lower()] = {c_row[1].lower() for c_row in cols_res}
+                else:
+                    cols_res = conn.execute(text(
+                        "SELECT table_name, column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public'"
+                    )).all()
+                    for t_name, c_name in cols_res:
+                        t_name_l = t_name.lower()
+                        if t_name_l not in existing_cols:
+                            existing_cols[t_name_l] = set()
+                        existing_cols[t_name_l].add(c_name.lower())
+                conn.commit()
+            except Exception as ref_err:
+                print(f"Error building migrations column lookup: {ref_err}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                existing_cols = {}
+                
+            alter_pattern = re.compile(r"alter\s+table\s+(\w+)\s+add\s+column\s+(\w+)", re.IGNORECASE)
+            
+            for m in migration_list:
+                m_strip = m.strip()
+                if not m_strip:
+                    continue
+                match = alter_pattern.match(m_strip)
+                if match:
+                    table_name = match.group(1).lower()
+                    column_name = match.group(2).lower()
+                    if table_name in existing_cols and column_name in existing_cols[table_name]:
+                        continue
+                
+                # Execute migration statement in its own transaction context
+                try:
+                    print(f"Running migration safely: {m_strip}")
+                    conn.execute(text(m_strip))
+                    conn.commit()
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except:
+                        pass
+                    # Ignore duplicate column / duplicate relation error silently
+                    if "already exists" in str(e).lower() or "duplicate column" in str(e).lower():
+                        continue
+                    print(f"Migration statement failed (non-fatal): {m_strip} -> {e}")
+    except Exception as conn_err:
+        print(f"Migration connection error: {conn_err}")
+
+from sqlalchemy.pool import NullPool
+mig_engine = create_engine(DATABASE_URL, connect_args=connect_args, poolclass=NullPool)
+try:
+    run_migrations_safely(mig_engine, migrations)
+finally:
+    mig_engine.dispose()
+
 
 # Data migration from companies to profiles
 try:
@@ -1147,13 +1210,17 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 try:
     # 1. Drop old pricing table first so SQLAlchemy create_all creates it with the new schema
     from sqlalchemy import text
-    with engine.connect() as conn:
-        try:
+    from sqlalchemy.pool import NullPool
+    mig_engine2 = create_engine(DATABASE_URL, connect_args=connect_args, poolclass=NullPool)
+    try:
+        with mig_engine2.connect() as conn:
             conn.execute(text("DROP TABLE IF EXISTS pricing;"))
             conn.commit()
             print("Dropped old pricing table to recreate with new columns.")
-        except Exception as e:
-            print(f"Pricing table drop failed: {e}")
+    except Exception as e:
+        print(f"Pricing table drop failed: {e}")
+    finally:
+        mig_engine2.dispose()
 except Exception as startup_err:
     print(f"Startup drop failed: {startup_err}")
 
@@ -1211,134 +1278,90 @@ except Exception as migration_err:
     print(f"Contractors data migration error: {migration_err}")
 
 # Migrate subscriptions and payments to add new columns if they are not present
+from sqlalchemy.pool import NullPool
+mig_engine3 = create_engine(DATABASE_URL, connect_args=connect_args, poolclass=NullPool)
 try:
-    with engine.connect() as conn:
-        # 1. subscriptions table migrations
-        for col_def in [("plan_type", "VARCHAR DEFAULT 'free'"), ("payment_period", "VARCHAR"), ("warning_sent_at", "TIMESTAMP")]:
-            try:
-                conn.execute(text(f"ALTER TABLE subscriptions ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to subscriptions table.")
-            except Exception:
-                conn.rollback()
-        
-        # 2. payments table migrations
-        for col_def in [("plan_type", "VARCHAR"), ("payment_period", "VARCHAR")]:
-            try:
-                conn.execute(text(f"ALTER TABLE payments ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to payments table.")
-            except Exception:
-                conn.rollback()
+    mig3_list = []
+    
+    # 1. subscriptions table migrations
+    for col_def in [("plan_type", "VARCHAR DEFAULT 'free'"), ("payment_period", "VARCHAR"), ("warning_sent_at", "TIMESTAMP")]:
+        mig3_list.append(f"ALTER TABLE subscriptions ADD COLUMN {col_def[0]} {col_def[1]}")
+    
+    # 2. payments table migrations
+    for col_def in [("plan_type", "VARCHAR"), ("payment_period", "VARCHAR")]:
+        mig3_list.append(f"ALTER TABLE payments ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 3. profiles table migrations
-        for col_def in [
-            ("is_blocked", "BOOLEAN DEFAULT FALSE"),
-            ("block_reason", "VARCHAR"),
-            ("bank_name", "VARCHAR"),
-            ("mfo", "VARCHAR"),
-            ("iban", "VARCHAR"),
-            ("custom_recipient", "VARCHAR"),
-            ("custom_edrpou", "VARCHAR"),
-            ("custom_iban_edp", "VARCHAR"),
-            ("custom_iban_esv", "VARCHAR"),
-            ("custom_iban_pdfo", "VARCHAR"),
-            ("custom_iban_vz", "VARCHAR"),
-            ("mono_api_token", "VARCHAR(255)"),
-            ("slug", "VARCHAR(255)"),
-            ("color_theme", "VARCHAR(7) DEFAULT '#3b82f6'")
-        ]:
-            try:
-                conn.execute(text(f"ALTER TABLE profiles ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to profiles table.")
-            except Exception as e:
-                conn.rollback()
-        # 4. invoices table migrations (for file BLOBs)
-        for col_def in [
-            ("file_content", "BYTEA"),
-            ("signed_file_content", "BYTEA")
-        ]:
-            try:
-                try:
-                    conn.execute(text(f"ALTER TABLE invoices ADD COLUMN {col_def[0]} {col_def[1]}"))
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    conn.execute(text(f"ALTER TABLE invoices ADD COLUMN {col_def[0]} BLOB"))
-                    conn.commit()
-                print(f"Added column {col_def[0]} to invoices table.")
-            except Exception as e:
-                conn.rollback()
+    # 3. profiles table migrations
+    for col_def in [
+        ("is_blocked", "BOOLEAN DEFAULT FALSE"),
+        ("block_reason", "VARCHAR"),
+        ("bank_name", "VARCHAR"),
+        ("mfo", "VARCHAR"),
+        ("iban", "VARCHAR"),
+        ("custom_recipient", "VARCHAR"),
+        ("custom_edrpou", "VARCHAR"),
+        ("custom_iban_edp", "VARCHAR"),
+        ("custom_iban_esv", "VARCHAR"),
+        ("custom_iban_pdfo", "VARCHAR"),
+        ("custom_iban_vz", "VARCHAR"),
+        ("mono_api_token", "VARCHAR(255)"),
+        ("slug", "VARCHAR(255)"),
+        ("color_theme", "VARCHAR(7) DEFAULT '#3b82f6'")
+    ]:
+        mig3_list.append(f"ALTER TABLE profiles ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 5. service_acts table migrations (for file BLOBs)
-        for col_def in [
-            ("file_content", "BYTEA"),
-            ("signed_file_content", "BYTEA")
-        ]:
-            try:
-                try:
-                    conn.execute(text(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} {col_def[1]}"))
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    conn.execute(text(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} BLOB"))
-                    conn.commit()
-            except Exception as e:
-                conn.rollback()
+    # 4. invoices table migrations (for file BLOBs)
+    is_sqlite = "sqlite" in DATABASE_URL
+    blob_type = "BLOB" if is_sqlite else "BYTEA"
+    for col_def in [
+        ("file_content", blob_type),
+        ("signed_file_content", blob_type)
+    ]:
+        mig3_list.append(f"ALTER TABLE invoices ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 6. units_or_members table migrations
-        for col_def in [
-            ("property_type", "VARCHAR DEFAULT 'кв.'"),
-            ("parent_id", "INTEGER DEFAULT NULL"),
-            ("account_number", "VARCHAR(50)"),
-            ("password_hash", "VARCHAR(255)"),
-            ("status", "VARCHAR(20) DEFAULT 'pending'"),
-            ("verified_at", "TIMESTAMP"),
-            ("verified_by", "INTEGER"),
-            ("flat_area", "REAL")
-        ]:
-            try:
-                conn.execute(text(f"ALTER TABLE units_or_members ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to units_or_members table.")
-            except Exception as e:
-                conn.rollback()
+    # 5. service_acts table migrations (for file BLOBs)
+    for col_def in [
+        ("file_content", blob_type),
+        ("signed_file_content", blob_type)
+    ]:
+        mig3_list.append(f"ALTER TABLE service_acts ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 6b. meters table migrations
-        for col_def in [
-            ("initial_reading", "REAL DEFAULT 0.0")
-        ]:
-            try:
-                conn.execute(text(f"ALTER TABLE meters ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to meters table.")
-            except Exception as e:
-                conn.rollback()
+    # 6. units_or_members table migrations
+    for col_def in [
+        ("property_type", "VARCHAR DEFAULT 'кв.'"),
+        ("parent_id", "INTEGER DEFAULT NULL"),
+        ("account_number", "VARCHAR(50)"),
+        ("password_hash", "VARCHAR(255)"),
+        ("status", "VARCHAR(20) DEFAULT 'pending'"),
+        ("verified_at", "TIMESTAMP"),
+        ("verified_by", "INTEGER"),
+        ("flat_area", "REAL"),
+        ("role", "VARCHAR(20) DEFAULT 'owner'")
+    ]:
+        mig3_list.append(f"ALTER TABLE units_or_members ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 6c. meter_readings table migrations
-        for col_def in [
-            ("is_locked", "BOOLEAN DEFAULT FALSE")
-        ]:
-            try:
-                conn.execute(text(f"ALTER TABLE meter_readings ADD COLUMN {col_def[0]} {col_def[1]}"))
-                conn.commit()
-                print(f"Added column {col_def[0]} to meter_readings table.")
-            except Exception as e:
-                conn.rollback()
+    # 6b. meters table migrations
+    for col_def in [
+        ("initial_reading", "REAL DEFAULT 0.0")
+    ]:
+        mig3_list.append(f"ALTER TABLE meters ADD COLUMN {col_def[0]} {col_def[1]}")
 
-        # 7. Reset PostgreSQL sequences if needed
-        if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
-            for table_name in ["users", "companies", "pricing", "subscriptions", "employees", "tax_events", "support_messages", "payments"]:
-                try:
-                    conn.execute(text(f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table_name}"))
-                    conn.commit()
-                    print(f"Synchronized sequence for table {table_name}")
-                except Exception as seq_err:
-                    conn.rollback()
-                    print(f"Could not sync sequence for table {table_name}: {seq_err}")
+    # 6c. meter_readings table migrations
+    for col_def in [
+        ("is_locked", "BOOLEAN DEFAULT FALSE")
+    ]:
+        mig3_list.append(f"ALTER TABLE meter_readings ADD COLUMN {col_def[0]} {col_def[1]}")
+
+    # 7. Reset PostgreSQL sequences if needed
+    if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+        for table_name in ["users", "companies", "pricing", "subscriptions", "employees", "tax_events", "support_messages", "payments"]:
+            mig3_list.append(f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table_name}")
+
+    run_migrations_safely(mig_engine3, mig3_list)
 except Exception as migration_err:
     print(f"Table columns migration error: {migration_err}")
+finally:
+    mig_engine3.dispose()
 
 try:
     db_seed = SessionLocal()
@@ -4538,6 +4561,7 @@ def create_profile_member(
     user_id: Optional[int] = Form(None),
     property_type: Optional[str] = Form("кв."),
     parent_id: Optional[int] = Form(None),
+    role: Optional[str] = Form("owner"),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4562,7 +4586,8 @@ def create_profile_member(
         phone=phone,
         balance=balance or 0.0,
         property_type=property_type or "кв.",
-        parent_id=parent_id if parent_id != -1 and parent_id != 0 else None
+        parent_id=parent_id if parent_id != -1 and parent_id != 0 else None,
+        role=role or "owner"
     )
     db.add(member)
     db.commit()
@@ -4584,6 +4609,7 @@ def update_profile_member(
     user_id: Optional[int] = Form(None),
     property_type: Optional[str] = Form(None),
     parent_id: Optional[int] = Form(None),
+    role: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4627,6 +4653,8 @@ def update_profile_member(
         if parent_id == member_id:
             raise HTTPException(status_code=400, detail="Об'єкт не може посилатися на самого себе")
         member.parent_id = parent_id if parent_id != -1 and parent_id != 0 else None
+    if role is not None:
+        member.role = role
         
     db.commit()
     db.refresh(member)
@@ -4647,6 +4675,269 @@ def delete_profile_member(profile_id: int, member_id: int, user_id: Optional[int
     db.delete(member)
     db.commit()
     return {"message": "Об'єкт успішно видалено"}
+
+@app.post("/api/profiles/{profile_id}/members/bulk")
+async def bulk_import_members(
+    profile_id: int,
+    file: UploadFile = File(...),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    import csv
+    import io
+    
+    contents = await file.read()
+    decoded = contents.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(decoded), delimiter=',')
+    
+    rows = list(reader)
+    if not rows:
+        return {"status": "success", "imported": 0, "message": "Файл порожній"}
+        
+    start_idx = 0
+    first_row = rows[0]
+    if len(first_row) > 0 and ("номер" in first_row[0].lower() or "об'єкт" in first_row[0].lower() or "квартир" in first_row[0].lower()):
+        start_idx = 1
+        
+    imported_count = 0
+    errors = []
+    
+    for idx, row in enumerate(rows[start_idx:]):
+        if not row or not row[0].strip():
+            continue
+        try:
+            identifier = row[0].strip()
+            owner_name = row[1].strip() if len(row) > 1 and row[1].strip() else None
+            
+            area = 0.0
+            if len(row) > 2 and row[2].strip():
+                area = float(row[2].strip().replace(',', '.'))
+                
+            rate_per_sqm = 0.0
+            if len(row) > 3 and row[3].strip():
+                rate_per_sqm = float(row[3].strip().replace(',', '.'))
+                
+            fixed_monthly_fee = 0.0
+            if len(row) > 4 and row[4].strip():
+                fixed_monthly_fee = float(row[4].strip().replace(',', '.'))
+                
+            email = row[5].strip() if len(row) > 5 and row[5].strip() else None
+            phone = row[6].strip() if len(row) > 6 and row[6].strip() else None
+            
+            balance = 0.0
+            if len(row) > 7 and row[7].strip():
+                balance = float(row[7].strip().replace(',', '.'))
+                
+            property_type = row[8].strip() if len(row) > 8 and row[8].strip() else "кв."
+            
+            role_val = "owner"
+            if len(row) > 9 and row[9].strip():
+                rv = row[9].strip().lower()
+                if "мешкан" in rv or "tenant" in rv or "оренд" in rv:
+                    role_val = "tenant"
+            
+            dup = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id, UnitOrMember.identifier == identifier).first()
+            if dup:
+                dup.owner_name = owner_name
+                dup.area = area
+                dup.rate_per_sqm = rate_per_sqm
+                dup.fixed_monthly_fee = fixed_monthly_fee
+                dup.email = email
+                dup.phone = phone
+                dup.balance = balance
+                dup.property_type = property_type
+                dup.role = role_val
+            else:
+                member = UnitOrMember(
+                    profile_id=profile_id,
+                    identifier=identifier,
+                    owner_name=owner_name,
+                    area=area,
+                    rate_per_sqm=rate_per_sqm,
+                    fixed_monthly_fee=fixed_monthly_fee,
+                    email=email,
+                    phone=phone,
+                    balance=balance,
+                    property_type=property_type,
+                    role=role_val
+                )
+                db.add(member)
+            imported_count += 1
+        except Exception as e:
+            errors.append(f"Рядок {idx + start_idx + 1}: {str(e)}")
+            
+    db.commit()
+    
+    return {
+        "status": "success",
+        "imported": imported_count,
+        "errors": errors,
+        "message": f"Успішно імпортовано/оновлено {imported_count} об'єктів."
+    }
+
+@app.get("/api/profiles/{profile_id}/surveys")
+def get_profile_surveys(
+    profile_id: int,
+    user_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    surveys = db.query(Survey).filter(Survey.profile_id == profile_id).order_by(Survey.created_at.desc()).all()
+    members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id).all()
+    eligible_members = [m for m in members if m.role != "tenant"]
+    total_area = sum((m.flat_area or m.area or 0.0) for m in eligible_members)
+    
+    result = []
+    for survey in surveys:
+        votes = db.query(SurveyVote).filter(SurveyVote.survey_id == survey.id).all()
+        
+        voted_area = 0.0
+        votes_for = 0
+        votes_against = 0
+        votes_abstain = 0
+        area_for = 0.0
+        area_against = 0.0
+        area_abstain = 0.0
+        details = []
+        
+        for vote in votes:
+            member = db.query(UnitOrMember).filter(UnitOrMember.id == vote.member_id).first()
+            if not member or member.role == "tenant":
+                continue
+            m_area = member.flat_area or member.area or 0.0
+            voted_area += m_area
+            
+            if vote.vote == "for":
+                votes_for += 1
+                area_for += m_area
+            elif vote.vote == "against":
+                votes_against += 1
+                area_against += m_area
+            elif vote.vote == "abstain":
+                votes_abstain += 1
+                area_abstain += m_area
+                
+            details.append({
+                "member_id": member.id,
+                "owner_name": member.owner_name or "Невідомий",
+                "identifier": member.identifier,
+                "vote": vote.vote,
+                "comment": vote.comment,
+                "voted_at": vote.voted_at.isoformat() if vote.voted_at else None
+            })
+            
+        quorum_percent = (voted_area / total_area * 100) if total_area > 0 else 0.0
+        
+        result.append({
+            "id": survey.id,
+            "title": survey.title,
+            "description": survey.description,
+            "status": survey.status,
+            "created_at": survey.created_at.isoformat() if survey.created_at else None,
+            "ends_at": survey.ends_at.isoformat() if survey.ends_at else None,
+            "quorum_percent": round(quorum_percent, 2),
+            "total_voted_area": round(voted_area, 2),
+            "total_eligible_area": round(total_area, 2),
+            "votes_count": len(details),
+            "votes_for": votes_for,
+            "votes_against": votes_against,
+            "votes_abstain": votes_abstain,
+            "area_for": round(area_for, 2),
+            "area_against": round(area_against, 2),
+            "area_abstain": round(area_abstain, 2),
+            "details": details
+        })
+    return result
+
+@app.post("/api/profiles/{profile_id}/surveys")
+def create_profile_survey(
+    profile_id: int,
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    ends_at: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    ends_at_dt = None
+    if ends_at:
+        try:
+            ends_at_dt = datetime.fromisoformat(ends_at)
+        except ValueError:
+            try:
+                ends_at_dt = datetime.strptime(ends_at, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Невірний формат дати завершення")
+                
+    survey = Survey(
+        profile_id=profile_id,
+        title=title.strip(),
+        description=description.strip() if description else None,
+        ends_at=ends_at_dt,
+        status="active"
+    )
+    db.add(survey)
+    db.commit()
+    db.refresh(survey)
+    return {"status": "success", "survey_id": survey.id}
+
+@app.post("/api/profiles/{profile_id}/surveys/{survey_id}/close")
+def close_profile_survey(
+    profile_id: int,
+    survey_id: int,
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    survey = db.query(Survey).filter(Survey.id == survey_id, Survey.profile_id == profile_id).first()
+    if not survey:
+        raise HTTPException(status_code=404, detail="Опитування не знайдено")
+        
+    survey.status = "closed"
+    db.commit()
+    return {"status": "success"}
+
+@app.delete("/api/profiles/{profile_id}/surveys/{survey_id}")
+def delete_profile_survey(
+    profile_id: int,
+    survey_id: int,
+    user_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    survey = db.query(Survey).filter(Survey.id == survey_id, Survey.profile_id == profile_id).first()
+    if not survey:
+        raise HTTPException(status_code=404, detail="Опитування не знайдено")
+        
+    db.delete(survey)
+    db.commit()
+    return {"status": "success"}
 
 @app.post("/api/profiles/{profile_id}/billing/charge")
 def charge_nonprofit_members(
@@ -5579,6 +5870,8 @@ def update_profile_endpoint(
     color_theme: Optional[str] = Form(None),
     has_resident_cabinet: Optional[bool] = Form(None),
     user_id: Optional[int] = Form(None),
+    lat: Optional[float] = Form(None),
+    lon: Optional[float] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -5709,6 +6002,10 @@ def update_profile_endpoint(
         profile.color_theme = color_theme.strip() or '#3b82f6'
     if has_resident_cabinet is not None:
         profile.has_resident_cabinet = has_resident_cabinet
+    if lat is not None:
+        profile.lat = lat
+    if lon is not None:
+        profile.lon = lon
     if reg_date is not None:
         try:
             reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date()
@@ -7943,6 +8240,16 @@ def member_register(
     # Check if already has password
     if member.password_hash:
         raise HTTPException(status_code=400, detail="Акаунт вже зареєстровано. Використовуйте логін.")
+        
+    # Check if this phone number is already registered to another UnitOrMember in the DB
+    clean_phone = phone.strip()
+    if clean_phone:
+        existing_phone = db.query(UnitOrMember).filter(
+            UnitOrMember.phone == clean_phone,
+            UnitOrMember.password_hash.isnot(None)
+        ).first()
+        if existing_phone:
+            raise HTTPException(status_code=400, detail="Цей номер телефону вже зареєстрований для іншої власності")
     
     # Hash password and set details & pending status
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
@@ -8020,13 +8327,16 @@ def member_reset_password(
 @app.post("/api/auth/member/login")
 def member_login(
     slug: str = Form(...),
-    account_number: str = Form(...),
+    phone: str = Form(...),
     password: str = Form(...),
     push_token: Optional[str] = Form(None),
     platform: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Login for resident - validates slug, account_number, and password"""
+    """Login for resident - validates slug, phone, and password"""
+    from datetime import datetime, timedelta
+    import jwt
+
     # Find OSBB by slug
     profile = db.query(Profile).filter(
         Profile.slug == slug,
@@ -8043,14 +8353,14 @@ def member_login(
     if not getattr(subscription, "is_member_module_active", False):
         raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
     
-    # Find member by account_number
+    # Find member by phone
     member = db.query(UnitOrMember).filter(
         UnitOrMember.profile_id == profile.id,
-        UnitOrMember.account_number == account_number
+        UnitOrMember.phone == phone.strip()
     ).first()
     
     if not member:
-        raise HTTPException(status_code=403, detail="Цей особовий рахунок не належить вибраній організації")
+        raise HTTPException(status_code=403, detail="Цей номер телефону не належить жодному мешканцю в цій організації")
     
     # Validate password
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
@@ -8075,9 +8385,8 @@ def member_login(
         raise HTTPException(status_code=403, detail="Акаунт не активовано")
     
     # Generate simple JWT token for member
-    import jwt
-    from datetime import datetime, timedelta
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "unitas-secret-key-2024")
+
     
     payload = {
         "member_id": member.id,
@@ -8096,6 +8405,7 @@ def member_login(
             "identifier": member.identifier,
             "owner_name": member.owner_name,
             "balance": member.balance,
+            "role": getattr(member, "role", "owner"),
             "profile": {
                 "id": profile.id,
                 "name": profile.name,
@@ -8832,7 +9142,8 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "balance": member.balance,
             "property_type": member.property_type,
             "area": member.area,
-            "flat_area": member.flat_area or member.area
+            "flat_area": member.flat_area or member.area,
+            "role": getattr(member, "role", "owner")
         },
         "meters": meter_data
     }
@@ -8901,7 +9212,7 @@ def get_member_transparency(auth: dict = Depends(verify_member_token), db: Sessi
 @app.get("/api/member/surveys")
 def get_member_surveys(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
     surveys = db.query(Survey).filter(Survey.profile_id == auth["profile_id"], Survey.status == "active").order_by(Survey.created_at.desc()).all()
-    total_area = sum((m.flat_area or m.area or 0.0) for m in db.query(UnitOrMember).filter(UnitOrMember.profile_id == auth["profile_id"]).all())
+    total_area = sum((m.flat_area or m.area or 0.0) for m in db.query(UnitOrMember).filter(UnitOrMember.profile_id == auth["profile_id"], UnitOrMember.role != "tenant").all())
     result = []
     for survey in surveys:
         votes = db.query(SurveyVote).filter(SurveyVote.survey_id == survey.id).all()
@@ -8909,7 +9220,8 @@ def get_member_surveys(auth: dict = Depends(verify_member_token), db: Session = 
         own_vote = None
         for vote in votes:
             vote_member = db.query(UnitOrMember).filter(UnitOrMember.id == vote.member_id).first()
-            voted_area += (vote_member.flat_area or vote_member.area or 0.0) if vote_member else 0.0
+            if vote_member and vote_member.role != "tenant":
+                voted_area += (vote_member.flat_area or vote_member.area or 0.0)
             if vote.member_id == auth["member_id"]:
                 own_vote = vote.vote
         quorum_percent = (voted_area / total_area * 100) if total_area > 0 else 0.0
@@ -8919,7 +9231,7 @@ def get_member_surveys(auth: dict = Depends(verify_member_token), db: Session = 
             "description": survey.description,
             "ends_at": survey.ends_at.isoformat() if survey.ends_at else None,
             "own_vote": own_vote,
-            "votes_count": len(votes),
+            "votes_count": len([v for v in votes if db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first() and db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first().role != "tenant"]),
             "quorum_percent": round(quorum_percent, 2)
         })
     return result
@@ -8933,7 +9245,14 @@ def vote_member_survey(
     db: Session = Depends(get_db)
 ):
     if vote not in ["for", "against", "abstain"]:
-        raise HTTPException(status_code=400, detail="Невірний варіант голосу")
+        raise HTTPException(status_code=404, detail="Невірний варіант голосу")
+        
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == auth["member_id"]).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Учасника не знайдено")
+    if member.role == "tenant":
+        raise HTTPException(status_code=403, detail="Лише власники мають право голосу")
+        
     survey = db.query(Survey).filter(Survey.id == survey_id, Survey.profile_id == auth["profile_id"], Survey.status == "active").first()
     if not survey:
         raise HTTPException(status_code=404, detail="Опитування не знайдено")
@@ -9877,6 +10196,108 @@ def delete_recurring_invoice(id: int, user_id: Optional[int] = None, db: Session
     db.commit()
     return {"message": "Шаблон успішно видалено"}
 
+@app.put("/api/invoices/recurring/{id}")
+def update_recurring_invoice(
+    id: int,
+    profile_id: int = Form(...),
+    client_email: str = Form(...),
+    client_telegram_id: Optional[str] = Form(None),
+    amount: float = Form(...),
+    service_name: str = Form(...),
+    send_day: int = Form(...),
+    include_act: bool = Form(True),
+    send_month: Optional[int] = Form(None),
+    client_name: Optional[str] = Form(None),
+    client_tax_id: Optional[str] = Form(None),
+    document_type: str = Form("act"),
+    client_address: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    rec = db.query(RecurringInvoice).filter(RecurringInvoice.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Шаблон не знайдено")
+        
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+        
+    day = max(1, min(28, send_day))
+    rec.profile_id = profile_id
+    rec.client_email = client_email.strip()
+    rec.client_telegram_id = client_telegram_id.strip() if client_telegram_id else None
+    rec.amount = amount
+    rec.service_name = service_name.strip()
+    rec.send_day = day
+    rec.include_act = include_act
+    rec.send_month = send_month
+    rec.client_name = client_name.strip() if client_name else None
+    rec.client_tax_id = client_tax_id.strip() if client_tax_id else None
+    rec.document_type = document_type
+    rec.client_address = client_address.strip() if client_address else None
+    
+    db.commit()
+    db.refresh(rec)
+    return {"message": "Шаблон успішно оновлено", "id": rec.id}
+
+@app.put("/api/invoices/{id}")
+def update_invoice_metadata(
+    id: int,
+    invoice_number: str = Form(...),
+    service_name: str = Form(...),
+    amount: float = Form(...),
+    client_email: str = Form(...),
+    client_name: Optional[str] = Form(None),
+    client_tax_id: Optional[str] = Form(None),
+    client_address: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    inv = db.query(Invoice).filter(Invoice.id == id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+        
+    inv.invoice_number = invoice_number.strip()
+    inv.service_name = service_name.strip()
+    inv.amount = amount
+    inv.client_email = client_email.strip()
+    inv.client_name = client_name.strip() if client_name else None
+    inv.client_tax_id = client_tax_id.strip() if client_tax_id else None
+    inv.client_address = client_address.strip() if client_address else None
+    
+    if due_date:
+        try:
+            inv.due_date = datetime.strptime(due_date, "%Y-%m-%d").date()
+        except Exception:
+            pass
+            
+    # Invalidate cached PDFs/signatures
+    inv.file_content = None
+    inv.signed_file_content = None
+    if inv.status == "signed":
+        inv.status = "sent"
+        
+    # Also invalidate linked ServiceAct cached PDFs/signatures if present
+    act = db.query(ServiceAct).filter(ServiceAct.invoice_id == inv.id).first()
+    if act:
+        act.file_content = None
+        act.signed_file_content = None
+        if act.status == "signed":
+            act.status = "unsigned"
+            
+    db.commit()
+    db.refresh(inv)
+    return {"message": "Рахунок успішно оновлено", "id": inv.id}
+
 @app.get("/api/invoices/{profile_id}")
 def get_invoices_history(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     check_profile_blocked(profile_id, db)
@@ -9903,6 +10324,10 @@ def get_invoices_history(profile_id: int, user_id: Optional[int] = None, db: Ses
             "send_date": inv.send_date.strftime("%Y-%m-%d"),
             "document_type": inv.document_type,
             "is_signed": inv.signed_file_content is not None or inv.signed_file_path is not None,
+            "client_name": inv.client_name,
+            "client_tax_id": inv.client_tax_id,
+            "client_address": inv.client_address,
+            "due_date": inv.due_date.strftime("%Y-%m-%d") if inv.due_date else None,
             "act": {
                 "id": act.id,
                 "act_number": act.act_number,
@@ -11192,6 +11617,66 @@ def trigger_invoice_sending(inv: Invoice, act: Optional[ServiceAct], profile_nam
         )
         send_telegram_async(profile.owner.telegram_id, owner_text)
 
+import re
+
+ukr_months_nominative = [
+    "січень", "лютий", "березень", "квітень", "травень", "червень", 
+    "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"
+]
+
+ukr_months_genitive = [
+    "січня", "лютого", "березня", "квітня", "травня", "червня", 
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"
+]
+
+def format_service_name_for_current_date(service_name: str, target_date) -> str:
+    if not service_name:
+        return service_name
+    
+    current_month_idx = target_date.month - 1  # 0-11
+    current_year = str(target_date.year)
+    
+    # 1. Update year (replace any 20xx with target year)
+    new_name = re.sub(r'\b20\d{2}\b', current_year, service_name)
+    
+    has_month = False
+    # 2. Check for month names and replace them
+    for idx, (m_nom, m_gen) in enumerate(zip(ukr_months_nominative, ukr_months_genitive)):
+        # Match nominative (e.g., Травень)
+        pattern_nom = re.compile(rf'\b{m_nom}\b', re.IGNORECASE)
+        if pattern_nom.search(new_name):
+            has_month = True
+            target_m = ukr_months_nominative[current_month_idx]
+            def repl_nom(match):
+                word = match.group(0)
+                if word.isupper():
+                    return target_m.upper()
+                elif word[0].isupper():
+                    return target_m.capitalize()
+                return target_m
+            new_name = pattern_nom.sub(repl_nom, new_name)
+            
+        # Match genitive (e.g., травня)
+        pattern_gen = re.compile(rf'\b{m_gen}\b', re.IGNORECASE)
+        if pattern_gen.search(new_name):
+            has_month = True
+            target_m = ukr_months_genitive[current_month_idx]
+            def repl_gen(match):
+                word = match.group(0)
+                if word.isupper():
+                    return target_m.upper()
+                elif word[0].isupper():
+                    return target_m.capitalize()
+                return target_m
+            new_name = pattern_gen.sub(repl_gen, new_name)
+            
+    # 3. If no month is present, append it automatically
+    if not has_month:
+        month_str = ukr_months_genitive[current_month_idx]
+        new_name = f"{new_name.strip()} за {month_str} {current_year} р."
+        
+    return new_name
+
 @app.post("/api/invoices/send-now/{id}")
 def send_invoice_now(
     id: int,
@@ -11227,12 +11712,13 @@ def send_invoice_now(
         send_date = date(year, month, day)
         
     inv_num = generate_invoice_number(db, rec.profile_id)
+    formatted_service_name = format_service_name_for_current_date(rec.service_name, send_date)
     invoice = Invoice(
         profile_id=rec.profile_id,
         client_email=rec.client_email,
         client_telegram_id=rec.client_telegram_id,
         amount=rec.amount,
-        service_name=rec.service_name,
+        service_name=formatted_service_name,
         invoice_number=inv_num,
         send_date=send_date,
         client_name=rec.client_name,
@@ -11293,12 +11779,13 @@ def process_recurring_invoices(db: Session = Depends(get_db)):
         profile_name = profile.name if profile else "UniTax Provider"
         
         inv_num = generate_invoice_number(db, rec.profile_id)
+        formatted_service_name = format_service_name_for_current_date(rec.service_name, kiev_now.date())
         invoice = Invoice(
             profile_id=rec.profile_id,
             client_email=rec.client_email,
             client_telegram_id=rec.client_telegram_id,
             amount=rec.amount,
-            service_name=rec.service_name,
+            service_name=formatted_service_name,
             invoice_number=inv_num,
             send_date=kiev_now.date(),
             client_address=rec.client_address
@@ -12104,7 +12591,7 @@ def send_invoice_api(
     <style>
         body {{ font-family: sans-serif; color: #1e293b; line-height: 1.5; }}
         .container {{ max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; }}
-        .btn {{ display: inline-block; padding: 10px 20px; background-color: #4f46e5; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 15px; }}
+        .btn {{ display: inline-block; padding: 10px 20px; background-color: #6366f1; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 15px; }}
         .qr-container {{ text-align: center; margin: 20px 0; }}
         .footer {{ margin-top: 30px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 15px; }}
     </style>
@@ -12800,7 +13287,7 @@ def create_templated_document(
     sig_data = [
         [Paragraph("Від Виконавця:", body_style), Paragraph("Від Замовника:", body_style)],
         [Paragraph("___________________", body_style), Paragraph("___________________", body_style)],
-        [Paragraph("підписано КЕП через UniTax", ParagraphStyle('SigNote', parent=body_style, fontName=font_name, textColor=colors.HexColor("#4f46e5"))), Paragraph("очікує підпису", ParagraphStyle('SigNote2', parent=body_style, fontName=font_name, textColor=colors.HexColor("#64748b")))]
+        [Paragraph("підписано КЕП через UniTax", ParagraphStyle('SigNote', parent=body_style, fontName=font_name, textColor=colors.HexColor("#6366f1"))), Paragraph("очікує підпису", ParagraphStyle('SigNote2', parent=body_style, fontName=font_name, textColor=colors.HexColor("#64748b")))]
     ]
     t = Table(sig_data, colWidths=[250, 250])
     t.setStyle(TableStyle([

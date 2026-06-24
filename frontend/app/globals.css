@@ -9,7 +9,7 @@
   --foreground: #0f172a;
   --border: rgba(99, 102, 241, 0.14);
   --card: rgba(255, 255, 255, 0.95);
-  --accent: #4f46e5;
+  --accent: #6366f1;
   --font-sans: 'Outfit', sans-serif;
 }
 
@@ -45,8 +45,8 @@ body {
 }
 
 .light .glass-panel:hover {
-  border-color: rgba(79, 70, 229, 0.15);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 0 20px -5px rgba(79, 70, 229, 0.02);
+  border-color: rgba(99, 102, 241, 0.15);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 0 20px -5px rgba(99, 102, 241, 0.02);
 }
 
 .glow-button {
@@ -61,10 +61,10 @@ body {
 }
 
 .light .glow-button {
-  box-shadow: 0 0 15px -3px rgba(79, 70, 229, 0.2);
+  box-shadow: 0 0 15px -3px rgba(99, 102, 241, 0.2);
 }
 .light .glow-button:hover {
-  box-shadow: 0 0 25px 0px rgba(79, 70, 229, 0.4);
+  box-shadow: 0 0 25px 0px rgba(99, 102, 241, 0.4);
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -274,22 +274,22 @@ body {
 
 /* Fix missing indigo-650 class from tailwind config */
 .bg-indigo-650 {
-  background-color: #4f46e5 !important;
+  background-color: #6366f1 !important;
 }
 .hover\:bg-indigo-650\/95:hover {
-  background-color: rgba(79, 70, 229, 0.95) !important;
+  background-color: rgba(99, 102, 241, 0.95) !important;
 }
 .text-indigo-650 {
-  color: #4f46e5 !important;
+  color: #6366f1 !important;
 }
 .accent-indigo-650 {
-  accent-color: #4f46e5 !important;
+  accent-color: #6366f1 !important;
 }
 .bg-indigo-650:hover {
-  background-color: #4338ca !important;
+  background-color: #4f46e5 !important;
 }
 .shadow-indigo-650\/15 {
-  box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.15), 0 4px 6px -4px rgba(79, 70, 229, 0.15) !important;
+  box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.15), 0 4px 6px -4px rgba(99, 102, 241, 0.15) !important;
 }
 
 /* Styling for primary indigo/blue buttons in light theme to be highly visible */
@@ -297,7 +297,7 @@ body {
 .light .bg-indigo-600,
 .light button.bg-indigo-650,
 .light button.bg-indigo-600 {
-  background-color: #4f46e5 !important;
+  background-color: #6366f1 !important;
   color: #ffffff !important;
 }
 
@@ -312,6 +312,185 @@ body {
 .light .bg-indigo-600:hover,
 .light button.bg-indigo-650:hover,
 .light button.bg-indigo-600:hover {
-  background-color: #4338ca !important;
+  background-color: #4f46e5 !important;
 }
+
+/* Hide scrollbars utility */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* 3D Cube Assembly Modal Animation */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  animation: fadeInOverlay 0.3s ease-out;
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-cube-container {
+  position: relative;
+  width: 90%;
+  max-width: 650px;
+  min-height: 480px;
+  perspective: 1200px;
+}
+
+/* Individual blocks that assemble the backing card */
+.cube-block {
+  position: absolute;
+  width: 25%;
+  height: 25%;
+  background: #ffffff;
+  border: 1px solid rgba(245, 158, 11, 0.2); /* Soft orange border for each cube segment */
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+  opacity: 0;
+  transform: scale(0.4) rotateY(90deg) translateZ(-80px);
+  animation: cubeAssemble 0.65s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+  animation-delay: var(--delay);
+  pointer-events: none;
+}
+
+.dark .cube-block {
+  background: #0f172a;
+  border-color: rgba(245, 158, 11, 0.15);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Cube placement offsets for 4x4 grid (16 blocks) */
+.cube-pos-1 { top: 0; left: 0; border-top-left-radius: 24px; }
+.cube-pos-2 { top: 0; left: 25%; }
+.cube-pos-3 { top: 0; left: 50%; }
+.cube-pos-4 { top: 0; left: 75%; border-top-right-radius: 24px; }
+.cube-pos-5 { top: 25%; left: 0; }
+.cube-pos-6 { top: 25%; left: 25%; }
+.cube-pos-7 { top: 25%; left: 50%; }
+.cube-pos-8 { top: 25%; left: 75%; }
+.cube-pos-9 { top: 50%; left: 0; }
+.cube-pos-10 { top: 50%; left: 25%; }
+.cube-pos-11 { top: 50%; left: 50%; }
+.cube-pos-12 { top: 50%; left: 75%; }
+.cube-pos-13 { top: 75%; left: 0; border-bottom-left-radius: 24px; }
+.cube-pos-14 { top: 75%; left: 25%; }
+.cube-pos-15 { top: 75%; left: 50%; }
+.cube-pos-16 { top: 75%; left: 75%; border-bottom-right-radius: 24px; }
+
+/* 3D assembly keyframes */
+@keyframes cubeAssemble {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotateY(90deg) translateZ(-150px) translateY(30px);
+  }
+  65% {
+    opacity: 0.9;
+    transform: scale(1.05) rotateY(-10deg) translateZ(10px) translateY(-5px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotateY(0deg) translateZ(0) translateY(0);
+  }
+}
+
+/* Modal Content Box that sits on top of the blocks */
+.modal-content-box {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  min-height: 480px;
+  background: transparent;
+  color: #0f172a;
+  border-radius: 24px;
+  border: 2px solid #d97706 !important; /* Brand orange border */
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(245, 158, 11, 0.05);
+  animation: fadeInContent 0.5s ease-out forwards;
+  animation-delay: 0.55s;
+  opacity: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.dark .modal-content-box {
+  color: #f1f5f9;
+  border-color: #f59e0b !important; /* Slightly lighter orange for dark mode contrast */
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(245, 158, 11, 0.05);
+}
+
+/* Apply brand orange border to all modals across the app for visual framing consistency */
+.fixed.inset-0 > div[class*="bg-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]),
+.fixed.inset-0 > div[class*="rounded-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]) {
+  border: 2px solid #d97706 !important;
+}
+.dark .fixed.inset-0 > div[class*="bg-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]),
+.dark .fixed.inset-0 > div[class*="rounded-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]) {
+  border-color: #f59e0b !important;
+}
+
+
+@keyframes fadeInContent {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Ensure text in warning/orange banners and headers remains white in light theme */
+.light .bg-amber-600.text-white,
+.light .bg-amber-600 span,
+.light .bg-amber-600 div,
+.light .bg-amber-600 p,
+.light .bg-amber-600 th,
+.light .bg-amber-600 td,
+.light .bg-amber-600 b,
+.light .bg-amber-600 h1,
+.light .bg-amber-600 h2,
+.light .bg-amber-600 h3,
+.light .bg-amber-600 h4,
+.light .bg-amber-500.text-white,
+.light .bg-amber-500 span,
+.light .bg-amber-500 div,
+.light .bg-amber-500 p,
+.light .bg-amber-500 th,
+.light .bg-amber-500 td,
+.light .bg-amber-500 b,
+.light .bg-amber-500 h1,
+.light .bg-amber-500 h2,
+.light .bg-amber-500 h3,
+.light .bg-amber-500 h4 {
+  color: #ffffff !important;
+}
+
+.light .bg-amber-600 a,
+.light .bg-amber-500 a {
+  color: #ffffff !important;
+}
+
+.light .bg-amber-600 a:hover,
+.light .bg-amber-500 a:hover {
+  color: #f1f5f9 !important;
+}
+
+
 

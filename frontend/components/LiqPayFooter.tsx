@@ -5,95 +5,105 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 
 export function LiqPayFooter() {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(false); // Closed by default to hide sensitive business details initially
 
   return (
-    <footer className="w-full bg-slate-950/80 backdrop-blur-md border-t border-slate-900/60 py-8 px-4 mt-12">
-      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 text-xs text-slate-400">
+    <footer className="w-full bg-[#fafbfd] dark:bg-slate-950/80 border-t border-slate-200 dark:border-slate-900/60 py-8 px-4 mt-12 transition-colors duration-300">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 text-xs text-slate-600 dark:text-slate-405">
+        
         {/* Column 1: Logo & Info */}
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-gradient-to-tr from-indigo-650 to-indigo-500 rounded-lg flex items-center justify-center font-extrabold text-white text-xs">U</div>
-            <span className="font-bold text-white text-sm">UniTax</span>
+            {/* Logo mark - letter U rendered via CSS content to prevent text copying */}
+            <div className="w-6 h-6 bg-gradient-to-tr from-indigo-600 to-indigo-500 rounded-lg flex items-center justify-center font-extrabold text-white text-xs select-none pointer-events-none before:content-['U']"></div>
+            <span className="font-bold text-[#0f172a] dark:text-white text-sm">UniTax</span>
           </div>
-          <p className="leading-relaxed">
+          <p className="leading-relaxed text-slate-600 dark:text-slate-400">
             Сучасна система автоматизації податків, звітності та інвойсингу для ФОП та ТОВ в Україні.
           </p>
           <div className="flex items-center gap-3 pt-1">
-            <div className="px-2 py-1 bg-white/5 border border-white/10 rounded-md text-[10px] font-bold text-white tracking-wider">
+            <div className="px-2 py-1 bg-slate-100 dark:bg-white/5 border border-slate-205 dark:border-white/10 rounded-md text-[10px] font-bold text-[#0f172a] dark:text-white tracking-wider">
               VISA
             </div>
-            <div className="px-2 py-1 bg-white/5 border border-white/10 rounded-md text-[10px] font-bold text-white tracking-wider">
+            <div className="px-2 py-1 bg-slate-100 dark:bg-white/5 border border-slate-205 dark:border-white/10 rounded-md text-[10px] font-bold text-[#0f172a] dark:text-white tracking-wider">
               MC
             </div>
-            <div className="px-2 py-1 bg-white/5 border border-white/10 rounded-md text-[10px] font-bold text-white tracking-wider">
+            <div className="px-2 py-1 bg-slate-100 dark:bg-white/5 border border-slate-205 dark:border-white/10 rounded-md text-[10px] font-bold text-[#0f172a] dark:text-white tracking-wider">
               Mono Pay
             </div>
           </div>
         </div>
 
-        {/* Column 2: Contacts & Details */}
+        {/* Column 2: Contacts & Ownership Details */}
         <div className="space-y-2.5">
-          <button
-            type="button"
-            onClick={() => setIsOpen(!isOpen)}
-            className="flex items-center justify-between w-full md:w-auto text-left text-white font-bold uppercase tracking-wider text-[10px] hover:text-indigo-400 transition-colors focus:outline-none"
-          >
-            <span>Контакти та реквізити</span>
-            <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
-          </button>
-          
-          <div className={`transition-all duration-300 overflow-hidden ${isOpen ? "max-h-40 opacity-100 mt-2" : "max-h-0 opacity-0 pointer-events-none"}`}>
-            <ul className="space-y-1.5 pt-1 text-slate-400">
-              <li className="font-bold text-slate-200">ФОП Повєткін М.М.</li>
-              <li>Код ЄДРПОУ/ІПН: 2800003498</li>
-              <li>Адреса: м. Дніпро вул. Романа Самокиша 1</li>
-              <li>
-                Тел: <a href="tel:+380671579211" className="hover:text-indigo-400 transition-colors">+38 (067) 1579211</a>
-              </li>
-              <li>
-                Email: <a href="mailto:support@unitax.pro" className="hover:text-indigo-400 transition-colors">support@unitax.pro</a>
-              </li>
-            </ul>
+          <h4 className="text-[#0f172a] dark:text-white font-bold uppercase tracking-wider text-[10px]">
+            Контакти
+          </h4>
+          <ul className="space-y-1.5 text-slate-600 dark:text-slate-400">
+            <li>Адреса: м. Дніпро вул. Романа Самокиша 1</li>
+            <li>
+              Тел: <a href="tel:+380671579211" className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold transition-colors">+38 (067) 1579211</a>
+            </li>
+            <li>
+              Email: <a href="mailto:support@unitax.pro" className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold transition-colors">support@unitax.pro</a>
+            </li>
+          </ul>
+
+          <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsOpen(!isOpen)}
+              className="flex items-center text-left text-slate-700 dark:text-slate-300 font-bold uppercase tracking-wider text-[9px] hover:text-indigo-650 dark:hover:text-indigo-400 transition-colors focus:outline-none"
+            >
+              <span>Право власності</span>
+              <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+            </button>
+            
+            <div className={`transition-all duration-300 overflow-hidden ${isOpen ? "max-h-24 opacity-100 mt-2" : "max-h-0 opacity-0 pointer-events-none"}`}>
+              <ul className="space-y-1.5 pt-1 text-slate-500 dark:text-slate-500 font-medium">
+                <li className="font-semibold text-slate-700 dark:text-slate-400">ФОП Повєткін М.М.</li>
+                <li>Код ЄДРПОУ/ІПН: 2800003498</li>
+              </ul>
+            </div>
           </div>
         </div>
 
         {/* Column 3: Legal Documents */}
         <div className="space-y-2.5">
-          <h4 className="text-white font-bold uppercase tracking-wider text-[10px]">Правова інформація</h4>
-          <ul className="space-y-1.5">
+          <h4 className="text-[#0f172a] dark:text-white font-bold uppercase tracking-wider text-[10px]">Правова інформація</h4>
+          <ul className="space-y-1.5 text-slate-650 dark:text-slate-400">
             <li>
-              <Link href="/privacy" className="hover:text-indigo-400 hover:underline transition-all">
+              <Link href="/privacy" className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-all">
                 Політика конфіденційності
               </Link>
             </li>
             <li>
-              <Link href="/terms" className="hover:text-indigo-400 hover:underline transition-all">
+              <Link href="/terms" className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-all">
                 Угода користувача та Публічна оферта
               </Link>
             </li>
             <li>
-              <Link href="/refund" className="hover:text-indigo-400 hover:underline transition-all">
+              <Link href="/refund" className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-all">
                 Правила повернення коштів
               </Link>
             </li>
             <li>
-              <Link href="/support.html" className="hover:text-indigo-400 hover:underline transition-all">
+              <Link href="/support.html" className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-all">
                 Служба підтримки (Support)
               </Link>
             </li>
             <li>
-              <span className="text-slate-500">
+              <span className="text-slate-400 dark:text-slate-600">
                 Умови оплати та надання послуг
               </span>
             </li>
           </ul>
         </div>
 
-        {/* Column 4: Mobile Apps (App Store / Google Play Badges) */}
+        {/* Column 4: Mobile Apps */}
         <div className="space-y-3">
-          <h4 className="text-white font-bold uppercase tracking-wider text-[10px]">Мобільні додатки</h4>
-          <p className="leading-relaxed text-[11px] text-slate-400">
+          <h4 className="text-[#0f172a] dark:text-white font-bold uppercase tracking-wider text-[10px]">Мобільні додатки</h4>
+          <p className="leading-relaxed text-[11px] text-slate-600 dark:text-slate-400">
             Завантажуйте UniTax на свій смартфон:
           </p>
           <div className="flex flex-col gap-2 pt-1">
@@ -130,11 +140,11 @@ export function LiqPayFooter() {
       </div>
 
       {/* Bottom copyright and status indicator */}
-      <div className="max-w-6xl mx-auto border-t border-slate-900/60 mt-8 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div className="max-w-6xl mx-auto border-t border-slate-200 dark:border-slate-900/60 mt-8 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <p className="text-[10px] text-slate-500">
           &copy; {new Date().getFullYear()} UniTax. Всі права захищено.
         </p>
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/40 border border-slate-800/60 rounded-full text-[10px] text-slate-350 font-semibold shadow-inner">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800/60 rounded-full text-[10px] text-slate-600 dark:text-slate-400 font-semibold shadow-inner">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

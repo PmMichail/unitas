@@ -1163,7 +1163,7 @@ export default function SubscriptionPage() {
       <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-3xl space-y-6">
         <div className="flex justify-between items-center">
           <div>
-            <h3 className="text-lg font-bold text-white">Історія рахунків та оплат</h3>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">Історія рахунків та оплат</h3>
             <p className="text-xs text-slate-500 mt-0.5">Журнал виставлених рахунків та оплат Mono Pay</p>
           </div>
           <button
@@ -1182,9 +1182,9 @@ export default function SubscriptionPage() {
             <p className="text-[10px] text-slate-600 mt-1">Тут з'являться ваші рахунки за підписку або податкові платежі.</p>
           </div>
         ) : (
-          <div className="border border-slate-800/60 rounded-2xl overflow-hidden overflow-x-auto">
+          <div className="border border-slate-200 dark:border-slate-800/60 rounded-2xl overflow-hidden overflow-x-auto">
             <table className="w-full border-collapse text-left text-xs">
-              <thead className="bg-slate-900/65 text-slate-450 border-b border-slate-800">
+              <thead className="bg-amber-600 text-white dark:bg-slate-900/65 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                 <tr>
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">ID</th>
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Призначення</th>
@@ -1195,51 +1195,51 @@ export default function SubscriptionPage() {
                   <th className="p-4 font-bold uppercase tracking-wider text-[10px]">Рахунок Mono Pay</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/40">
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40">
                 {paymentsList.map((p) => {
                   const isSub = p.payment_type === "subscription";
                   return (
-                    <tr key={p.id} className="hover:bg-slate-900/20 transition-all">
+                    <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/20 transition-all">
                       <td className="p-4 font-mono text-slate-500">#{p.id}</td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
                           <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
                             isSub 
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
-                              : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+                              ? "bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20" 
+                              : "bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 border border-indigo-500/20"
                           }`}>
                             {isSub ? "Підписка" : "Податок"}
                           </span>
-                          <span className="font-semibold text-slate-200">
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">
                             {isSub 
                               ? `Upgrade to Business (${p.period === "yearly" ? "Рік" : p.period === "half_yearly" ? "Пів року" : "Місяць"})` 
                               : `Сплата податку: ${p.tax_type.toUpperCase()}`}
                           </span>
                         </div>
                       </td>
-                      <td className="p-4 font-extrabold text-white">{p.amount} грн</td>
-                      <td className="p-4 text-slate-400 font-medium capitalize">{p.period || "—"}</td>
-                      <td className="p-4 text-slate-400 font-semibold">{p.created_at || "—"}</td>
+                      <td className="p-4 font-extrabold text-slate-900 dark:text-white">{p.amount} грн</td>
+                      <td className="p-4 text-slate-600 dark:text-slate-400 font-medium capitalize">{p.period || "—"}</td>
+                      <td className="p-4 text-slate-600 dark:text-slate-400 font-semibold">{p.created_at || "—"}</td>
                       <td className="p-4">
                         <span className={`px-2.5 py-0.5 rounded-full font-bold text-[9px] uppercase inline-flex items-center gap-1 ${
                           p.status === "paid" 
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20" 
+                            : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
                         }`}>
                           {p.status === "paid" ? (
                             <>
-                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                               <span>Сплачено</span>
                             </>
                           ) : (
                             <>
-                              <Clock className="w-3 h-3 text-amber-400" />
+                              <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                               <span>Очікує</span>
                             </>
                           )}
                         </span>
                       </td>
-                      <td className="p-4 font-mono text-slate-450 text-[10px]">
+                      <td className="p-4 font-mono text-slate-600 dark:text-slate-400 text-[10px]">
                         {p.liqpay_order_id ? (
                           <div className="flex items-center gap-1">
                             <span className="truncate max-w-[120px]">{p.liqpay_order_id}</span>

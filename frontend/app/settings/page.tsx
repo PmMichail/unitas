@@ -89,16 +89,18 @@ export default function Settings() {
           setOriginalConfigs(data);
         }
       })
-      .catch((err) => console.error("Помилка завантаження конфігів:", err));
+      .catch((err) => console.error("Помилка завантаження налаштувань:", err));
       
     // Load banks
     loadBanks();
     loadConnections();
   }, [selectedProfile]);
 
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+
   const loadBanks = async () => {
     try {
-      const response = await fetch("https://unitas-backend.fly.dev/api/banks");
+      const response = await fetch(`${API_BASE_URL}/api/banks`);
       const data = await response.json();
       setBanks(data.banks || []);
     } catch (error) {
@@ -111,7 +113,7 @@ export default function Settings() {
     
     try {
       const response = await fetch(
-        `https://unitas-backend.fly.dev/api/banks/connections?profile_id=${selectedProfile.id}`
+        `${API_BASE_URL}/api/banks/connections?profile_id=${selectedProfile.id}`
       );
       const data = await response.json();
       setConnections(data.connections || []);
@@ -127,7 +129,7 @@ export default function Settings() {
     
     try {
       const response = await fetch(
-        `https://unitas-backend.fly.dev/api/banks/${bankId}/auth-url?profile_id=${selectedProfile.id}`
+        `${API_BASE_URL}/api/banks/${bankId}/auth-url?profile_id=${selectedProfile.id}`
       );
       const data = await response.json();
       
@@ -144,7 +146,7 @@ export default function Settings() {
     setSyncing(bankName);
     try {
       const response = await fetch(
-        `https://unitas-backend.fly.dev/api/banks/${bankName}/sync?profile_id=${selectedProfile.id}`,
+        `${API_BASE_URL}/api/banks/${bankName}/sync?profile_id=${selectedProfile.id}`,
         { method: "POST" }
       );
       const data = await response.json();
@@ -166,7 +168,7 @@ export default function Settings() {
     
     try {
       await fetch(
-        `https://unitas-backend.fly.dev/api/banks/${bankName}/disconnect?profile_id=${selectedProfile.id}`,
+        `${API_BASE_URL}/api/banks/${bankName}/disconnect?profile_id=${selectedProfile.id}`,
         { method: "DELETE" }
       );
       loadConnections();
@@ -280,15 +282,15 @@ export default function Settings() {
               </button>
             </form>
 
-            <div className="p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-[10px] text-slate-400 flex items-start gap-2">
-              <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+            <div className="p-3.5 rounded-xl bg-amber-600 text-white flex items-start gap-2 dark:bg-indigo-950/20 dark:border dark:border-indigo-500/20 dark:text-slate-400">
+              <Info className="w-4 h-4 text-white dark:text-indigo-400 shrink-0 mt-0.5" />
               <div>
-                <span>Для реєстрації відправте команду <b>/start</b> нашому боту в Telegram: </span>
+                <span>Для реєстрації надішліть команду <b>/start</b> нашому боту в Telegram: </span>
                 <a
                   href="https://t.me/unitas_tax_bot"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-indigo-400 hover:underline font-bold"
+                  className="text-white underline hover:text-slate-100 dark:text-indigo-400 dark:no-underline dark:hover:underline font-bold"
                 >
                   @unitas_tax_bot
                 </a>
@@ -340,7 +342,7 @@ export default function Settings() {
           <div className="p-6 rounded-2xl glass-panel space-y-4">
             <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
               <Building2 className="w-4 h-4 text-indigo-500" />
-              Інтеграція банків
+              Інтеграція з банками
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
               Підключіть ваші банки для автоматичного отримання виписок та розрахунку податків.
@@ -580,7 +582,7 @@ export default function Settings() {
             {/* Field: military_tax_employee_rate */}
             <div>
               <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
-                ВЗ з зарплати (%)
+                ВЗ із зарплати (%)
               </label>
               <input
                 type="number"
@@ -655,7 +657,7 @@ export default function Settings() {
             {/* Field: pit_employee_rate */}
             <div>
               <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1 block">
-                ПДФО з зарплати (%)
+                ПДФО із зарплати (%)
               </label>
               <input
                 type="number"

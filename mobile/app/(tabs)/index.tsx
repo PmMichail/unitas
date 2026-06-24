@@ -1788,7 +1788,7 @@ export default function DashboardScreen() {
                               }, 300);
                             }}
                           >
-                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                            <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -1817,7 +1817,7 @@ export default function DashboardScreen() {
                               }, 300);
                             }}
                           >
-                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                            <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -1846,7 +1846,7 @@ export default function DashboardScreen() {
                               }, 300);
                             }}
                           >
-                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                            <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -1876,7 +1876,7 @@ export default function DashboardScreen() {
                                 }, 300);
                               }}
                             >
-                              <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
+                              <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '700', marginTop: 4 }}>Сплатити</Text>
                             </TouchableOpacity>
                           )}
                         </View>
@@ -1992,13 +1992,13 @@ export default function DashboardScreen() {
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.primary }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.warning }}>
                     ⚙️ Власні бюджетні рахунки (якщо авто невірні)
                   </Text>
                 </View>
                 <ChevronDown
                   size={16}
-                  color={colors.primary}
+                  color={colors.warning}
                   style={{ transform: [{ rotate: showCustomAccounts ? '180deg' : '0deg' }] }}
                 />
               </TouchableOpacity>
@@ -2180,7 +2180,7 @@ export default function DashboardScreen() {
                   </View>
 
                   {/* 1. Tax breakdown explanation ("розшифровка") */}
-                  <View style={{ marginTop: 12, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', padding: 12, borderRadius: 12, borderLeftWidth: 3, borderLeftColor: colors.primary }}>
+                  <View style={{ marginTop: 12, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', padding: 12, borderRadius: 12, borderLeftWidth: 3, borderLeftColor: colors.warning }}>
                     <Text style={{ color: colors.text, fontWeight: '700', fontSize: 12, marginBottom: 6 }}>📊 Розшифровка розрахунку:</Text>
                     {liab.tax_type === 'edp' && (
                       <View style={{ gap: 2 }}>

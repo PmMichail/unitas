@@ -296,7 +296,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Налаштування", href: "/settings", icon: SettingsIcon },
   ];
 
-  const isNoLayout = ["/", "/login", "/register", "/privacy", "/terms", "/refund", "/benefits"].includes(pathname) || pathname.startsWith("/admin") || pathname.startsWith("/osbb");
+  const isNoLayout = pathname === "/" || ["/login", "/register", "/privacy", "/terms", "/refund"].includes(pathname) || pathname.startsWith("/benefits") || pathname.startsWith("/admin") || pathname.startsWith("/osbb");
   if (isNoLayout) {
     return (
       <div className="min-h-screen bg-[#fafbfd] dark:bg-[#090d16] text-[#090e1a] dark:text-[#f1f5f9] font-sans">

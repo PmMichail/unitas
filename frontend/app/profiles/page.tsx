@@ -249,14 +249,14 @@ export default function Profiles() {
     }
   }, [liqpayForm]);
 
-  // Fetch subscriptions for all profiles
   useEffect(() => {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
     const fetchSubscriptions = async () => {
-      const subs: { [key: number]: any } = {};
-      for (const profile of profiles) {
-        try {
-          const res = await fetch(`https://unitas-backend.fly.dev/api/subscription/current/${profile.id}`);
-          const data = await res.json();
+        const subs: { [key: number]: any } = {};
+        for (const profile of profiles) {
+          try {
+            const res = await fetch(`${apiBase}/api/subscription/current/${profile.id}`);
+            const data = await res.json();
           subs[profile.id] = data;
         } catch (error) {
           subs[profile.id] = { plan: "free" };
@@ -277,6 +277,70 @@ export default function Profiles() {
   const [invoicesLoading, setInvoicesLoading] = useState(false);
   const [invActiveTab, setInvActiveTab] = useState<"schedules" | "oneoff" | "history">("schedules");
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
+
+  // Edit Invoice States & Helpers
+  const [isEditInvoiceModalOpen, setIsEditInvoiceModalOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<any>(null);
+  const [editInvNumber, setEditInvNumber] = useState("");
+  const [editInvServiceName, setEditInvServiceName] = useState("");
+  const [editInvAmount, setEditInvAmount] = useState("");
+  const [editInvClientEmail, setEditInvClientEmail] = useState("");
+  const [editInvClientName, setEditInvClientName] = useState("");
+  const [editInvClientTaxId, setEditInvClientTaxId] = useState("");
+  const [editInvClientAddress, setEditInvClientAddress] = useState("");
+  const [editInvDueDate, setEditInvDueDate] = useState("");
+  const [isEditingInvoiceSaving, setIsEditingInvoiceSaving] = useState(false);
+
+  const handleOpenEditInvoiceModal = (inv: any) => {
+    setEditingInvoice(inv);
+    setEditInvNumber(inv.invoice_number || "");
+    setEditInvServiceName(inv.service_name || "");
+    setEditInvAmount(inv.amount ? String(inv.amount) : "");
+    setEditInvClientEmail(inv.client_email || "");
+    setEditInvClientName(inv.client_name || "");
+    setEditInvClientTaxId(inv.client_tax_id || "");
+    setEditInvClientAddress(inv.client_address || "");
+    setEditInvDueDate(inv.due_date || "");
+    setIsEditInvoiceModalOpen(true);
+  };
+
+  const handleSaveInvoiceEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingInvoice) return;
+    if (!editInvNumber.trim() || !editInvServiceName.trim() || !editInvAmount.trim() || !editInvClientEmail.trim()) {
+      alert("Будь ласка, заповніть обов'язкові поля");
+      return;
+    }
+    const amountVal = parseFloat(editInvAmount);
+    if (isNaN(amountVal) || amountVal <= 0) {
+      alert("Сума має бути позитивним числом");
+      return;
+    }
+
+    setIsEditingInvoiceSaving(true);
+    try {
+      await api.updateInvoice(editingInvoice.id, {
+        invoice_number: editInvNumber.trim(),
+        service_name: editInvServiceName.trim(),
+        amount: amountVal,
+        client_email: editInvClientEmail.trim(),
+        client_name: editInvClientName.trim() || undefined,
+        client_tax_id: editInvClientTaxId.trim() || undefined,
+        client_address: editInvClientAddress.trim() || undefined,
+        due_date: editInvDueDate.trim() || undefined,
+      });
+      alert("Рахунок оновлено успішно!");
+      setIsEditInvoiceModalOpen(false);
+      if (invoicesProfile) {
+        fetchInvoicesData(invoicesProfile.id);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Не вдалося оновити рахунок");
+    } finally {
+      setIsEditingInvoiceSaving(false);
+    }
+  };
 
   // New Recurring Invoice Form States
   const [invClientEmail, setInvClientEmail] = useState("");
@@ -1995,6 +2059,7 @@ export default function Profiles() {
                           <th className="px-4 py-2.5 text-right">Сума</th>
                           <th className="px-4 py-2.5">Дата</th>
                           <th className="px-4 py-2.5">Акт</th>
+                          <th className="px-4 py-2.5 text-center">Дії</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2023,6 +2088,15 @@ export default function Profiles() {
                               ) : (
                                 <span className="text-slate-500">—</span>
                               )}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => handleOpenEditInvoiceModal(inv)}
+                                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 text-slate-400 hover:text-indigo-500 hover:bg-slate-100 dark:hover:bg-slate-900 transition-all inline-block"
+                                title="Редагувати"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -2122,6 +2196,144 @@ export default function Profiles() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Invoice Modal */}
+      {isEditInvoiceModalOpen && editingInvoice && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-55 animate-in fade-in duration-200 overflow-y-auto">
+          <div className="w-full max-w-lg bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 my-8">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Edit3 className="w-5 h-5 text-indigo-505" />
+                  Редагування рахунку {editInvNumber}
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Зміна реквізитів рахунку. PDF рахунку та акта буде перегенеровано з новими даними.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditInvoiceModalOpen(false)}
+                className="text-slate-400 hover:text-slate-650 dark:text-slate-450 dark:hover:text-slate-200 text-sm font-semibold border border-slate-200 dark:border-slate-800 px-3 py-1 rounded-xl"
+              >
+                Скасувати
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveInvoiceEdit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Номер рахунку *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editInvNumber}
+                    onChange={(e) => setEditInvNumber(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Сума (грн) *</label>
+                  <input
+                    type="number"
+                    required
+                    step="0.01"
+                    value={editInvAmount}
+                    onChange={(e) => setEditInvAmount(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Опис послуги / товар *</label>
+                <input
+                  type="text"
+                  required
+                  value={editInvServiceName}
+                  onChange={(e) => setEditInvServiceName(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Email клієнта *</label>
+                  <input
+                    type="email"
+                    required
+                    value={editInvClientEmail}
+                    onChange={(e) => setEditInvClientEmail(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Термін сплати (Due Date)</label>
+                  <input
+                    type="date"
+                    value={editInvDueDate}
+                    onChange={(e) => setEditInvDueDate(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Назва / ПІБ клієнта</label>
+                <input
+                  type="text"
+                  value={editInvClientName}
+                  onChange={(e) => setEditInvClientName(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">ЄДРПОУ / ІПН клієнта</label>
+                  <input
+                    type="text"
+                    value={editInvClientTaxId}
+                    onChange={(e) => setEditInvClientTaxId(e.target.value.replace(/\D/g, ""))}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-1.5 block">Адреса клієнта</label>
+                  <input
+                    type="text"
+                    value={editInvClientAddress}
+                    onChange={(e) => setEditInvClientAddress(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-sm focus:outline-none focus:border-indigo-500 transition-all font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  disabled={isEditingInvoiceSaving}
+                  onClick={() => setIsEditInvoiceModalOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold text-xs transition-all hover:bg-slate-50 dark:hover:bg-slate-900"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditingInvoiceSaving}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg disabled:opacity-50"
+                >
+                  {isEditingInvoiceSaving ? (
+                    <div className="inline-block animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white"></div>
+                  ) : (
+                    "Зберегти зміни"
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

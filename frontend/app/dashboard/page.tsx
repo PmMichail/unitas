@@ -430,8 +430,8 @@ export default function Dashboard() {
         }
 
         .glass-panel:hover {
-          border-color: rgba(79, 70, 229, 0.15);
-          box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05), 0 0 20px -5px rgba(79, 70, 229, 0.03);
+          border-color: rgba(99, 102, 241, 0.15);
+          box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05), 0 0 20px -5px rgba(99, 102, 241, 0.03);
           transform: translateY(-2px);
         }
 
@@ -441,7 +441,7 @@ export default function Dashboard() {
         }
 
         .glow-button {
-          box-shadow: 0 0 15px -3px rgba(79, 70, 229, 0.25);
+          box-shadow: 0 0 15px -3px rgba(99, 102, 241, 0.25);
           transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
@@ -450,7 +450,7 @@ export default function Dashboard() {
         }
 
         .glow-button:hover {
-          box-shadow: 0 0 25px 0px rgba(79, 70, 229, 0.45);
+          box-shadow: 0 0 25px 0px rgba(99, 102, 241, 0.45);
         }
 
         .dark .glow-button:hover {

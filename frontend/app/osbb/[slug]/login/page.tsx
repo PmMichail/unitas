@@ -62,7 +62,7 @@ export default function OsbbMemberLoginPage() {
         router.push(`/osbb/${slug}/pending`);
         return;
       }
-      const data = await api.memberLogin({ slug, account_number: accountNumber, password });
+      const data = await api.memberLogin({ slug, phone, password });
       if (data.status === "pending") {
         if (data.member_id) localStorage.setItem("pending_member_id", String(data.member_id));
         localStorage.setItem("pending_phone", data.phone || "");
@@ -106,11 +106,23 @@ export default function OsbbMemberLoginPage() {
             <div className="mb-6 text-center font-bold text-lg text-white">Відновлення паролю</div>
           )}
 
-          <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Особовий рахунок / № квартири</label>
-          <div className="relative mb-4">
-            <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-            <input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} required className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="Наприклад: 45 або ZK-045" />
-          </div>
+          {mode === "login" ? (
+            <>
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Номер телефону</label>
+              <div className="relative mb-4">
+                <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} required className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="+380991234567" />
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Особовий рахунок / № квартири</label>
+              <div className="relative mb-4">
+                <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+                <input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} required className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="Наприклад: 45 або ZK-045" />
+              </div>
+            </>
+          )}
 
           {mode === "register" && (
             <>

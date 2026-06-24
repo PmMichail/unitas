@@ -593,17 +593,17 @@ export default function AdminDashboard() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-[#090d16] flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 dark:bg-[#090d16] flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex bg-[#090d16] text-[#f1f5f9] font-sans antialiased">
+    <div className="min-h-screen flex bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-[#f1f5f9] font-sans antialiased">
       
       {/* Admin Sidebar */}
-      <aside className="w-64 border-r border-slate-800 bg-slate-950/40 p-6 flex flex-col justify-between shrink-0">
+      <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 p-6 flex flex-col justify-between shrink-0">
         <div className="space-y-8">
           {/* Logo */}
           <div className="flex items-center space-x-3">
@@ -611,8 +611,8 @@ export default function AdminDashboard() {
               <span className="font-extrabold text-white text-lg">A</span>
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white tracking-wide">UniTax Admin</h1>
-              <p className="text-[10px] text-indigo-500 uppercase tracking-widest font-black">Панель керування</p>
+              <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">UniTax Admin</h1>
+              <p className="text-[10px] text-indigo-600 dark:text-indigo-500 uppercase tracking-widest font-black">Панель керування</p>
             </div>
           </div>
 
@@ -623,7 +623,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "users"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <Users className="w-4 h-4" />
@@ -634,7 +634,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "payments"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <CreditCard className="w-4 h-4" />
@@ -645,7 +645,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "pricing"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <Settings2 className="w-4 h-4" />
@@ -656,7 +656,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "stats"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <TrendingUp className="w-4 h-4" />
@@ -667,7 +667,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "support"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <MessageSquare className="w-4 h-4" />
@@ -678,7 +678,7 @@ export default function AdminDashboard() {
               className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
                 activeTab === "emails"
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-white"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               <Mail className="w-4 h-4" />
@@ -701,9 +701,9 @@ export default function AdminDashboard() {
       <main className="flex-1 p-8 overflow-y-auto max-w-7xl mx-auto space-y-8">
         
         {/* Header section */}
-        <div className="flex justify-between items-center pb-6 border-b border-slate-800/60">
+        <div className="flex justify-between items-center pb-6 border-b border-slate-200 dark:border-slate-800/60">
           <div>
-            <h2 className="text-2xl font-black capitalize text-white">
+            <h2 className="text-2xl font-black capitalize text-slate-900 dark:text-white">
               {activeTab === "users" && "Керування користувачами"}
               {activeTab === "payments" && "Транзакції та рахунки"}
               {activeTab === "pricing" && "Налаштування вартості підписок"}
@@ -711,7 +711,7 @@ export default function AdminDashboard() {
               {activeTab === "emails" && "Керування системною поштою"}
               {activeTab === "support" && "Чат підтримки клієнтів"}
             </h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {activeTab === "users" && "Переглядайте профілі клієнтів, їхні підписки та змінюйте тарифи вручну."}
               {activeTab === "payments" && "Журнал платежів через Mono Pay за оренду або заміну тарифу."}
               {activeTab === "pricing" && "Редагуйте вартості бізнес тарифів, які показуються користувачам при виборі."}
@@ -1555,15 +1555,15 @@ export default function AdminDashboard() {
       {/* Edit Subscription Modal (Overlay) */}
       {selectedProfileForSub && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 border-2 border-amber-600 dark:border-amber-500 rounded-3xl p-6 shadow-2xl space-y-6 text-slate-900 dark:text-slate-100">
             <div className="flex justify-between items-start">
               <div>
-                <h3 className="text-lg font-bold text-white">Редагувати підписку</h3>
-                <p className="text-xs text-slate-500 mt-1">Змініть статус та дату закінчення підписки для профілю: <span className="font-bold text-indigo-400">{selectedProfileForSub.name}</span></p>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Редагувати підписку</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Змініть статус та дату закінчення підписки для профілю: <span className="font-bold text-indigo-650 dark:text-indigo-400">{selectedProfileForSub.name}</span></p>
               </div>
               <button
                 onClick={() => setSelectedProfileForSub(null)}
-                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1571,12 +1571,12 @@ export default function AdminDashboard() {
 
             <form onSubmit={handleSaveSubscription} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Тарифний план</label>
+                <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Тарифний план</label>
                 {selectedProfileForSub.tax_system === "non_profit" || selectedProfileForSub.organization_subtype === "osbb" || selectedProfileForSub.organization_subtype === "st" ? (
                   <select
                     value={editPlanType}
                     onChange={(e) => setEditPlanType(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                    className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
                   >
                     <option value="free">Безкоштовно (Free)</option>
                     <option value="basic">Бізнес (Business) — 299 грн/міс</option>
@@ -1585,7 +1585,7 @@ export default function AdminDashboard() {
                   <select
                     value={editPlanType}
                     onChange={(e) => setEditPlanType(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                    className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
                   >
                     <option value="free">Free (Безкоштовно)</option>
                     <option value="business">Business (Платний)</option>
@@ -1595,11 +1595,11 @@ export default function AdminDashboard() {
 
               {(editPlanType === "business" || editPlanType === "basic" || editPlanType === "premium") && (
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Період оплати</label>
+                  <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Період оплати</label>
                   <select
                     value={editPaymentPeriod}
                     onChange={(e) => setEditPaymentPeriod(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                    className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
                   >
                     <option value="monthly">Щомісячно (30 днів)</option>
                     <option value="half_yearly">Піврічно (6 місяців)</option>
@@ -1615,21 +1615,21 @@ export default function AdminDashboard() {
                     id="editIsMemberModuleActive"
                     checked={editIsMemberModuleActive}
                     onChange={(e) => setEditIsMemberModuleActive(e.target.checked)}
-                    className="w-4 h-4 rounded border border-slate-800 accent-indigo-650 bg-slate-950 transition-all cursor-pointer focus:ring-0"
+                    className="w-4 h-4 rounded border border-slate-300 dark:border-slate-800 accent-indigo-650 bg-slate-105 bg-slate-100 dark:bg-slate-950 transition-all cursor-pointer focus:ring-0"
                   />
-                  <label htmlFor="editIsMemberModuleActive" className="text-xs font-bold text-slate-200 cursor-pointer">
+                  <label htmlFor="editIsMemberModuleActive" className="text-xs font-bold text-slate-750 dark:text-slate-200 cursor-pointer">
                     📱 Активований кабінет мешканців (+250 грн/міс)
                   </label>
                 </div>
               )}
 
               <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Діє до (Expiry Date)</label>
+                <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Діє до (Expiry Date)</label>
                 <input
                   type="date"
                   value={editExpiresAt}
                   onChange={(e) => setEditExpiresAt(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none"
+                  className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
                 />
                 <span className="text-[9px] text-slate-500 block">Залиште порожнім для безлімітного безкоштовного тарифу.</span>
               </div>
@@ -1657,21 +1657,21 @@ export default function AdminDashboard() {
       {/* Block Profile Modal (Overlay) */}
       {blockingProfile && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 border-2 border-amber-600 dark:border-amber-500 rounded-3xl p-6 shadow-2xl space-y-6 text-slate-900 dark:text-slate-100">
             <div className="flex justify-between items-start">
               <div>
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <Lock className="w-5 h-5 text-rose-500" />
                   Блокування профілю
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   Будь ласка, вкажіть причину тимчасового блокування для профілю:{" "}
-                  <span className="font-bold text-indigo-400">{blockingProfile.name}</span>
+                  <span className="font-bold text-indigo-650 dark:text-indigo-400">{blockingProfile.name}</span>
                 </p>
               </div>
               <button
                 onClick={() => setBlockingProfile(null)}
-                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1679,12 +1679,12 @@ export default function AdminDashboard() {
 
             <form onSubmit={handleSaveBlockProfile} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Причина блокування</label>
+                <label className="text-[10px] text-slate-550 dark:text-slate-400 uppercase tracking-wider font-bold">Причина блокування</label>
                 <textarea
                   value={blockReasonInput}
                   onChange={(e) => setBlockReasonInput(e.target.value)}
                   placeholder="Вкажіть причину (наприклад: Порушення умов використання або несплата послуг)..."
-                  className="w-full h-24 px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 resize-none text-white"
+                  className="w-full h-24 px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 resize-none text-slate-900 dark:text-white"
                   required
                 />
               </div>
@@ -1713,21 +1713,21 @@ export default function AdminDashboard() {
       {/* Delete Confirmation Modal */}
       {deleteConfirmProfile && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+          <div className="bg-white dark:bg-slate-950 border-2 border-amber-600 dark:border-amber-500 rounded-2xl w-full max-w-md p-6 shadow-2xl text-slate-900 dark:text-slate-100">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <Trash2 className="w-5 h-5 text-rose-500" />
                   Видалення профілю
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   Ви дійсно хочете повністю видалити профіль:{" "}
-                  <span className="font-bold text-indigo-400">{deleteConfirmProfile.name}</span>?
+                  <span className="font-bold text-indigo-650 dark:text-indigo-400">{deleteConfirmProfile.name}</span>?
                 </p>
               </div>
               <button
                 onClick={() => setDeleteConfirmProfile(null)}
-                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1761,21 +1761,21 @@ export default function AdminDashboard() {
       {/* Unblock Confirmation Modal */}
       {unblockConfirmProfile && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+          <div className="bg-white dark:bg-slate-950 border-2 border-amber-600 dark:border-amber-500 rounded-2xl w-full max-w-md p-6 shadow-2xl text-slate-900 dark:text-slate-100">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <Unlock className="w-5 h-5 text-emerald-500" />
                   Розблокування профілю
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   Розблокувати профіль:{" "}
-                  <span className="font-bold text-indigo-400">{unblockConfirmProfile.name}</span>?
+                  <span className="font-bold text-indigo-650 dark:text-indigo-400">{unblockConfirmProfile.name}</span>?
                 </p>
               </div>
               <button
                 onClick={() => setUnblockConfirmProfile(null)}
-                className="p-1 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>

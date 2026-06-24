@@ -44,8 +44,8 @@ export const lightColors: ThemeColors = {
   cardBorder: 'rgba(0, 0, 0, 0.05)', // Subtle shadow borders for depth
   text: '#1c1c1e', // Dark text
   textMuted: '#68686e', // Softer description text
-  primary: '#4f46e5', // Indigo 600
-  primaryMuted: 'rgba(79, 70, 229, 0.08)',
+  primary: '#6366f1', // Indigo 500
+  primaryMuted: 'rgba(99, 102, 241, 0.08)',
   success: '#059669', // Emerald 600
   successMuted: 'rgba(5, 150, 105, 0.08)',
   error: '#d91d48', // Rose 600

@@ -25,7 +25,8 @@ import {
   Sparkles,
   AlertCircle,
   Briefcase,
-  Calendar
+  Calendar,
+  Edit3
 } from "lucide-react";
 
 const defaultTemplates: Record<string, string> = {
@@ -215,6 +216,23 @@ export default function InvoicesList() {
   const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
   const [sendIncludeAct, setSendIncludeAct] = useState(true);
   const [sendingInvoice, setSendingInvoice] = useState(false);
+  const [editingInvoiceId, setEditingInvoiceId] = useState<number | null>(null);
+
+  const resetRecForm = () => {
+    setRecClientEmail("");
+    setRecClientTg("");
+    setRecAmount("");
+    setRecServiceName("");
+    setRecIncludeAct(true);
+    setRecSendDay("1");
+    setRecPeriodicity("monthly");
+    setRecSendMonth(null);
+    setRecClientName("");
+    setRecClientTaxId("");
+    setRecDocumentType("act");
+    setRecClientAddress("");
+    setEditingInvoiceId(null);
+  };
 
   // New Recurring Form states
   const [recClientEmail, setRecClientEmail] = useState("");
@@ -336,7 +354,7 @@ export default function InvoicesList() {
     e.preventDefault();
     if (!selectedProfile) return;
     try {
-      await api.createRecurringInvoice({
+      const payload = {
         profile_id: selectedProfile.id,
         client_email: recClientEmail,
         client_telegram_id: recClientTg || undefined,
@@ -349,26 +367,38 @@ export default function InvoicesList() {
         client_tax_id: recClientTaxId || undefined,
         document_type: recDocumentType,
         client_address: recClientAddress || undefined
-      });
+      };
+
+      if (editingInvoiceId !== null) {
+        await api.updateRecurringInvoice(editingInvoiceId, payload);
+      } else {
+        await api.createRecurringInvoice(payload);
+      }
+
       setRecFormOpen(false);
       fetchRecurringInvoices();
-      // Reset form
-      setRecClientEmail("");
-      setRecClientTg("");
-      setRecAmount("");
-      setRecServiceName("");
-      setRecIncludeAct(true);
-      setRecSendDay("1");
-      setRecPeriodicity("monthly");
-      setRecSendMonth(null);
-      setRecClientName("");
-      setRecClientTaxId("");
-      setRecDocumentType("act");
-      setRecClientAddress("");
+      resetRecForm();
     } catch (err) {
-      console.error("Failed to create recurring invoice:", err);
-      alert("Не вдалося створити шаблон регулярного рахунку");
+      console.error("Failed to save recurring invoice:", err);
+      alert(editingInvoiceId !== null ? "Не вдалося оновити шаблон" : "Не вдалося створити шаблон регулярного рахунку");
     }
+  };
+
+  const handleEditRecurringInvoice = (item: any) => {
+    setEditingInvoiceId(item.id);
+    setRecClientEmail(item.client_email || "");
+    setRecClientTg(item.client_telegram_id || "");
+    setRecAmount(String(item.amount));
+    setRecServiceName(item.service_name || "");
+    setRecIncludeAct(item.include_act);
+    setRecSendDay(String(item.send_day));
+    setRecPeriodicity(item.send_month ? "specific" : "monthly");
+    setRecSendMonth(item.send_month);
+    setRecClientName(item.client_name || "");
+    setRecClientTaxId(item.client_tax_id || "");
+    setRecDocumentType(item.document_type || "act");
+    setRecClientAddress(item.client_address || "");
+    setRecFormOpen(true);
   };
 
   const handleDeleteRecurringInvoice = async (id: number) => {
@@ -1204,7 +1234,7 @@ export default function InvoicesList() {
             </div>
             {selectedProfile && !recFormOpen && (
               <button
-                onClick={() => setRecFormOpen(true)}
+                onClick={() => { resetRecForm(); setRecFormOpen(true); }}
                 className="px-4 py-2.5 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-lg transition-all flex items-center gap-1.5 self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
@@ -1225,7 +1255,9 @@ export default function InvoicesList() {
             /* Creation Form */
             <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-6">
               <form onSubmit={handleSaveRecurringInvoice} className="space-y-4">
-                <h4 className="text-sm font-bold text-slate-100">Новий шаблон авто-надсилання рахунків</h4>
+                <h4 className="text-sm font-bold text-slate-100">
+                  {editingInvoiceId !== null ? "Редагування шаблону авто-надсилання рахунку" : "Новий шаблон авто-надсилання рахунків"}
+                </h4>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -1399,7 +1431,7 @@ export default function InvoicesList() {
                 <div className="flex gap-3 pt-4 border-t border-slate-800">
                   <button
                     type="button"
-                    onClick={() => setRecFormOpen(false)}
+                    onClick={() => { setRecFormOpen(false); resetRecForm(); }}
                     className="flex-1 py-2.5 rounded-xl border border-slate-850 hover:bg-slate-800 text-slate-400 text-xs font-bold transition-all"
                   >
                     Скасувати
@@ -1408,7 +1440,7 @@ export default function InvoicesList() {
                     type="submit"
                     className="flex-1 py-2.5 rounded-xl bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold transition-all shadow-lg"
                   >
-                    Створити шаблон
+                    {editingInvoiceId !== null ? "Зберегти зміни" : "Створити шаблон"}
                   </button>
                 </div>
               </form>
@@ -1478,6 +1510,13 @@ export default function InvoicesList() {
                             Надіслати рахунок + акт
                           </button>
                         )}
+                        <button
+                          onClick={() => handleEditRecurringInvoice(item)}
+                          className="p-1.5 border border-slate-850 hover:border-indigo-500/20 text-slate-500 hover:text-indigo-405 hover:bg-indigo-500/5 rounded-lg transition-all"
+                          title="Редагувати шаблон"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => handleDeleteRecurringInvoice(item.id)}
                           className="p-1.5 border border-slate-850 hover:border-rose-500/20 text-slate-500 hover:text-rose-450 hover:bg-rose-500/5 rounded-lg transition-all"

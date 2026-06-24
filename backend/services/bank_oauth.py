@@ -28,21 +28,13 @@ BANKS = {
         "client_id": os.getenv("ABANK_CLIENT_ID"),
         "client_secret": os.getenv("ABANK_CLIENT_SECRET")
     },
-    "ukrgas": {
-        "name": "УКРГАЗБАНК",
-        "auth_url": "https://api.ukrgasbank.com/oauth/authorize",
-        "token_url": "https://api.ukrgasbank.com/oauth/token",
-        "scope": "statements",
-        "client_id": os.getenv("UKRGAS_CLIENT_ID"),
-        "client_secret": os.getenv("UKRGAS_CLIENT_SECRET")
-    },
-    "pumb": {
-        "name": "ПУМБ",
-        "auth_url": "https://api.pumb.ua/oauth/authorize",
-        "token_url": "https://api.pumb.ua/oauth/token",
+    "oschadbank": {
+        "name": "Ощадбанк",
+        "auth_url": "https://api.oschadbank.ua/oauth/authorize",
+        "token_url": "https://api.oschadbank.ua/oauth/token",
         "scope": "accounts statements",
-        "client_id": os.getenv("PUMB_CLIENT_ID"),
-        "client_secret": os.getenv("PUMB_CLIENT_SECRET")
+        "client_id": os.getenv("OSCHAD_CLIENT_ID"),
+        "client_secret": os.getenv("OSCHAD_CLIENT_SECRET")
     }
 }
 
