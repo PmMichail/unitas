@@ -58,7 +58,7 @@ interface AuthContextType {
   isBiometricSupported: boolean;
   isBiometricEnabled: boolean;
   login: (email: string, password: string) => Promise<{ status: 'success' | 'verification_required'; email?: string; message: string }>;
-  residentLogin: (slug: string, account_number: string, password: string) => Promise<any>;
+  residentLogin: (slug: string, phone: string, password: string) => Promise<any>;
   residentRegister: (payload: any) => Promise<any>;
   loginWithTelegram: (telegramId: string) => Promise<{ status: 'verification_required'; telegram_id: string; message: string }>;
   verify2FACode: (identifier: string, code: string, isTelegram?: boolean) => Promise<boolean>;
@@ -196,12 +196,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const residentLogin = async (slug: string, accountNumber: string, passwordString: string): Promise<any> => {
+  const residentLogin = async (slug: string, phone: string, passwordString: string): Promise<any> => {
     try {
       const pushToken = await registerForPushNotificationsAsync();
       const response = await api.memberLogin({
         slug,
-        account_number: accountNumber,
+        phone: phone,
         password: passwordString,
         push_token: pushToken || undefined,
         platform: Platform.OS,

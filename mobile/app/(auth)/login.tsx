@@ -85,7 +85,6 @@ export default function LoginScreen() {
   const [osbbQuery, setOsbbQuery] = useState('');
   const [osbbResults, setOsbbResults] = useState<any[]>([]);
   const [selectedOsbb, setSelectedOsbb] = useState<any | null>(null);
-  const [resAccountNumber, setResAccountNumber] = useState('');
   const [resPassword, setResPassword] = useState('');
   const [resFullName, setResFullName] = useState('');
   const [resPhone, setResPhone] = useState('');
@@ -187,7 +186,7 @@ export default function LoginScreen() {
                 text: 'Увійти',
                 onPress: () => {
                   setIsPendingVerification(false);
-                  residentLogin(pendingOsbbSlug, resAccountNumber.trim(), resPassword.trim());
+                  residentLogin(pendingOsbbSlug, resPhone.trim(), resPassword.trim());
                 }
               }
             ]
@@ -222,7 +221,7 @@ export default function LoginScreen() {
               text: 'Увійти',
               onPress: () => {
                 setIsPendingVerification(false);
-                residentLogin(pendingOsbbSlug, resAccountNumber.trim(), resPassword.trim());
+                residentLogin(pendingOsbbSlug, resPhone.trim(), resPassword.trim());
               }
             }
           ]
@@ -231,7 +230,7 @@ export default function LoginScreen() {
     });
 
     return () => subscription.remove();
-  }, [isPendingVerification, pendingOsbbSlug, resAccountNumber, resPassword]);
+  }, [isPendingVerification, pendingOsbbSlug, resPhone, resPassword]);
 
   const handleBiometrics = async () => {
     const success = await authenticateBiometrics();
@@ -448,14 +447,14 @@ export default function LoginScreen() {
       Alert.alert('Помилка', 'Будь ласка, знайдіть та виберіть ваше ОСББ/організацію.');
       return;
     }
-    if (!resAccountNumber.trim() || !resPassword.trim()) {
-      Alert.alert('Помилка', 'Будь ласка, введіть особовий рахунок та пароль.');
+    if (!resPhone.trim() || !resPassword.trim()) {
+      Alert.alert('Помилка', 'Будь ласка, введіть номер телефону та пароль.');
       return;
     }
 
     setLoading(true);
     try {
-      const response = await residentLogin(selectedOsbb.slug, resAccountNumber.trim(), resPassword.trim());
+      const response = await residentLogin(selectedOsbb.slug, resPhone.trim(), resPassword.trim());
       if (response.status === 'pending') {
         setPendingMemberId(response.member_id);
         setPendingOsbbPhone(response.phone || '');
@@ -1006,11 +1005,11 @@ export default function LoginScreen() {
                       /* Resident Login Form */
                       <>
                         <Input
-                          label="Особовий рахунок / № квартири"
-                          placeholder="Наприклад: ZK-128 або 128"
-                          value={resAccountNumber}
-                          onChangeText={setResAccountNumber}
-                          autoCapitalize="characters"
+                          label="Номер телефону"
+                          placeholder="+380991234567"
+                          value={resPhone}
+                          onChangeText={setResPhone}
+                          keyboardType="phone-pad"
                         />
                         <Input
                           label="Пароль"

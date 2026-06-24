@@ -689,7 +689,7 @@ export const api = {
     return response.data;
   },
 
-  memberLogin: async (data: { slug: string; account_number: string; password: string; push_token?: string; platform?: string }) => {
+  memberLogin: async (data: { slug: string; phone: string; password: string; push_token?: string; platform?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/auth/member/login`, formData);
     return response.data;
