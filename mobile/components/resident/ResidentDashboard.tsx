@@ -19,7 +19,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { api } from '../../services/api';
+import { api, API_BASE_URL } from '../../services/api';
 import {
   Gauge,
   Lock,
@@ -165,7 +165,7 @@ export default function ResidentDashboard() {
   };
 
   const handleDownloadReceipt = () => {
-    const url = `http://192.168.0.132:8000/api/member/receipt/pdf?token=${memberToken}`;
+    const url = `${API_BASE_URL}/api/member/receipt/pdf?token=${memberToken}`;
     Linking.openURL(url);
   };
 
@@ -218,7 +218,7 @@ export default function ResidentDashboard() {
   };
 
   const handleDownloadDoc = (doc: any) => {
-    const url = `http://192.168.0.132:8000/api/member/documents/${doc.id}/download?token=${memberToken}`;
+    const url = `${API_BASE_URL}/api/member/documents/${doc.id}/download?token=${memberToken}`;
     Linking.openURL(url);
   };
 

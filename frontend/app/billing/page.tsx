@@ -3030,25 +3030,25 @@ export default function BillingPage() {
                               onClick={() => handleOpenMemberDetails(m.id)}
                               className="flex items-center space-x-2.5 text-left hover:text-indigo-650 transition-colors"
                             >
-                              <div className="w-9 h-9 rounded-lg bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 flex flex-col items-center justify-center text-[10px] font-black">
-                                <span className="uppercase text-[9px] font-medium tracking-tight text-slate-400">{(m.property_type || "кв.")}</span>
-                                <span className="text-xs -mt-1 font-bold">{m.identifier}</span>
+                              <div className="w-9 h-9 rounded-lg bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                <Building className="w-5 h-5" />
                               </div>
                               <div className="flex flex-col">
                                 <span className="text-slate-800 dark:text-white font-bold hover:underline">
-                                  {(m.property_type || "кв.")} {m.identifier}
+                                  {(() => {
+                                    const type = (m.property_type || "кв.").trim();
+                                    const id = (m.identifier || "").trim();
+                                    if (id.toLowerCase().startsWith(type.toLowerCase())) {
+                                      return id;
+                                    }
+                                    return `${type} ${id}`;
+                                  })()}
                                 </span>
                               </div>
                             </button>
                           </td>
                           <td className="px-6 py-4 font-medium text-slate-700 dark:text-slate-200">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenMemberDetails(m.id)}
-                              className="hover:underline hover:text-indigo-650 transition-colors font-semibold text-left"
-                            >
-                              {m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}
-                            </button>
+                            {m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}
                           </td>
                           <td className="px-6 py-4 text-xs font-semibold">
                             {m.role === "tenant" ? (

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 
-const API_BASE_URL = 'http://192.168.0.132:8000';
+export const API_BASE_URL = 'https://api.unitax.pro';
 
 const client = axios.create({
   baseURL: API_BASE_URL,

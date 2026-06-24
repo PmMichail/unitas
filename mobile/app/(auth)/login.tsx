@@ -145,7 +145,7 @@ export default function LoginScreen() {
   useEffect(() => {
     if (!isPendingVerification || !pendingMemberId) return;
 
-    const wsUrl = `wss://unitas-backend.fly.dev/ws/member/${pendingMemberId}`;
+    const wsUrl = `wss://api.unitax.pro/ws/member/${pendingMemberId}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
