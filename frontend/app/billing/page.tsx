@@ -91,7 +91,7 @@ interface Meter {
 }
 
 export default function BillingPage() {
-  const { selectedProfile } = useApp();
+  const { selectedProfile, refreshProfiles } = useApp();
   const router = useRouter();
   
   // State
@@ -513,6 +513,9 @@ export default function BillingPage() {
           });
           setProfileLat(latitude);
           setProfileLon(longitude);
+          if (refreshProfiles) {
+            await refreshProfiles();
+          }
           showToast("Геолокацію успішно зафіксовано!", "success");
         } catch (err: any) {
           console.error(err);
@@ -2466,6 +2469,60 @@ export default function BillingPage() {
                             >
                               <Settings className="w-4 h-4" />
                               <span>{pinningGeo ? "Визначення..." : "Зафіксувати геолокацію"}</span>
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Широта (Lat) вручну</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={profileLat !== null ? profileLat : ""}
+                                onChange={(e) => setProfileLat(e.target.value !== "" ? parseFloat(e.target.value) : null)}
+                                className="w-full px-4 py-2.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all text-slate-800 dark:text-slate-200"
+                                placeholder="Наприклад: 50.450100"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Довгота (Lon) вручну</label>
+                              <input
+                                type="number"
+                                step="any"
+                                value={profileLon !== null ? profileLon : ""}
+                                onChange={(e) => setProfileLon(e.target.value !== "" ? parseFloat(e.target.value) : null)}
+                                className="w-full px-4 py-2.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all text-slate-800 dark:text-slate-200"
+                                placeholder="Наприклад: 30.523400"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end mt-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!selectedProfile) return;
+                                setPinningGeo(true);
+                                try {
+                                  await api.updateProfile(selectedProfile.id, {
+                                    lat: profileLat,
+                                    lon: profileLon
+                                  });
+                                  if (refreshProfiles) {
+                                    await refreshProfiles();
+                                  }
+                                  showToast("Координати збережено вручну!", "success");
+                                } catch (err) {
+                                  console.error(err);
+                                  showToast("Не вдалося зберегти координати", "error");
+                                } finally {
+                                  setPinningGeo(false);
+                                }
+                              }}
+                              disabled={pinningGeo}
+                              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-slate-850 dark:border-slate-700 transition-all cursor-pointer shadow-md hover:scale-[1.01]"
+                            >
+                              Зберегти координати вручну
                             </button>
                           </div>
                         </div>

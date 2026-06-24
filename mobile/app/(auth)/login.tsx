@@ -99,16 +99,33 @@ export default function LoginScreen() {
   const [streetModalVisible, setStreetModalVisible] = useState(false);
   const [numberModalVisible, setNumberModalVisible] = useState(false);
   const [roleModalVisible, setRoleModalVisible] = useState(false);
+  const [loadingAddresses, setLoadingAddresses] = useState(false);
 
   // Fetch available OSBB addresses for registration
   useEffect(() => {
     const loadAddresses = async () => {
       if (!selectedOsbb || !isRegister) return;
+      setLoadingAddresses(true);
       try {
         const data = await api.getOsbbAvailableAddresses(selectedOsbb.slug);
         setStreetsData(data);
+        
+        // Auto-select 'no_street' if no streets are defined
+        const streetKeys = Object.keys(data?.streets || {});
+        if (streetKeys.length === 0) {
+          setSelectedStreet('no_street');
+        } else {
+          setSelectedStreet('');
+        }
+        setSelectedNumber('');
       } catch (err: any) {
         console.error("Failed to load available addresses", err);
+        Alert.alert(
+          'Помилка завантаження', 
+          'Не вдалося завантажити список адрес. Будь ласка, перевірте з\'єднання з інтернетом або спробуйте пізніше.'
+        );
+      } finally {
+        setLoadingAddresses(false);
       }
     };
     loadAddresses();
@@ -1036,42 +1053,51 @@ export default function LoginScreen() {
                     ) : (
                       /* Resident Registration Form */
                       <>
-                        {streetsData?.streets && Object.keys(streetsData.streets).length > 0 && (
+                        {loadingAddresses ? (
+                          <View style={{ paddingVertical: 20, alignItems: 'center', justifyContent: 'center' }}>
+                            <ActivityIndicator size="small" color={colors.primary} />
+                            <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Завантаження списку адрес...</Text>
+                          </View>
+                        ) : (
                           <>
-                            <Text style={[styles.fieldLabel, { color: colors.text }]}>Вулиця / Об'єднання</Text>
+                            {streetsData?.streets && Object.keys(streetsData.streets).length > 0 && (
+                              <>
+                                <Text style={[styles.fieldLabel, { color: colors.text }]}>Вулиця / Об'єднання</Text>
+                                <Pressable 
+                                  style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
+                                  onPress={() => setStreetModalVisible(true)}
+                                >
+                                  <Text style={[styles.selectorBtnText, { color: selectedStreet ? colors.text : colors.textMuted }]}>
+                                    {selectedStreet === 'no_street' ? 'Без вулиці' : selectedStreet || 'Оберіть вулицю...'}
+                                  </Text>
+                                  <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
+                                </Pressable>
+                              </>
+                            )}
+
+                            <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Номер будинку / ділянки</Text>
                             <Pressable 
-                              style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
-                              onPress={() => setStreetModalVisible(true)}
+                              style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }, !selectedStreet && { opacity: 0.5 }]} 
+                              onPress={() => {
+                                if (!selectedStreet) {
+                                  Alert.alert('Помилка', 'Спочатку оберіть вулицю.');
+                                  return;
+                                }
+                                setNumberModalVisible(true);
+                              }}
+                              disabled={!selectedStreet}
                             >
-                              <Text style={[styles.selectorBtnText, { color: selectedStreet ? colors.text : colors.textMuted }]}>
-                                {selectedStreet === 'no_street' ? 'Без вулиці' : selectedStreet || 'Оберіть вулицю...'}
+                              <Text style={[styles.selectorBtnText, { color: selectedNumber ? colors.text : colors.textMuted }]}>
+                                {selectedNumber 
+                                  ? (selectedStreet && selectedStreet !== 'no_street' 
+                                      ? `${selectedStreet}, ${selectedNumber}` 
+                                      : `${selectedNumber}`)
+                                  : 'Оберіть номер...'}
                               </Text>
                               <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
                             </Pressable>
                           </>
                         )}
-
-                        <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Номер будинку / ділянки</Text>
-                        <Pressable 
-                          style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }, !selectedStreet && { opacity: 0.5 }]} 
-                          onPress={() => {
-                            if (!selectedStreet) {
-                              Alert.alert('Помилка', 'Спочатку оберіть вулицю.');
-                              return;
-                            }
-                            setNumberModalVisible(true);
-                          }}
-                          disabled={!selectedStreet}
-                        >
-                          <Text style={[styles.selectorBtnText, { color: selectedNumber ? colors.text : colors.textMuted }]}>
-                            {selectedNumber 
-                              ? (selectedStreet && selectedStreet !== 'no_street' 
-                                  ? `${selectedStreet}, ${selectedNumber}` 
-                                  : `${selectedNumber}`)
-                              : 'Оберіть номер...'}
-                          </Text>
-                          <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
-                        </Pressable>
 
                         <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Ваш статус (Роль)</Text>
                         <Pressable 
@@ -1293,9 +1319,9 @@ export default function LoginScreen() {
             <Text style={[styles.modalTitle, { color: colors.text, marginBottom: 12, fontSize: 18, fontWeight: 'bold' }]}>Оберіть номер будинку / ділянки</Text>
             <ScrollView style={{ width: '100%', marginBottom: 12 }}>
               {selectedStreet === 'no_street'
-                ? streetsData?.no_street_properties?.map((p: any) => (
+                ? streetsData?.no_street_properties?.map((p: any, idx: number) => (
                     <Pressable
-                      key={p.identifier}
+                      key={`${p.identifier}-${idx}`}
                       style={({ pressed }) => [
                         styles.modalItem,
                         { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
@@ -1312,9 +1338,9 @@ export default function LoginScreen() {
                     </Pressable>
                   ))
                 : selectedStreet &&
-                  streetsData?.streets?.[selectedStreet]?.map((p: any) => (
+                  streetsData?.streets?.[selectedStreet]?.map((p: any, idx: number) => (
                     <Pressable
-                      key={p.identifier}
+                      key={`${p.identifier}-${idx}`}
                       style={({ pressed }) => [
                         styles.modalItem,
                         { borderBottomColor: isDark ? '#334155' : '#e2e8f0', paddingVertical: 14 },
