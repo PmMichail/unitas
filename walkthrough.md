@@ -157,4 +157,24 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
   - Backend API: [unitas-backend.fly.dev](https://unitas-backend.fly.dev/) / [api.unitax.pro](https://api.unitax.pro/)
 - **Content Check**: Verified that the newly localized strings (e.g. `"Налаштування"`) are present in the server response payload of `/settings`.
 
+---
+
+## 7. Monthly Meter Readings Pivot View, Apple Review Login Credentials, and OSBB Number Input
+
+### 1. Monthly Meter Readings Pivot View
+- **Backend Query & Route**: Added `/api/profiles/{profile_id}/meters-readings-pivot` in `backend/api/main.py` which aggregates all meters for a profile along with their history of readings.
+- **Frontend API Binding**: Added `getMetersReadingsPivot` to `frontend/lib/api.ts`.
+- **UI Tab Integration**: Integrated a new "Зведений звіт по місяцях" (Monthly Pivot Report) view inside the billing dashboard (`frontend/app/billing/page.tsx`) with a clean tab toggle switch next to "Список лічильників".
+- **Dynamic Pivot Table**: Renders a beautiful table that gathers all unique reading months chronologically (newest first), formats them to natural Ukrainian text (e.g., "Червень 2026"), and displays the reading value and charge amount (in UAH) in each corresponding cell.
+
+### 2. Apple Review Login Credentials & OSBB Number Input
+- **Apple Reviewer Backdoor**: Enhanced backend auth in `backend/api/main.py` to allow Apple Review credentials (`apple_review@unitas.com`) to bypass the live phone/SMS OTP check and log in using cooperative member identifier `9999` directly.
+- **Login Form Enhancements**: Updated `/osbb/[slug]/login` with an additional field for "Номер абонента" (cooperative/flat number identifier) and integrated automated support to submit review credentials with a single click.
+
+### 3. Verification & Deployment
+- **Integration Test**: Created `scratch/test_pivot_endpoint.py` and verified the correct SQL join structure and serialized output format.
+- **Type Checking**: Validated type safety using `npx tsc --noEmit` on the frontend with 0 compilation errors.
+- **Production Deploy**: Successfully pushed all updates to GitHub and redeployed both `unitas-backend` and `unitas-frontend` services to Fly.io.
+
+
 
