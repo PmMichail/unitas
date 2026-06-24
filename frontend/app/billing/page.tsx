@@ -56,6 +56,7 @@ interface Member {
   property_type?: string;
   parent_id?: number | null;
   role?: string;
+  share?: string;
 }
 
 interface Transaction {
@@ -134,6 +135,7 @@ export default function BillingPage() {
   const [propertyType, setPropertyType] = useState("кв.");
   const [parentId, setParentId] = useState<number>(-1);
   const [memberRole, setMemberRole] = useState("owner");
+  const [memberShare, setMemberShare] = useState("");
 
   // Charge Modal & Accrual Config
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
@@ -575,8 +577,10 @@ export default function BillingPage() {
   const downloadCsvTemplate = () => {
     const csvContent = "\ufeff" + 
       "Номер квартири / об'єкта,ПІБ власника,Площа (кв.м),Тариф за кв.м,Фіксований внесок,Email,Телефон,Початковий баланс,Тип об'єкта,Роль\n" +
-      "12,Шевченко Т.Г.,65.4,8.5,0,shevchenko@example.com,+380671112233,0,кв.,власник\n" +
-      "14,Коваленко І.І.,45.0,0,350,kovalenko@example.com,+380934445566,-150,кв.,мешканець\n";
+      "12,Шевченко Т.Г. (1/2),65.4,8.5,0,shevchenko@example.com,+380671112233,0,кв.,власник\n" +
+      "12,Шевченко В.О. (1/2),0,0,0,shevchenko2@example.com,+380672223344,0,кв.,власник\n" +
+      "12,Коваленко І.І. (орендар),0,0,0,kovalenko@example.com,+380934445566,0,кв.,мешканець\n" +
+      "14,Петренко П.П.,45.0,0,350,petrenko@example.com,+380951112233,-150,кв.,власник\n";
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -911,6 +915,7 @@ export default function BillingPage() {
     setPropertyType(activeTab === "contractors" ? "провайдер" : "кв.");
     setParentId(-1);
     setMemberRole("owner");
+    setMemberShare("");
     setMemberModalOpen(true);
   };
 
@@ -927,6 +932,7 @@ export default function BillingPage() {
     setPropertyType(member.property_type || "кв.");
     setParentId(member.parent_id || -1);
     setMemberRole(member.role || "owner");
+    setMemberShare(member.share || "");
     setMemberModalOpen(true);
   };
 
@@ -950,7 +956,8 @@ export default function BillingPage() {
         balance: balance || 0,
         property_type: propertyType,
         parent_id: parentId !== -1 ? parentId : undefined,
-        role: memberRole
+        role: memberRole,
+        share: memberShare || undefined
       };
 
       if (editingMember) {
@@ -3048,7 +3055,14 @@ export default function BillingPage() {
                             </button>
                           </td>
                           <td className="px-6 py-4 font-medium text-slate-700 dark:text-slate-200">
-                            {m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span>{m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}</span>
+                              {m.share && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
+                                  частка {m.share}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-xs font-semibold">
                             {m.role === "tenant" ? (
@@ -3911,6 +3925,20 @@ export default function BillingPage() {
                     className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+                {memberRole === "owner" && (
+                  <div className="space-y-1.5 col-span-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      Частка власності
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Наприклад: 1/2, 1/3 або 100%"
+                      value={memberShare}
+                      onChange={(e) => setMemberShare(e.target.value)}
+                      className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
               </div>
               <span className="text-[10px] text-slate-400 block leading-tight">Вкажіть суму зі знаком мінус "-", якщо є стартовий борг</span>
 
@@ -4480,8 +4508,13 @@ export default function BillingPage() {
                       <span className="text-[10px] uppercase font-bold text-slate-400">
                         {selectedMemberDetails.member.property_type === "провайдер" ? "Контрагент / Організація" : "Власник / Організація"}
                       </span>
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                        {selectedMemberDetails.member.owner_name || "Не вказано"}
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                        <span>{selectedMemberDetails.member.owner_name || "Не вказано"}</span>
+                        {selectedMemberDetails.member.share && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
+                            частка {selectedMemberDetails.member.share}
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-slate-400">
                         {selectedMemberDetails.member.phone || "Немає телефону"}

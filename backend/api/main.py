@@ -410,6 +410,7 @@ class UnitOrMember(Base):
     verified_by = Column(Integer, nullable=True) # ID of admin who approved
     flat_area = Column(Float, nullable=True) # Area for quorum calculation
     role = Column(String(20), default='owner') # owner (власник) / tenant (мешканець)
+    share = Column(String(50), nullable=True) # частка власності (e.g. 1/2)
 
     profile = relationship("Profile", back_populates="units_or_members")
 
@@ -1336,7 +1337,8 @@ try:
         ("verified_at", "TIMESTAMP"),
         ("verified_by", "INTEGER"),
         ("flat_area", "REAL"),
-        ("role", "VARCHAR(20) DEFAULT 'owner'")
+        ("role", "VARCHAR(20) DEFAULT 'owner'"),
+        ("share", "VARCHAR(50)")
     ]:
         mig3_list.append(f"ALTER TABLE units_or_members ADD COLUMN {col_def[0]} {col_def[1]}")
 
@@ -4764,18 +4766,20 @@ async def bulk_import_members(
                 if "мешкан" in rv or "tenant" in rv or "оренд" in rv:
                     role_val = "tenant"
             
-            dup = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id, UnitOrMember.identifier == identifier).first()
-            if dup:
-                dup.owner_name = owner_name
-                dup.area = area
-                dup.rate_per_sqm = rate_per_sqm
-                dup.fixed_monthly_fee = fixed_monthly_fee
-                dup.email = email
-                dup.phone = phone
-                dup.balance = balance
-                dup.property_type = property_type
-                dup.role = role_val
-            else:
+            import re
+            share_val = None
+            if owner_name:
+                share_match = re.search(r'\(?(\d+/\d+)\)?|(?:\s|^)(\d+/\d+)(?:\s|$)', owner_name)
+                if share_match:
+                    share_val = share_match.group(1) or share_match.group(2)
+
+            primary = db.query(UnitOrMember).filter(
+                UnitOrMember.profile_id == profile_id,
+                UnitOrMember.identifier == identifier,
+                UnitOrMember.parent_id == None
+            ).first()
+
+            if not primary:
                 member = UnitOrMember(
                     profile_id=profile_id,
                     identifier=identifier,
@@ -4787,9 +4791,64 @@ async def bulk_import_members(
                     phone=phone,
                     balance=balance,
                     property_type=property_type,
-                    role=role_val
+                    role=role_val,
+                    share=share_val,
+                    parent_id=None
                 )
                 db.add(member)
+                db.flush()
+            else:
+                child = None
+                if phone:
+                    child = db.query(UnitOrMember).filter(
+                        UnitOrMember.profile_id == profile_id,
+                        UnitOrMember.identifier == identifier,
+                        UnitOrMember.parent_id == primary.id,
+                        UnitOrMember.phone == phone
+                    ).first()
+                if not child and owner_name:
+                    child = db.query(UnitOrMember).filter(
+                        UnitOrMember.profile_id == profile_id,
+                        UnitOrMember.identifier == identifier,
+                        UnitOrMember.parent_id == primary.id,
+                        UnitOrMember.owner_name == owner_name
+                    ).first()
+
+                if child:
+                    child.owner_name = owner_name
+                    child.email = email
+                    child.phone = phone
+                    child.role = role_val
+                    child.share = share_val
+                else:
+                    if (phone and primary.phone == phone) or (owner_name and primary.owner_name == owner_name):
+                        primary.owner_name = owner_name
+                        primary.area = area
+                        primary.rate_per_sqm = rate_per_sqm
+                        primary.fixed_monthly_fee = fixed_monthly_fee
+                        primary.email = email
+                        primary.phone = phone
+                        primary.balance = balance
+                        primary.property_type = property_type
+                        primary.role = role_val
+                        primary.share = share_val
+                    else:
+                        new_child = UnitOrMember(
+                            profile_id=profile_id,
+                            identifier=identifier,
+                            owner_name=owner_name,
+                            area=0.0,
+                            rate_per_sqm=0.0,
+                            fixed_monthly_fee=0.0,
+                            email=email,
+                            phone=phone,
+                            balance=0.0,
+                            property_type=property_type,
+                            role=role_val,
+                            share=share_val,
+                            parent_id=primary.id
+                        )
+                        db.add(new_child)
             imported_count += 1
         except Exception as e:
             errors.append(f"Рядок {idx + start_idx + 1}: {str(e)}")
@@ -8235,6 +8294,7 @@ def member_register(
     full_name: str = Form(...),
     phone: str = Form(...),
     email: str = Form(...),
+    role: Optional[str] = Form("tenant"),
     push_token: Optional[str] = Form(None),
     platform: Optional[str] = Form(None),
     db: Session = Depends(get_db)
@@ -8256,48 +8316,94 @@ def member_register(
     if not getattr(subscription, "is_member_module_active", False):
         raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
     
-    # Find member by account_number
+    # Find primary member by identifier (parent_id == None)
     member = db.query(UnitOrMember).filter(
         UnitOrMember.profile_id == profile.id,
-        UnitOrMember.identifier == account_number
+        UnitOrMember.identifier == account_number,
+        UnitOrMember.parent_id == None
     ).first()
     
     if not member:
         raise HTTPException(status_code=404, detail="Особовий рахунок не знайдено")
-    
-    # Check if already has password
-    if member.password_hash:
-        raise HTTPException(status_code=400, detail="Акаунт вже зареєстровано. Використовуйте логін.")
         
-    # Check if this phone number is already registered to another UnitOrMember in the DB
+    # Check if this phone number is already registered to another property in the DB
     clean_phone = phone.strip()
+    clean_email = email.strip().lower()
     if clean_phone:
         existing_phone = db.query(UnitOrMember).filter(
             UnitOrMember.phone == clean_phone,
             UnitOrMember.password_hash.isnot(None)
         ).first()
-        if existing_phone:
+        if existing_phone and existing_phone.identifier != account_number:
             raise HTTPException(status_code=400, detail="Цей номер телефону вже зареєстрований для іншої власності")
-    
-    # Hash password and set details & pending status
+            
+    role_param = "owner" if role == "owner" else "tenant"
     hashed = hashlib.sha256(password.encode('utf-8')).hexdigest()
-    member.password_hash = hashed
-    member.owner_name = full_name.strip()
-    member.phone = phone.strip()
-    member.email = email.strip().lower()
-    member.status = "pending"
-    member.account_number = f"{slug.upper()}-{account_number}"  # Generate unique account number
-    db.commit()
     
+    # If the primary member does not have a password yet, register them as the primary owner
+    if not member.password_hash:
+        member.password_hash = hashed
+        member.owner_name = full_name.strip()
+        member.phone = clean_phone
+        member.email = clean_email
+        member.status = "pending"
+        member.role = "owner"  # Primary must be owner
+        member.account_number = f"{slug.upper()}-{account_number}"  # Generate unique account number
+        db.commit()
+        target_member = member
+    else:
+        # Primary is already registered. Check if there's an existing child record for this phone/email under this parent
+        child = db.query(UnitOrMember).filter(
+            UnitOrMember.profile_id == profile.id,
+            UnitOrMember.parent_id == member.id,
+            ((UnitOrMember.phone == clean_phone) | (UnitOrMember.email == clean_email))
+        ).first()
+        
+        if child:
+            if child.password_hash:
+                raise HTTPException(status_code=400, detail="Акаунт вже зареєстровано. Використовуйте логін.")
+            child.password_hash = hashed
+            child.owner_name = full_name.strip()
+            child.phone = clean_phone
+            child.email = clean_email
+            child.status = "pending"
+            child.role = role_param
+            child.account_number = f"{slug.upper()}-{account_number}-{child.id}"
+            db.commit()
+            target_member = child
+        else:
+            # Create a new child record for this co-owner or tenant
+            new_child = UnitOrMember(
+                profile_id=profile.id,
+                identifier=account_number,
+                owner_name=full_name.strip(),
+                area=0.0,
+                rate_per_sqm=0.0,
+                fixed_monthly_fee=0.0,
+                email=clean_email,
+                phone=clean_phone,
+                balance=0.0,
+                property_type=member.property_type,
+                role=role_param,
+                parent_id=member.id,
+                status="pending",
+                password_hash=hashed
+            )
+            db.add(new_child)
+            db.flush()
+            new_child.account_number = f"{slug.upper()}-{account_number}-{new_child.id}"
+            db.commit()
+            target_member = new_child
+            
     if push_token:
-        save_push_token_internal(db, member.id, profile.id, push_token, platform)
+        save_push_token_internal(db, target_member.id, profile.id, push_token, platform)
     
-    if member.email:
+    if target_member.email:
         import threading
         threading.Thread(
             target=send_email_with_attachments,
             args=(
-                member.email,
+                target_member.email,
                 f"{profile.name}: заявку на кабінет мешканця отримано",
                 f"Ваша заявка на доступ до кабінету мешканця для {profile.name} отримана. Очікуйте підтвердження головою правління.",
                 []
@@ -8308,8 +8414,8 @@ def member_register(
     return {
         "status": "pending",
         "message": "Заявку надіслано голові правління. Очікуйте підтвердження.",
-        "account_number": member.account_number,
-        "member_id": member.id,
+        "account_number": target_member.account_number,
+        "member_id": target_member.id,
         "phone": profile.phone or ""
     }
 
