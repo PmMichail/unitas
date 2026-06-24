@@ -20,6 +20,11 @@ export default function OsbbMemberLoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const [streetsData, setStreetsData] = useState<any>(null);
+  const [selectedStreet, setSelectedStreet] = useState("");
+  const [selectedNumber, setSelectedNumber] = useState("");
+  const [role, setRole] = useState("tenant");
+
   useEffect(() => {
     const loadProfile = async () => {
       try {
@@ -32,15 +37,36 @@ export default function OsbbMemberLoginPage() {
     if (slug) loadProfile();
   }, [slug]);
 
+  useEffect(() => {
+    const loadAddresses = async () => {
+      try {
+        const data = await api.getOsbbAvailableAddresses(slug);
+        setStreetsData(data);
+      } catch (err: any) {
+        console.error("Failed to load available addresses", err);
+      }
+    };
+    if (slug && mode === "register") {
+      loadAddresses();
+    }
+  }, [slug, mode]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
       if (mode === "register") {
+        if (!selectedNumber) {
+          setError("Будь ласка, оберіть вашу адресу (номер будинку / ділянки)");
+          setLoading(false);
+          return;
+        }
         const res = await api.memberRegister({
           slug,
-          account_number: accountNumber,
+          street: selectedStreet && selectedStreet !== "no_street" ? selectedStreet : undefined,
+          house_number: selectedNumber,
+          role,
           password,
           full_name: fullName,
           phone,
@@ -106,7 +132,7 @@ export default function OsbbMemberLoginPage() {
             <div className="mb-6 text-center font-bold text-lg text-white">Відновлення паролю</div>
           )}
 
-          {mode === "login" ? (
+          {mode === "login" && (
             <>
               <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Номер телефону</label>
               <div className="relative mb-4">
@@ -114,7 +140,9 @@ export default function OsbbMemberLoginPage() {
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} required className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="+380991234567" />
               </div>
             </>
-          ) : (
+          )}
+
+          {mode === "reset" && (
             <>
               <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Особовий рахунок / № квартири</label>
               <div className="relative mb-4">
@@ -142,6 +170,65 @@ export default function OsbbMemberLoginPage() {
               <div className="relative mb-4">
                 <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="your@email.com" />
+              </div>
+
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Вулиця</label>
+              <div className="relative mb-4">
+                <select
+                  value={selectedStreet}
+                  onChange={(e) => {
+                    setSelectedStreet(e.target.value);
+                    setSelectedNumber("");
+                  }}
+                  required={mode === "register"}
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/60 py-3 px-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition"
+                >
+                  <option value="">Оберіть вулицю...</option>
+                  {streetsData?.streets && Object.keys(streetsData.streets).map((st) => (
+                    <option key={st} value={st}>{st}</option>
+                  ))}
+                  {streetsData?.no_street_properties?.length > 0 && (
+                    <option value="no_street">Без вулиці</option>
+                  )}
+                </select>
+              </div>
+
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Номер будинку / ділянки</label>
+              <div className="relative mb-4">
+                <select
+                  value={selectedNumber}
+                  onChange={(e) => setSelectedNumber(e.target.value)}
+                  required={mode === "register"}
+                  disabled={!selectedStreet}
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/60 py-3 px-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition disabled:opacity-50"
+                >
+                  <option value="">Оберіть номер...</option>
+                  {selectedStreet === "no_street"
+                    ? streetsData?.no_street_properties?.map((p: any) => (
+                        <option key={p.identifier} value={p.identifier}>
+                          {p.property_type} {p.number}
+                        </option>
+                      ))
+                    : selectedStreet &&
+                      streetsData?.streets?.[selectedStreet]?.map((p: any) => (
+                        <option key={p.identifier} value={p.identifier}>
+                          {p.property_type} {p.number}
+                        </option>
+                      ))}
+                </select>
+              </div>
+
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Ваш статус</label>
+              <div className="relative mb-4">
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  required={mode === "register"}
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/60 py-3 px-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition"
+                >
+                  <option value="tenant">Мешканець (орендар, член родини)</option>
+                  <option value="owner">Власник</option>
+                </select>
               </div>
             </>
           )}

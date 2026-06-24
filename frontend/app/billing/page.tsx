@@ -184,6 +184,11 @@ export default function BillingPage() {
   const [lockYear, setLockYear] = useState<number>(new Date().getFullYear());
   const [lockLoading, setLockLoading] = useState(false);
   
+  // Meter view mode and pivot table data
+  const [meterViewMode, setMeterViewMode] = useState<"list" | "monthly">("list");
+  const [pivotMetersData, setPivotMetersData] = useState<any[]>([]);
+  const [loadingPivot, setLoadingPivot] = useState(false);
+  
   // Custom reading date
   const [readingDate, setReadingDate] = useState("");
 
@@ -328,6 +333,50 @@ export default function BillingPage() {
       setLoading(false);
     }
   };
+
+  const loadPivotData = async () => {
+    if (!selectedProfile) return;
+    setLoadingPivot(true);
+    try {
+      const data = await api.getMetersReadingsPivot(selectedProfile.id);
+      setPivotMetersData(data || []);
+    } catch (err) {
+      console.error("Error loading meters readings pivot", err);
+      showToast("Не вдалося завантажити покази лічильників", "error");
+    } finally {
+      setLoadingPivot(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "meters" && meterViewMode === "monthly" && selectedProfile) {
+      loadPivotData();
+    }
+  }, [activeTab, meterViewMode, selectedProfile?.id]);
+
+  const allMonthsSet = new Set<string>();
+  pivotMetersData.forEach((m: any) => {
+    m.readings?.forEach((r: any) => {
+      if (r.reading_date) {
+        const monthStr = r.reading_date.substring(0, 7);
+        allMonthsSet.add(monthStr);
+      }
+    });
+  });
+  const sortedMonths = Array.from(allMonthsSet).sort().reverse();
+
+  const formatMonthUk = (monthStr: string) => {
+    if (!monthStr || !monthStr.includes("-")) return monthStr;
+    const [year, month] = monthStr.split("-");
+    const monthNames = [
+      "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
+      "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"
+    ];
+    const monthIdx = parseInt(month, 10) - 1;
+    if (isNaN(monthIdx) || monthIdx < 0 || monthIdx > 11) return monthStr;
+    return `${monthNames[monthIdx]} ${year}`;
+  };
+
 
   const getContractorTypeLabel = (type: string) => {
     switch (type) {
@@ -1922,7 +1971,7 @@ export default function BillingPage() {
           )}
 
           {activeTab === "meters" && (
-            <div className="flex justify-start w-full">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center w-full gap-3">
               <button
                 onClick={handleOpenAddMeterModal}
                 className="flex items-center justify-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-2 rounded-xl w-full sm:w-auto"
@@ -1930,6 +1979,31 @@ export default function BillingPage() {
                 <Plus className="w-3.5 h-3.5" />
                 <span>Додати лічильник</span>
               </button>
+
+              <div className="flex rounded-xl bg-slate-100 dark:bg-slate-950 p-1 border border-slate-200/50 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setMeterViewMode("list")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    meterViewMode === "list"
+                      ? "bg-white dark:bg-slate-800 text-indigo-650 dark:text-white shadow-sm"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  Список лічильників
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMeterViewMode("monthly")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    meterViewMode === "monthly"
+                      ? "bg-white dark:bg-slate-800 text-indigo-650 dark:text-white shadow-sm"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+                  }`}
+                >
+                  Зведений звіт по місяцях
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -3486,112 +3560,200 @@ export default function BillingPage() {
 
             <div className="grid grid-cols-1 gap-6">
               <div className="glass-panel rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800/60 shadow-xl">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                        <th className="px-6 py-4">Лічильник</th>
-                        <th className="px-6 py-4">Тип послуги</th>
-                        <th className="px-6 py-4">Рівень / Ієрархія</th>
-                        <th className="px-6 py-4">Прив'язка до абонента</th>
-                        <th className="px-6 py-4">Тариф</th>
-                        <th className="px-6 py-4">Показники (Початкові / Поточні)</th>
-                        <th className="px-6 py-4 text-right">Дії</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
-                      {loading ? (
-                        <tr>
-                          <td colSpan={7} className="text-center py-12 text-slate-400">
-                            <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
-                          </td>
+                {meterViewMode === "list" ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                          <th className="px-6 py-4">Лічильник</th>
+                          <th className="px-6 py-4">Тип послуги</th>
+                          <th className="px-6 py-4">Рівень / Ієрархія</th>
+                          <th className="px-6 py-4">Прив'язка до абонента</th>
+                          <th className="px-6 py-4">Тариф</th>
+                          <th className="px-6 py-4">Показники (Початкові / Поточні)</th>
+                          <th className="px-6 py-4 text-right">Дії</th>
                         </tr>
-                      ) : meters.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="text-center py-12 text-slate-400">
-                            <Cpu className="w-8 h-8 mx-auto mb-2 text-slate-350" />
-                            <p>Лічильники підприємства не налаштовані. Натисніть "Додати лічильник", щоб почати облік.</p>
-                          </td>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                        {loading ? (
+                          <tr>
+                            <td colSpan={7} className="text-center py-12 text-slate-400">
+                              <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+                            </td>
+                          </tr>
+                        ) : meters.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="text-center py-12 text-slate-400">
+                              <Cpu className="w-8 h-8 mx-auto mb-2 text-slate-350" />
+                              <p>Лічильники підприємства не налаштовані. Натисніть "Додати лічильник", щоб почати облік.</p>
+                            </td>
+                          </tr>
+                        ) : (
+                          meters.map((meter) => {
+                            return (
+                              <tr key={meter.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors duration-150">
+                                <td className="px-6 py-4 font-bold text-slate-900 dark:text-white flex items-center space-x-2">
+                                  <span className={`w-2.5 h-2.5 rounded-full ${
+                                    meter.type === "electricity" ? "bg-amber-500" :
+                                    meter.type === "water" ? "bg-blue-500" :
+                                    meter.type === "gas" ? "bg-emerald-500" : "bg-rose-500"
+                                  }`} />
+                                  <span>{meter.name}</span>
+                                </td>
+                                <td className="px-6 py-4 text-xs font-semibold">
+                                  {meter.type === "electricity" && "⚡ Електроенергія"}
+                                  {meter.type === "water" && "💧 Водопостачання"}
+                                  {meter.type === "gas" && "🔥 Газ"}
+                                  {meter.type === "heat" && "🌡️ Теплопостачання"}
+                                </td>
+                                <td className="px-6 py-4 text-xs text-slate-500">
+                                  {meter.parent_id ? (
+                                    <span className="flex items-center">
+                                      <Layers className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                                      Підпорядкований: {meter.parent_name || `ID: ${meter.parent_id}`}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-700 font-bold dark:text-indigo-400 flex items-center">
+                                      <Building className="w-3.5 h-3.5 mr-1" />
+                                      Головний підприємства
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 font-medium text-slate-700 dark:text-slate-200">
+                                  {meter.member_id ? (
+                                    <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-150/10">
+                                      {meter.member_identifier}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 italic">Загальний лічильник</span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-4 font-bold text-slate-700 dark:text-slate-300">
+                                  {meter.tariff} <span className="text-[10px] font-medium text-slate-400">грн/од.</span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <div className="flex flex-col">
+                                    <span className="font-extrabold text-slate-900 dark:text-white">{meter.last_reading_value || 0}</span>
+                                    {meter.last_reading_date && <span className="text-[10px] text-slate-450">{meter.last_reading_date}</span>}
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                  <div className="flex items-center justify-end space-x-1.5">
+                                    <button
+                                      onClick={() => handleOpenReadingModal(meter)}
+                                      title="Внести нові показники"
+                                      className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-650 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900 rounded-lg text-xs font-bold hover:bg-indigo-100"
+                                    >
+                                      Внести показники
+                                    </button>
+                                    <button
+                                      onClick={() => handleOpenEditMeterModal(meter)}
+                                      className="p-1 rounded-lg text-slate-400 hover:text-amber-500"
+                                    >
+                                      <Edit className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteMeter(meter.id)}
+                                      className="p-1 rounded-lg text-slate-400 hover:text-rose-500"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                          <th className="px-6 py-4 min-w-[200px]">Лічильник</th>
+                          <th className="px-6 py-4">Тип</th>
+                          <th className="px-6 py-4">Абонент</th>
+                          <th className="px-6 py-4">Тариф</th>
+                          {sortedMonths.length === 0 ? (
+                            <th className="px-6 py-4">Показники відсутні</th>
+                          ) : (
+                            sortedMonths.map((m) => (
+                              <th key={m} className="px-6 py-4 whitespace-nowrap">{formatMonthUk(m)}</th>
+                            ))
+                          )}
                         </tr>
-                      ) : (
-                        meters.map((meter) => {
-                          return (
-                            <tr key={meter.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors duration-150">
-                              <td className="px-6 py-4 font-bold text-slate-900 dark:text-white flex items-center space-x-2">
-                                <span className={`w-2.5 h-2.5 rounded-full ${
-                                  meter.type === "electricity" ? "bg-amber-500" :
-                                  meter.type === "water" ? "bg-blue-500" :
-                                  meter.type === "gas" ? "bg-emerald-500" : "bg-rose-500"
-                                }`} />
-                                <span>{meter.name}</span>
-                              </td>
-                              <td className="px-6 py-4 text-xs font-semibold">
-                                {meter.type === "electricity" && "⚡ Електроенергія"}
-                                {meter.type === "water" && "💧 Водопостачання"}
-                                {meter.type === "gas" && "🔥 Газ"}
-                                {meter.type === "heat" && "🌡️ Теплопостачання"}
-                              </td>
-                              <td className="px-6 py-4 text-xs text-slate-500">
-                                {meter.parent_id ? (
-                                  <span className="flex items-center">
-                                    <Layers className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                                    Підпорядкований: {meter.parent_name || `ID: ${meter.parent_id}`}
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                        {loadingPivot ? (
+                          <tr>
+                            <td colSpan={4 + (sortedMonths.length || 1)} className="text-center py-12 text-slate-400">
+                              <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+                            </td>
+                          </tr>
+                        ) : pivotMetersData.length === 0 ? (
+                          <tr>
+                            <td colSpan={4 + (sortedMonths.length || 1)} className="text-center py-12 text-slate-400">
+                              Немає зареєстрованих лічильників.
+                            </td>
+                          </tr>
+                        ) : (
+                          pivotMetersData.map((meter) => {
+                            return (
+                              <tr key={meter.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors duration-150">
+                                <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">
+                                  {meter.name}
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold text-white ${
+                                    meter.type === "electricity" ? "bg-amber-550" :
+                                    meter.type === "water" ? "bg-blue-500" :
+                                    meter.type === "gas" ? "bg-emerald-500" : "bg-rose-500"
+                                  }`}>
+                                    {meter.type === "electricity" && "⚡ Електро"}
+                                    {meter.type === "water" && "💧 Вода"}
+                                    {meter.type === "gas" && "🔥 Газ"}
+                                    {meter.type === "heat" && "🌡️ Тепло"}
                                   </span>
+                                </td>
+                                <td className="px-6 py-4 text-slate-600 dark:text-slate-300 font-semibold">
+                                  {meter.member_identifier || <span className="text-slate-400 italic">Загальний</span>}
+                                </td>
+                                <td className="px-6 py-4 text-slate-500 font-medium">
+                                  {meter.tariff} грн
+                                </td>
+                                {sortedMonths.length === 0 ? (
+                                  <td className="px-6 py-4 text-slate-400 italic">немає показів</td>
                                 ) : (
-                                  <span className="text-slate-700 font-bold dark:text-indigo-400 flex items-center">
-                                    <Building className="w-3.5 h-3.5 mr-1" />
-                                    Головний підприємства
-                                  </span>
+                                  sortedMonths.map((mStr) => {
+                                    const r = meter.readings?.find((rd: any) => rd.reading_date?.startsWith(mStr));
+                                    return (
+                                      <td key={mStr} className="px-6 py-4 whitespace-nowrap">
+                                        {r ? (
+                                          <div className="flex flex-col">
+                                            <span className="font-extrabold text-slate-800 dark:text-white">
+                                              {r.reading_value}
+                                            </span>
+                                            <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                                              {(r.charge_amount || 0).toFixed(2)} грн
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-300 dark:text-slate-650">—</span>
+                                        )}
+                                      </td>
+                                    );
+                                  })
                                 )}
-                              </td>
-                              <td className="px-6 py-4 font-medium text-slate-700 dark:text-slate-200">
-                                {meter.member_id ? (
-                                  <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-150/10">
-                                    {meter.member_identifier}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 italic">Загальний лічильник</span>
-                                )}
-                              </td>
-                              <td className="px-6 py-4 font-bold text-slate-700 dark:text-slate-300">
-                                {meter.tariff} <span className="text-[10px] font-medium text-slate-400">грн/од.</span>
-                              </td>
-                              <td className="px-6 py-4">
-                                <div className="flex flex-col">
-                                  <span className="font-extrabold text-slate-900 dark:text-white">{meter.last_reading_value || 0}</span>
-                                  {meter.last_reading_date && <span className="text-[10px] text-slate-450">{meter.last_reading_date}</span>}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                <div className="flex items-center justify-end space-x-1.5">
-                                  <button
-                                    onClick={() => handleOpenReadingModal(meter)}
-                                    title="Внести нові показники"
-                                    className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-650 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900 rounded-lg text-xs font-bold hover:bg-indigo-100"
-                                  >
-                                    Внести показники
-                                  </button>
-                                  <button
-                                    onClick={() => handleOpenEditMeterModal(meter)}
-                                    className="p-1 rounded-lg text-slate-400 hover:text-amber-500"
-                                  >
-                                    <Edit className="w-4 h-4" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteMeter(meter.id)}
-                                    className="p-1 rounded-lg text-slate-400 hover:text-rose-500"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>

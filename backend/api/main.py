@@ -5297,6 +5297,49 @@ def list_meters(profile_id: int, db: Session = Depends(get_db)):
         })
     return result
 
+@app.get("/api/profiles/{profile_id}/meters-readings-pivot")
+def get_meters_readings_pivot(profile_id: int, db: Session = Depends(get_db)):
+    """Get all meters with all their readings for a pivot table monthly overview"""
+    meters = db.query(Meter).filter(Meter.profile_id == profile_id).all()
+    result = []
+    for m in meters:
+        readings = db.query(MeterReading).filter(MeterReading.meter_id == m.id).order_by(MeterReading.reading_date.asc()).all()
+        
+        member_ident = None
+        if m.member_id:
+            member = db.query(UnitOrMember).filter(UnitOrMember.id == m.member_id).first()
+            if member:
+                member_ident = member.identifier
+                
+        parent_name = None
+        if m.parent_id:
+            parent = db.query(Meter).filter(Meter.id == m.parent_id).first()
+            if parent:
+                parent_name = parent.name
+                
+        readings_list = []
+        for r in readings:
+            readings_list.append({
+                "id": r.id,
+                "reading_value": r.reading_value,
+                "reading_date": r.reading_date,
+                "charge_amount": r.charge_amount,
+                "is_locked": r.is_locked
+            })
+            
+        result.append({
+            "id": m.id,
+            "name": m.name,
+            "type": m.type,
+            "tariff": m.tariff,
+            "initial_reading": m.initial_reading,
+            "member_identifier": member_ident,
+            "parent_name": parent_name,
+            "readings": readings_list
+        })
+    return result
+
+
 # --- Contractors (Decoupled Module) Endpoints ---
 from sqlalchemy import func
 

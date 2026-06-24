@@ -47,7 +47,22 @@ export const api = {
     return response.data;
   },
 
-  memberRegister: async (data: { slug: string; account_number: string; password: string; full_name?: string; phone?: string; email?: string }) => {
+  getOsbbAvailableAddresses: async (slug: string) => {
+    const response = await client.get(`/api/osbb/by-slug/${slug}/available-addresses`);
+    return response.data;
+  },
+
+  memberRegister: async (data: {
+    slug: string;
+    account_number?: string;
+    street?: string;
+    house_number?: string;
+    password: string;
+    full_name?: string;
+    phone?: string;
+    email?: string;
+    role?: string;
+  }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/auth/member/register`, formData);
     return response.data;
@@ -417,6 +432,11 @@ export const api = {
 
   getMeters: async (profileId: number) => {
     const response = await client.get(`/api/profiles/${profileId}/meters`);
+    return response.data;
+  },
+
+  getMetersReadingsPivot: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/meters-readings-pivot`);
     return response.data;
   },
 
