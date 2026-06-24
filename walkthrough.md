@@ -140,3 +140,21 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
 - **Result**: All checks executed and passed successfully.
 - Verified Next.js build compilation with 100% success (`npm run build` completed successfully).
 
+---
+
+## 6. Settings Page Localization & Production Deployments
+
+### 1. Natural Ukrainian Localization of Settings Page
+- Reviewed and polished the entire [settings/page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/settings/page.tsx) to use natural and correct Ukrainian language phrasing (e.g. replacing Russianisms and technical jargon like `відправте` with `надішліть`, `конфігів` with `налаштувань`, and fixing correct prepositions like `ВЗ із`, `ПДФО із`).
+
+### 2. Backend & Frontend Production Deployments to Fly.io
+- **Backend Service (`unitas-backend`)**: Deployed successfully via `flyctl deploy --config fly.backend.toml`. Tested health and routing endpoints.
+- **Frontend Service (`unitas-frontend`)**: Built the production-ready Next.js bundle and deployed it successfully to Fly.io via `flyctl deploy` inside `frontend/`. 
+
+### 3. Production Verification
+- **DNS & SSL**: Verified both domains are active and have valid SSL certificates:
+  - Frontend: [unitas-frontend.fly.dev](https://unitas-frontend.fly.dev/) / [www.unitax.pro](https://www.unitax.pro/) (responds with HTTP 200 OK)
+  - Backend API: [unitas-backend.fly.dev](https://unitas-backend.fly.dev/) / [api.unitax.pro](https://api.unitax.pro/)
+- **Content Check**: Verified that the newly localized strings (e.g. `"Налаштування"`) are present in the server response payload of `/settings`.
+
+

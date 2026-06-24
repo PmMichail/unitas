@@ -56,3 +56,11 @@
 - [x] Update frontend/app/settings/subscription/page.tsx with the checkbox and dynamic details calculator
 - [x] Update frontend/app/billing/page.tsx to hide config when inactive, show edit config when active, and bypass payment step
 - [x] Run typescript build verification on frontend and syntax/test check on backend
+
+## Settings Page Localization & Deployments
+- [x] Polish settings page localization to proper, natural Ukrainian
+- [x] Deploy backend updates to Fly.io
+- [x] Deploy frontend updates to Fly.io
+- [x] Verify production DNS, SSL, and localized settings page via curl checks
+- [x] Update walkthrough documentation
+
