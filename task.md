@@ -33,10 +33,10 @@
 - [x] Modify `backend/ai_parser/universal_parser.py` to route Monobank to midpoint-based parser
 - [x] Implement `_parse_monobank_pdf` with geometric filtering and normalization in `universal_parser.py`
 - [x] Update walkthrough documentation
-- [/] Глобальна заміна кольору `#4f46e5` на `#6366f1`
+- [x] Глобальна заміна кольору `#4f46e5` на `#6366f1`
   - [x] Редагування `globals.css` (зміна змінних та класів)
-  - [/] Оновлення бекенду (`backend/api/main.py` - листи та PDF)
-  - [/] Оновлення `support.html`
+  - [x] Оновлення бекенду (`backend/api/main.py` - листи та PDF)
+  - [x] Оновлення `support.html`
 
 ## Admin Payment Button Fix
 - [x] Remove unnecessary Mono Pay button from the admin billing details card view
@@ -63,4 +63,14 @@
 - [x] Deploy frontend updates to Fly.io
 - [x] Verify production DNS, SSL, and localized settings page via curl checks
 - [x] Update walkthrough documentation
+
+## Resident Account Collision Detection & Merging
+- [x] Implement automatic collision matching in backend `get_members_moderation` (phone, address, similar name matching)
+- [x] Create POST backend API endpoint to merge pending registration request with existing plot record (transfer credentials, email, status, votes, tickets, and push tokens)
+- [x] Add interactive Warning and "Об'єднати" button in frontend moderation panel
+- [x] Create test script to verify merging logic and DB state transitions
+- [x] Deploy frontend and backend changes to Fly.io
+- [x] Verify production deployment
+- [x] Update walkthrough.md and task.md
+
 
