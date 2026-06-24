@@ -1037,16 +1037,20 @@ export default function LoginScreen() {
                     ) : (
                       /* Resident Registration Form */
                       <>
-                        <Text style={[styles.fieldLabel, { color: colors.text }]}>Вулиця</Text>
-                        <Pressable 
-                          style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
-                          onPress={() => setStreetModalVisible(true)}
-                        >
-                          <Text style={[styles.selectorBtnText, { color: selectedStreet ? colors.text : colors.textMuted }]}>
-                            {selectedStreet === 'no_street' ? 'Без вулиці' : selectedStreet || 'Оберіть вулицю...'}
-                          </Text>
-                          <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
-                        </Pressable>
+                        {streetsData?.streets && Object.keys(streetsData.streets).length > 0 && (
+                          <>
+                            <Text style={[styles.fieldLabel, { color: colors.text }]}>Вулиця / Об'єднання</Text>
+                            <Pressable 
+                              style={[styles.selectorBtn, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', borderColor: colors.cardBorder || 'rgba(255,255,255,0.1)' }]} 
+                              onPress={() => setStreetModalVisible(true)}
+                            >
+                              <Text style={[styles.selectorBtnText, { color: selectedStreet ? colors.text : colors.textMuted }]}>
+                                {selectedStreet === 'no_street' ? 'Без вулиці' : selectedStreet || 'Оберіть вулицю...'}
+                              </Text>
+                              <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
+                            </Pressable>
+                          </>
+                        )}
 
                         <Text style={[styles.fieldLabel, { color: colors.text, marginTop: 12 }]}>Номер будинку / ділянки</Text>
                         <Pressable 
@@ -1061,7 +1065,11 @@ export default function LoginScreen() {
                           disabled={!selectedStreet}
                         >
                           <Text style={[styles.selectorBtnText, { color: selectedNumber ? colors.text : colors.textMuted }]}>
-                            {selectedNumber ? `${selectedNumber}` : 'Оберіть номер...'}
+                            {selectedNumber 
+                              ? (selectedStreet && selectedStreet !== 'no_street' 
+                                  ? `${selectedStreet}, ${selectedNumber}` 
+                                  : `${selectedNumber}`)
+                              : 'Оберіть номер...'}
                           </Text>
                           <ChevronRight size={16} color={colors.textMuted} style={{ transform: [{ rotate: '90deg' }] }} />
                         </Pressable>
@@ -1319,7 +1327,7 @@ export default function LoginScreen() {
                       }}
                     >
                       <Text style={[styles.modalItemText, { color: colors.text, fontSize: 16 }]}>
-                        {p.property_type} {p.number}
+                        {selectedStreet}, {p.property_type} {p.number}
                       </Text>
                     </Pressable>
                   ))}
