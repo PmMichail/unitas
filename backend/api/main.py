@@ -411,6 +411,8 @@ class UnitOrMember(Base):
     flat_area = Column(Float, nullable=True) # Area for quorum calculation
     role = Column(String(20), default='owner') # owner (власник) / tenant (мешканець)
     share = Column(String(50), nullable=True) # частка власності (e.g. 1/2)
+    street = Column(String(150), nullable=True) # Назва вулиці
+    number = Column(String(50), nullable=True) # Номер будинку/ділянки
 
     profile = relationship("Profile", back_populates="units_or_members")
 
@@ -1338,7 +1340,9 @@ try:
         ("verified_by", "INTEGER"),
         ("flat_area", "REAL"),
         ("role", "VARCHAR(20) DEFAULT 'owner'"),
-        ("share", "VARCHAR(50)")
+        ("share", "VARCHAR(50)"),
+        ("street", "VARCHAR(150)"),
+        ("number", "VARCHAR(50)")
     ]:
         mig3_list.append(f"ALTER TABLE units_or_members ADD COLUMN {col_def[0]} {col_def[1]}")
 
@@ -1360,6 +1364,13 @@ try:
             mig3_list.append(f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table_name}")
 
     run_migrations_safely(mig_engine3, mig3_list)
+    # Populate number with identifier if number is null
+    try:
+        with mig_engine3.connect() as conn:
+            conn.execute(text("UPDATE units_or_members SET number = identifier WHERE number IS NULL"))
+            conn.commit()
+    except Exception as data_mig_err:
+        print(f"Data migration street/number populate error: {data_mig_err}")
 except Exception as migration_err:
     print(f"Table columns migration error: {migration_err}")
 finally:
@@ -4586,6 +4597,8 @@ def create_profile_member(
     property_type: Optional[str] = Form("кв."),
     parent_id: Optional[int] = Form(None),
     role: Optional[str] = Form("owner"),
+    street: Optional[str] = Form(None),
+    number: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4611,12 +4624,15 @@ def create_profile_member(
         balance=balance or 0.0,
         property_type=property_type or "кв.",
         parent_id=parent_id if parent_id != -1 and parent_id != 0 else None,
-        role=role or "owner"
+        role=role or "owner",
+        street=street,
+        number=number
     )
     db.add(member)
     db.commit()
     db.refresh(member)
     return member
+
 
 @app.put("/api/profiles/{profile_id}/members/{member_id}")
 def update_profile_member(
@@ -4634,6 +4650,8 @@ def update_profile_member(
     property_type: Optional[str] = Form(None),
     parent_id: Optional[int] = Form(None),
     role: Optional[str] = Form(None),
+    street: Optional[str] = Form(None),
+    number: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4679,6 +4697,10 @@ def update_profile_member(
         member.parent_id = parent_id if parent_id != -1 and parent_id != 0 else None
     if role is not None:
         member.role = role
+    if street is not None:
+        member.street = street
+    if number is not None:
+        member.number = number
         
     db.commit()
     db.refresh(member)
@@ -8265,6 +8287,51 @@ def get_osbb_by_slug(slug: str, db: Session = Depends(get_db)):
         "organization_subtype": profile.organization_subtype
     }
 
+@app.get("/api/osbb/by-slug/{slug}/available-addresses")
+def get_osbb_available_addresses(slug: str, db: Session = Depends(get_db)):
+    """Get OSBB available addresses (streets and numbers) grouped for registration"""
+    profile = db.query(Profile).filter(
+        Profile.slug == slug,
+        Profile.organization_subtype.in_(['osbb', 'st', 'go', 'bf', 'jbk'])
+    ).first()
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="ОСББ не знайдено")
+        
+    units = db.query(UnitOrMember).filter(
+        UnitOrMember.profile_id == profile.id,
+        UnitOrMember.parent_id == None
+    ).all()
+    
+    streets_dict = {}
+    no_street_properties = []
+    
+    for u in units:
+        street_name = u.street.strip() if u.street else ""
+        num = u.number.strip() if u.number else u.identifier.strip()
+        prop_type = u.property_type or "кв."
+        
+        item = {"number": num, "property_type": prop_type, "identifier": u.identifier}
+        
+        if street_name:
+            if street_name not in streets_dict:
+                streets_dict[street_name] = []
+            streets_dict[street_name].append(item)
+        else:
+            no_street_properties.append(item)
+            
+    for st in streets_dict:
+        streets_dict[st].sort(key=lambda x: x["number"])
+    no_street_properties.sort(key=lambda x: x["number"])
+    
+    sorted_streets = dict(sorted(streets_dict.items()))
+    
+    return {
+        "streets": sorted_streets,
+        "no_street_properties": no_street_properties
+    }
+
+
 def save_push_token_internal(db: Session, member_id: int, profile_id: int, token: Optional[str], platform: Optional[str]):
     if not token:
         return
@@ -8289,7 +8356,9 @@ def save_push_token_internal(db: Session, member_id: int, profile_id: int, token
 @app.post("/api/auth/member/register")
 def member_register(
     slug: str = Form(...),
-    account_number: str = Form(...),
+    account_number: Optional[str] = Form(None),
+    street: Optional[str] = Form(None),
+    house_number: Optional[str] = Form(None),
     password: str = Form(...),
     full_name: str = Form(...),
     phone: str = Form(...),
@@ -8316,15 +8385,33 @@ def member_register(
     if not getattr(subscription, "is_member_module_active", False):
         raise HTTPException(status_code=403, detail="Модуль кабінету мешканців неактивний. Зверніться до голови ОСББ.")
     
-    # Find primary member by identifier (parent_id == None)
-    member = db.query(UnitOrMember).filter(
-        UnitOrMember.profile_id == profile.id,
-        UnitOrMember.identifier == account_number,
-        UnitOrMember.parent_id == None
-    ).first()
+    # Find primary member by street/house_number or identifier (parent_id == None)
+    if street or house_number:
+        query_member = db.query(UnitOrMember).filter(
+            UnitOrMember.profile_id == profile.id,
+            UnitOrMember.parent_id == None
+        )
+        if street:
+            query_member = query_member.filter(func.lower(UnitOrMember.street) == street.strip().lower())
+        if house_number:
+            query_member = query_member.filter(
+                (func.lower(UnitOrMember.number) == house_number.strip().lower()) |
+                (func.lower(UnitOrMember.identifier) == house_number.strip().lower())
+            )
+        member = query_member.first()
+    elif account_number:
+        member = db.query(UnitOrMember).filter(
+            UnitOrMember.profile_id == profile.id,
+            UnitOrMember.identifier == account_number,
+            UnitOrMember.parent_id == None
+        ).first()
+    else:
+        raise HTTPException(status_code=400, detail="Необхідно вказати адресу або особовий рахунок")
     
     if not member:
-        raise HTTPException(status_code=404, detail="Особовий рахунок не знайдено")
+        raise HTTPException(status_code=404, detail="Власність не знайдено")
+        
+    matched_identifier = member.identifier
         
     # Check if this phone number is already registered to another property in the DB
     clean_phone = phone.strip()
@@ -8334,7 +8421,7 @@ def member_register(
             UnitOrMember.phone == clean_phone,
             UnitOrMember.password_hash.isnot(None)
         ).first()
-        if existing_phone and existing_phone.identifier != account_number:
+        if existing_phone and existing_phone.identifier != matched_identifier:
             raise HTTPException(status_code=400, detail="Цей номер телефону вже зареєстрований для іншої власності")
             
     role_param = "owner" if role == "owner" else "tenant"
@@ -8348,7 +8435,7 @@ def member_register(
         member.email = clean_email
         member.status = "pending"
         member.role = "owner"  # Primary must be owner
-        member.account_number = f"{slug.upper()}-{account_number}"  # Generate unique account number
+        member.account_number = f"{slug.upper()}-{matched_identifier}"  # Generate unique account number
         db.commit()
         target_member = member
     else:
@@ -8368,14 +8455,16 @@ def member_register(
             child.email = clean_email
             child.status = "pending"
             child.role = role_param
-            child.account_number = f"{slug.upper()}-{account_number}-{child.id}"
+            child.account_number = f"{slug.upper()}-{matched_identifier}-{child.id}"
             db.commit()
             target_member = child
         else:
             # Create a new child record for this co-owner or tenant
             new_child = UnitOrMember(
                 profile_id=profile.id,
-                identifier=account_number,
+                identifier=matched_identifier,
+                street=member.street,
+                number=member.number,
                 owner_name=full_name.strip(),
                 area=0.0,
                 rate_per_sqm=0.0,
@@ -8391,7 +8480,7 @@ def member_register(
             )
             db.add(new_child)
             db.flush()
-            new_child.account_number = f"{slug.upper()}-{account_number}-{new_child.id}"
+            new_child.account_number = f"{slug.upper()}-{matched_identifier}-{new_child.id}"
             db.commit()
             target_member = new_child
             

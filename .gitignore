@@ -11,3 +11,7 @@ dist/
 build/
 .DS_Store
 scratch/
+*.log
+*.pdf
+*.db
+temp_uploads/

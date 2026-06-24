@@ -57,6 +57,8 @@ interface Member {
   parent_id?: number | null;
   role?: string;
   share?: string;
+  street?: string;
+  number?: string;
 }
 
 interface Transaction {
@@ -136,6 +138,8 @@ export default function BillingPage() {
   const [parentId, setParentId] = useState<number>(-1);
   const [memberRole, setMemberRole] = useState("owner");
   const [memberShare, setMemberShare] = useState("");
+  const [street, setStreet] = useState("");
+  const [number, setNumber] = useState("");
 
   // Charge Modal & Accrual Config
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
@@ -916,6 +920,8 @@ export default function BillingPage() {
     setParentId(-1);
     setMemberRole("owner");
     setMemberShare("");
+    setStreet("");
+    setNumber("");
     setMemberModalOpen(true);
   };
 
@@ -933,6 +939,8 @@ export default function BillingPage() {
     setParentId(member.parent_id || -1);
     setMemberRole(member.role || "owner");
     setMemberShare(member.share || "");
+    setStreet(member.street || "");
+    setNumber(member.number || "");
     setMemberModalOpen(true);
   };
 
@@ -957,7 +965,9 @@ export default function BillingPage() {
         property_type: propertyType,
         parent_id: parentId !== -1 ? parentId : undefined,
         role: memberRole,
-        share: memberShare || undefined
+        share: memberShare || undefined,
+        street: street || undefined,
+        number: number || undefined
       };
 
       if (editingMember) {
@@ -3826,6 +3836,33 @@ export default function BillingPage() {
                         </option>
                       ))}
                   </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Вулиця
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="напр: Шевченка, Зелена"
+                    value={street}
+                    onChange={(e) => setStreet(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">
+                    Номер будинку
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="напр: 12, 45А"
+                    value={number}
+                    onChange={(e) => setNumber(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
               </div>
 

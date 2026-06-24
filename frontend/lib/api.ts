@@ -272,6 +272,8 @@ export const api = {
     property_type?: string;
     parent_id?: number;
     role?: string;
+    street?: string;
+    number?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/profiles/${profileId}/members`, formData);
@@ -303,6 +305,8 @@ export const api = {
     property_type?: string;
     parent_id?: number;
     role?: string;
+    street?: string;
+    number?: string;
   }) => {
     const formData = toFormData(data);
     const response = await client.put(`/api/profiles/${profileId}/members/${memberId}`, formData);
