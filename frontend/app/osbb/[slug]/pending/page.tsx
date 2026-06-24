@@ -25,7 +25,7 @@ export default function OsbbPendingPage() {
       }
 
       // Initialize WebSocket connection to listen for approval
-      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
       const wsProtocol = API_BASE_URL.startsWith("https") ? "wss" : "ws";
       const wsHost = API_BASE_URL.replace(/^https?:\/\//, "");
       const wsUrl = `${wsProtocol}://${wsHost}/ws/member/${storedId}`;

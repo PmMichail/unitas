@@ -163,7 +163,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setLoadingEmailStatus(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/status/0`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/auth/google/status/0`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await response.json();
@@ -185,7 +185,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setLoadingEmails(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/admin/emails`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/admin/emails`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await response.json();
@@ -200,7 +200,7 @@ export default function AdminDashboard() {
   const handleConnectEmail = async () => {
     if (!token) return;
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/url/0?token=${token}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/auth/google/url/0?token=${token}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await response.json();
@@ -219,7 +219,7 @@ export default function AdminDashboard() {
     if (!token) return;
     if (!confirm("Ви впевнені, що хочете відключити пошту Gmail адміністратора?")) return;
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/0`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/auth/google/0`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -240,7 +240,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setIsTestingEmail(true);
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/auth/google/test-email/0`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/auth/google/test-email/0`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });

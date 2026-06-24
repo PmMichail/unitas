@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
 
 const client = axios.create({
   baseURL: API_BASE_URL,

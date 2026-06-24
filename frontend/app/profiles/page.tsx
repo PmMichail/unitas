@@ -250,7 +250,7 @@ export default function Profiles() {
   }, [liqpayForm]);
 
   useEffect(() => {
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
     const fetchSubscriptions = async () => {
         const subs: { [key: number]: any } = {};
         for (const profile of profiles) {

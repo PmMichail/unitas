@@ -96,7 +96,7 @@ export default function Settings() {
     loadConnections();
   }, [selectedProfile]);
 
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
 
   const loadBanks = async () => {
     try {

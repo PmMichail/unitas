@@ -468,10 +468,10 @@ export default function BillingPage() {
       },
       (error) => {
         console.error(error);
-        showToast(`Помилка отримання геолокації: ${error.message}`, "error");
+        showToast(`Помилка отримання геолокації: ${error.message}. Перевірте дозволи в браузері.`, "error");
         setPinningGeo(false);
       },
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
   };
 
@@ -551,7 +551,7 @@ export default function BillingPage() {
       formData.append("file", bulkImportFile);
       formData.append("user_id", String(selectedProfile.user_id || ""));
       
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/profiles/${selectedProfile.id}/members/bulk`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/profiles/${selectedProfile.id}/members/bulk`, {
         method: "POST",
         body: formData
       });

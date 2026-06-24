@@ -32,7 +32,7 @@ export default function AIChatPage() {
         setLoading(true);
         
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev"}/api/ai/chat`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/ai/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 

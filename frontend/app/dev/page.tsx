@@ -22,7 +22,7 @@ import {
   LogOut
 } from "lucide-react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://unitas-backend.fly.dev";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
 
 export default function DevPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);

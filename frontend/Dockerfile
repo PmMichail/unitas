@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install --no-audit --no-fund --prefer-offline
 COPY . .
+ENV NEXT_PUBLIC_API_URL=https://api.unitax.pro
 RUN npm run build
 
 FROM node:20-alpine AS runner

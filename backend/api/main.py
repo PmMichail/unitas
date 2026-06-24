@@ -1918,6 +1918,28 @@ except Exception as migrate_err:
     print(f"Failed to self-correct parsed_payments table: {migrate_err}")
     db.rollback()
 
+# Self-correct profiles organization_subtype for non_profit tax system
+try:
+    non_profits = db.query(Profile).filter(
+        Profile.tax_system == "non_profit",
+        (Profile.organization_subtype == None) | (Profile.organization_subtype == "")
+    ).all()
+    
+    updated_profiles_count = 0
+    for p in non_profits:
+        p.organization_subtype = "osbb"  # default standard non-profit subtype
+        if not p.non_profit_code:
+            p.non_profit_code = "0046"
+        db.add(p)
+        updated_profiles_count += 1
+        
+    if updated_profiles_count > 0:
+        db.commit()
+        print(f"Successfully migrated and self-corrected {updated_profiles_count} non-profit profiles with organization_subtype.")
+except Exception as profile_migrate_err:
+    print(f"Failed to self-correct profiles organization_subtype: {profile_migrate_err}")
+    db.rollback()
+
 db.close()
 
 # API App Initialization
@@ -5872,6 +5894,8 @@ def update_profile_endpoint(
     user_id: Optional[int] = Form(None),
     lat: Optional[float] = Form(None),
     lon: Optional[float] = Form(None),
+    organization_subtype: Optional[str] = Form(None),
+    non_profit_code: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -6006,6 +6030,10 @@ def update_profile_endpoint(
         profile.lat = lat
     if lon is not None:
         profile.lon = lon
+    if organization_subtype is not None:
+        profile.organization_subtype = organization_subtype.strip().lower() or None
+    if non_profit_code is not None:
+        profile.non_profit_code = non_profit_code.strip() or None
     if reg_date is not None:
         try:
             reg_date_parsed = datetime.strptime(reg_date, "%Y-%m-%d").date()
