@@ -1533,6 +1533,19 @@ export default function BillingPage() {
     }
   };
 
+  const handleMergeProfiles = async (memberId: number, targetMemberId: number) => {
+    if (!selectedProfile) return;
+    if (!confirm("Ви впевнені, що хочете об'єднати цю заявку реєстрації з існуючим об'єктом? Дані профілю будуть перенесені.")) return;
+    try {
+      await api.mergeMemberProfiles(selectedProfile.id, memberId, targetMemberId);
+      showToast("Акаунти успішно об'єднано");
+      loadData();
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.response?.data?.detail || "Помилка об'єднання акаунтів", "error");
+    }
+  };
+
   const handlePayMonoInvoice = async (member: any) => {
     if (!selectedProfile) return;
     const amountToPay = Math.abs(member.balance);
@@ -2031,10 +2044,47 @@ export default function BillingPage() {
                   ) : (
                     moderationMembers.map((m) => (
                       <tr key={m.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors duration-150">
-                        <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">{m.property_type || "кв."} {m.identifier}</td>
+                        <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">
+                          <div>{m.property_type || "кв."} {m.identifier}</div>
+                          {m.street && m.number && (
+                            <div className="text-[10px] text-slate-400 font-medium mt-1">
+                              вул. {m.street}, буд. {m.number}
+                            </div>
+                          )}
+                          <div className="text-[10px] text-indigo-400 font-semibold mt-0.5">
+                            Роль: {m.role === "owner" ? "Власник" : "Мешканець"}
+                          </div>
+                        </td>
                         <td className="px-6 py-4 text-slate-700 dark:text-slate-200">
                           <div className="font-medium">{m.owner_name || "—"}</div>
                           <div className="text-xs text-slate-400">{m.email || m.phone || "контакти не вказано"}</div>
+                          
+                          {/* POTENTIAL MATCHES WARNING */}
+                          {m.potential_matches && m.potential_matches.length > 0 && (
+                            <div className="mt-3 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 max-w-md">
+                              <span className="text-[10px] font-black text-amber-500 uppercase tracking-wider block mb-1">
+                                ⚠️ Знайдено потенційні збіги ({m.potential_matches.length}):
+                              </span>
+                              <div className="space-y-2">
+                                {m.potential_matches.map((pm: any) => (
+                                  <div key={pm.id} className="flex items-center justify-between gap-3 text-xs border-b border-slate-700/20 last:border-0 pb-1.5 last:pb-0">
+                                    <div className="text-slate-300">
+                                      <span className="font-semibold">{pm.owner_name || "Без імені"}</span> (вул. {pm.street || "—"}, буд. {pm.number || "—"}, {pm.property_type || "кв."} {pm.identifier})
+                                      <div className="text-[10px] text-slate-400 mt-0.5">
+                                        Тел: {pm.phone || "—"} {pm.has_password && "🔑 (Є пароль)"}
+                                      </div>
+                                    </div>
+                                    <button
+                                      onClick={() => handleMergeProfiles(m.id, pm.id)}
+                                      className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold uppercase tracking-wider transition shadow-sm"
+                                    >
+                                      Об'єднати
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 text-slate-600 dark:text-slate-300">{m.account_number || "не зареєстровано"}</td>
                         <td className="px-6 py-4">
@@ -2046,18 +2096,30 @@ export default function BillingPage() {
                         <td className="px-6 py-4 text-right">
                           <div className="flex justify-end gap-2">
                             {m.status !== "approved" && (
-                              <button onClick={() => handleModerateMember(m.id, "approved")} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">
+                              <button onClick={() => handleModerateMember(m.id, "approved")} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-650/15">
                                 Підтвердити
                               </button>
                             )}
-                            {m.status !== "blocked" && (
-                              <button onClick={() => handleModerateMember(m.id, "blocked")} className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold">
-                                Заблокувати
+                            {m.status === "pending" && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Ви дійсно хочете відхилити та видалити цю заявку на реєстрацію від ${m.owner_name || m.identifier}?`)) {
+                                    try {
+                                      await handleDeleteMember(m.id);
+                                      showToast("Заявку відхилено та видалено");
+                                    } catch (err) {
+                                      showToast("Не вдалося видалити заявку", "error");
+                                    }
+                                  }
+                                }}
+                                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-md shadow-rose-650/15"
+                              >
+                                Відхилити
                               </button>
                             )}
-                            {m.status !== "pending" && (
-                              <button onClick={() => handleModerateMember(m.id, "pending")} className="px-3 py-2 rounded-xl bg-slate-600 hover:bg-slate-500 text-white text-xs font-bold">
-                                В очікування
+                            {m.status !== "blocked" && m.status !== "pending" && (
+                              <button onClick={() => handleModerateMember(m.id, "blocked")} className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-650 text-white text-xs font-bold">
+                                Блокувати
                               </button>
                             )}
                           </div>

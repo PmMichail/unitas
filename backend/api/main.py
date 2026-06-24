@@ -9262,6 +9262,7 @@ def reject_admin_member(member_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/profiles/{profile_id}/members/moderation")
 def get_members_moderation(profile_id: int, status: Optional[str] = None, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import or_, func
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
@@ -9271,22 +9272,116 @@ def get_members_moderation(profile_id: int, status: Optional[str] = None, user_i
     if status:
         query = query.filter(UnitOrMember.status == status)
     members = query.order_by(UnitOrMember.id.desc()).all()
-    return [{
-        "id": m.id,
-        "profile_id": m.profile_id,
-        "identifier": m.identifier,
-        "owner_name": m.owner_name,
-        "email": m.email,
-        "phone": m.phone,
-        "account_number": m.account_number,
-        "status": m.status,
-        "verified_at": m.verified_at.isoformat() if m.verified_at else None,
-        "verified_by": m.verified_by,
-        "property_type": m.property_type,
-        "balance": m.balance,
-        "area": m.area,
-        "flat_area": m.flat_area or m.area
-    } for m in members]
+    
+    res = []
+    for m in members:
+        matches = []
+        if m.status == "pending":
+            conflict_query = db.query(UnitOrMember).filter(
+                UnitOrMember.profile_id == profile_id,
+                UnitOrMember.id != m.id
+            )
+            conds = []
+            if m.phone:
+                conds.append(UnitOrMember.phone == m.phone)
+            if m.email:
+                conds.append(UnitOrMember.email == m.email)
+            if m.owner_name:
+                conds.append(func.lower(UnitOrMember.owner_name) == m.owner_name.strip().lower())
+            if m.street and m.number:
+                conds.append(
+                    (func.lower(UnitOrMember.street) == m.street.strip().lower()) &
+                    (func.lower(UnitOrMember.number) == m.number.strip().lower())
+                )
+            if conds:
+                conflict_query = conflict_query.filter(or_(*conds))
+                conflict_list = conflict_query.all()
+                for c in conflict_list:
+                    matches.append({
+                        "id": c.id,
+                        "identifier": c.identifier,
+                        "owner_name": c.owner_name,
+                        "phone": c.phone,
+                        "email": c.email,
+                        "status": c.status,
+                        "street": c.street,
+                        "number": c.number,
+                        "role": c.role,
+                        "has_password": c.password_hash is not None
+                    })
+        
+        res.append({
+            "id": m.id,
+            "profile_id": m.profile_id,
+            "identifier": m.identifier,
+            "owner_name": m.owner_name,
+            "email": m.email,
+            "phone": m.phone,
+            "account_number": m.account_number,
+            "status": m.status,
+            "verified_at": m.verified_at.isoformat() if m.verified_at else None,
+            "verified_by": m.verified_by,
+            "property_type": m.property_type,
+            "balance": m.balance,
+            "area": m.area,
+            "flat_area": m.flat_area or m.area,
+            "street": m.street,
+            "number": m.number,
+            "role": m.role,
+            "potential_matches": matches
+        })
+    return res
+
+@app.post("/api/profiles/{profile_id}/members/{member_id}/merge/{target_member_id}")
+async def merge_member_profiles(
+    profile_id: int,
+    member_id: int,
+    target_member_id: int,
+    user_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Доступ заборонено")
+        
+    m_pending = db.query(UnitOrMember).filter(UnitOrMember.id == member_id, UnitOrMember.profile_id == profile_id).first()
+    m_existing = db.query(UnitOrMember).filter(UnitOrMember.id == target_member_id, UnitOrMember.profile_id == profile_id).first()
+    
+    if not m_pending or not m_existing:
+        raise HTTPException(status_code=404, detail="Один з акаунтів не знайдено")
+        
+    # Copy credentials and details from pending to existing
+    m_existing.password_hash = m_pending.password_hash
+    m_existing.phone = m_pending.phone
+    m_existing.email = m_pending.email
+    if m_pending.owner_name:
+        m_existing.owner_name = m_pending.owner_name
+    m_existing.role = m_pending.role
+    m_existing.status = "approved"
+    m_existing.verified_at = datetime.utcnow()
+    
+    # Re-route related tables to point to target_member_id
+    db.query(SurveyVote).filter(SurveyVote.member_id == member_id).update({SurveyVote.member_id: target_member_id})
+    db.query(Ticket).filter(Ticket.member_id == member_id).update({Ticket.member_id: target_member_id})
+    db.query(ResidentPushToken).filter(ResidentPushToken.member_id == member_id).update({ResidentPushToken.member_id: target_member_id})
+    
+    # Delete the pending duplicate member
+    db.delete(m_pending)
+    db.commit()
+    
+    # Send WebSocket notification to the new session
+    await websocket_manager.send_personal_message({"status": "approved", "message": "Акаунт успішно об'єднано та активовано"}, target_member_id)
+    
+    notify_resident(
+        db,
+        m_existing,
+        f"{profile.name}: доступ до кабінету підтверджено",
+        f"Ваш доступ до кабінету мешканця {profile.name} підтверджено через об'єднання з існуючим об'єктом."
+    )
+    
+    return {"status": "success", "message": "Акаунти успішно об'єднано"}
 
 @app.post("/api/profiles/{profile_id}/members/{member_id}/moderation")
 async def update_member_moderation_status(

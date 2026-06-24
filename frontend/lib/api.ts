@@ -374,6 +374,12 @@ export const api = {
     return response.data;
   },
 
+  mergeMemberProfiles: async (profileId: number, memberId: number, targetMemberId: number, userId?: number) => {
+    const formData = toFormData({ user_id: userId });
+    const response = await client.post(`/api/profiles/${profileId}/members/${memberId}/merge/${targetMemberId}`, formData);
+    return response.data;
+  },
+
   chargeMembers: async (profileId: number, data: {
     description?: string;
     user_id?: number;
