@@ -8898,7 +8898,8 @@ def create_member_billing_liqpay_checkout(
         
     encoded_data = base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
     sign_str = liqpay_priv + encoded_data + liqpay_priv
-    signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+    sha1_hash = hashlib.sha1(sign_str.encode('utf-8')).digest()
+    signature = base64.b64encode(sha1_hash).decode('utf-8')
     
     return {
         "liqpay_data": encoded_data,
@@ -15982,7 +15983,8 @@ async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
                 if not custom_priv:
                     raise HTTPException(status_code=400, detail="LiqPay private key not configured")
                 sign_str = custom_priv + data + custom_priv
-                expected_signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+                sha1_hash = hashlib.sha1(sign_str.encode('utf-8')).digest()
+                expected_signature = base64.b64encode(sha1_hash).decode('utf-8')
                 if signature != expected_signature:
                     logger.error("LiqPay billing signature verification failed")
                     raise HTTPException(status_code=403, detail="Invalid signature")

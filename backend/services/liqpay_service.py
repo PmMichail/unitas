@@ -25,7 +25,8 @@ class LiqPayService:
         """Підписання даних приватним ключем"""
         encoded_data = base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
         sign_str = self.private_key + encoded_data + self.private_key
-        return hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+        sha1_hash = hashlib.sha1(sign_str.encode('utf-8')).digest()
+        return base64.b64encode(sha1_hash).decode('utf-8')
     
     def _cnb_form(self, data: Dict) -> Dict:
         """Створення форми для CNB (Checkout Native Button)"""
@@ -152,7 +153,8 @@ class LiqPayService:
             True if signature is valid
         """
         sign_str = self.private_key + data + self.private_key
-        expected_signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+        sha1_hash = hashlib.sha1(sign_str.encode('utf-8')).digest()
+        expected_signature = base64.b64encode(sha1_hash).decode('utf-8')
         return signature == expected_signature
     
     def decode_callback_data(self, data: str) -> Dict:

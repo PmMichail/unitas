@@ -454,31 +454,45 @@ export default function ResidentDashboardPage() {
               <h1 className="mt-1.5 text-2xl font-extrabold text-slate-900 dark:text-white dark:text-white tracking-tight">{member?.owner_name || "Мешканець"}</h1>
               <p className="mt-1 text-slate-555 dark:text-slate-400 text-xs font-semibold">{member?.property_type === "flat" ? "Квартира" : member?.property_type || "кв."} № {member?.identifier}</p>
             </div>
-            <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="mt-6 flex flex-col gap-5">
               {(profile?.has_monobank || profile?.has_liqpay) && (
-                <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-800 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 p-1 shrink-0">
-                  <input
-                    type="number"
-                    value={payAmount}
-                    onChange={(e) => setPayAmount(e.target.value)}
-                    placeholder="Сума"
-                    className="w-20 px-2 text-xs font-bold outline-none bg-transparent text-slate-800 dark:text-slate-200 dark:text-white text-center"
-                  />
-                  {profile?.has_monobank && (
-                    <button onClick={payMono} className={`flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-550 px-4 py-2 text-xs font-bold text-white shadow-md transition-all active:scale-95 shrink-0 ${profile?.has_liqpay ? 'mr-1' : ''}`}>
-                      <CreditCard size={14} /> Mono Pay
-                    </button>
-                  )}
-                  {profile?.has_liqpay && (
-                    <button onClick={payLiqpay} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-550 px-4 py-2 text-xs font-bold text-white shadow-md transition-all active:scale-95 shrink-0">
-                      <CreditCard size={14} /> LiqPay
-                    </button>
-                  )}
+                <div className="flex flex-col gap-2">
+                  <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Швидка онлайн-оплата</div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 p-1">
+                      <input
+                        type="number"
+                        value={payAmount}
+                        onChange={(e) => setPayAmount(e.target.value)}
+                        placeholder="Сума"
+                        className="w-20 px-2 text-xs font-bold outline-none bg-transparent text-slate-800 dark:text-slate-200 text-center"
+                      />
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-550 pr-2 select-none">грн</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {profile?.has_monobank && (
+                        <button onClick={payMono} className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-xs font-bold text-white shadow-md transition-all active:scale-95">
+                          <CreditCard size={14} /> Mono Pay
+                        </button>
+                      )}
+                      {profile?.has_liqpay && (
+                        <button onClick={payLiqpay} className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2.5 text-xs font-bold text-white shadow-md transition-all active:scale-95">
+                          <CreditCard size={14} /> LiqPay
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
-              <button onClick={downloadReceipt} className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 dark:border-slate-800 bg-white dark:bg-slate-900/30 px-4 py-3 text-xs font-bold text-slate-700 dark:text-slate-300 dark:text-slate-300 hover:bg-slate-50 dark:bg-slate-900/50 dark:hover:bg-slate-900 transition-all active:scale-95">
-                <FileText size={14} /> Завантажити рахунок (PDF)
-              </button>
+              
+              <div className="flex flex-col gap-2">
+                <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Рахунок на оплату</div>
+                <div>
+                  <button onClick={downloadReceipt} className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/30 px-4 py-2.5 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all active:scale-95 w-full sm:w-auto">
+                    <FileText size={14} /> Завантажити рахунок (PDF)
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
