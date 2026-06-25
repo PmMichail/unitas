@@ -191,3 +191,34 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
 - **Web Dropdown Selector**: Introduced a select dropdown in `frontend/app/osbb/[slug]/dashboard/page.tsx` for residents to choose their payment purpose: "Внески ОСББ" (standard contributions) or "Електроенергія" (electricity). Selecting a purpose dynamically adjusts the payment description (e.g. `Оплата за електроенергію, о/р №...`) and passes `charge_type="utility"` or `charge_type="regular"` to the backend.
 - **Mobile Segment Selector**: Added an interactive segmented picker in `mobile/components/resident/ResidentDashboard.tsx` with native Pressable tabs ("Внески ОСББ" / "Електроенергія"). Choosing a tab dynamically updates the payload and passes the correct charge type and URI-encoded description to `/api/member/billing/liqpay/pay-redirect`.
 - **Backend Tracking**: The backend receives the custom `charge_type` and `description` to ensure the generated invoices on Mono Pay/LiqPay display compliant, explicit titles (crucial for OSBB accounting audits) and log payments under the correct ledger category.
+
+---
+
+## 8. Collapsible Meter Nodes & Admin Transparency Toggle
+
+### 1. Collapsible Meter Nodes (Dropdown Lists)
+- **State Integration**: Introduced `expandedNodes` state in [ResidentTransparency.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/components/resident/ResidentTransparency.tsx) to manage collapse/expand status of each meter node by its ID.
+- **Togglable Pressable Rows**: Wrapped the meter rows in a `<Pressable>` which is enabled only if the meter node has child meters. Tapping a parent meter toggles its collapsed state.
+- **Visual Indicators**:
+  - Added a rotating Chevron icon next to the value to visually guide the resident that the row is expandable.
+  - Added a count badge (e.g. `+3`) when a node with children is collapsed, showing how many sub-meters are nested inside.
+  - Nested children are only rendered when the node is expanded, keeping the initial screen uncluttered.
+
+### 2. Admin Transparency Settings Toggle ("Галочка")
+- **Database Column**: Added `show_apartment_meters_in_transparency` boolean column to the `Profile` model schema in `backend/api/main.py` (default `True`).
+- **Database Migration**: Added an alter statement in `migrate_database()` to dynamically provision the column in existing databases. Migrated the remote Fly.io PostgreSQL database schema successfully.
+- **Settings Endpoints & Sync**:
+  - Updated `purchase_resident_cabinet_module` and `get_resident_cabinet_status` to accept, update, and return the `show_apartment_meters_in_transparency` configuration setting.
+  - Updated `sync_child_profile` to automatically copy the setting from the parent profile to the resident cabinet child profile.
+  - Updated `get_member_transparency` and `serialize_meter_node` on the backend to filter out any child meters that have a non-null `member_id` (apartment/resident meters) if `show_apartment_meters_in_transparency` is set to `False`.
+- **Admin Settings Checkbox UI**:
+  - Added state variable `rcShowApartmentMeters` in [page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/billing/page.tsx).
+  - Placed settings checkboxes in two locations: the initial cabinet setup configuration modal and the general settings tab under billing panel.
+  - Checked the state on submit and sent the boolean flag to the API.
+
+### 3. Client-Side Filtering Fallback
+- Added extra security in [ResidentTransparency.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/components/resident/ResidentTransparency.tsx) to filter out resident meters on the client side if the profile setting is disabled, ensuring full privacy alignment.
+
+### 4. Compilation Verification
+- Ran Next.js typechecks (`npx tsc --noEmit` inside `frontend`) and React Native typechecks (`npx tsc --noEmit` inside `mobile`) to verify zero errors.
+

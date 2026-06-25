@@ -997,6 +997,7 @@ export const api = {
     color_theme?: string;
     header_image_url?: string;
     user_id?: number;
+    show_apartment_meters_in_transparency?: boolean;
   }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/profiles/${profileId}/purchase-resident-cabinet`, formData);

@@ -215,6 +215,7 @@ export default function BillingPage() {
   const [rcLiqpayPrivateKey, setRcLiqpayPrivateKey] = useState("");
   const [rcColorTheme, setRcColorTheme] = useState("#3b82f6");
   const [rcHeaderImageUrl, setRcHeaderImageUrl] = useState("");
+  const [rcShowApartmentMeters, setRcShowApartmentMeters] = useState(true);
   const [rcPurchasing, setRcPurchasing] = useState(false);
   const [rcLoading, setRcLoading] = useState(false);
 
@@ -438,6 +439,7 @@ export default function BillingPage() {
         setRcSlug(status.slug || "");
         setRcColorTheme(status.color_theme || "#3b82f6");
         setRcHeaderImageUrl(status.header_image_url || "");
+        setRcShowApartmentMeters(status.show_apartment_meters_in_transparency ?? true);
       }
     } catch (err: any) {
       console.error("Error fetching resident cabinet status", err);
@@ -453,6 +455,7 @@ export default function BillingPage() {
     setRcColorTheme("#3b82f6");
     setRcMonoApiToken("");
     setRcHeaderImageUrl("");
+    setRcShowApartmentMeters(true);
     setRcModalStep("configure");
     setResidentCabinetModalOpen(true);
   };
@@ -484,6 +487,7 @@ export default function BillingPage() {
           liqpay_private_key: rcLiqpayPrivateKey || undefined,
           color_theme: rcColorTheme,
           header_image_url: rcHeaderImageUrl || undefined,
+          show_apartment_meters_in_transparency: rcShowApartmentMeters,
         });
         showToast("Налаштування кабінету мешканця успішно збережено!", "success");
         setResidentCabinetModalOpen(false);
@@ -967,6 +971,7 @@ export default function BillingPage() {
         liqpay_private_key: rcLiqpayPrivateKey || undefined,
         color_theme: rcColorTheme,
         header_image_url: rcHeaderImageUrl || undefined,
+        show_apartment_meters_in_transparency: rcShowApartmentMeters,
       });
       showToast("Налаштування кабінету мешканця успішно збережено!", "success");
       loadResidentCabinetStatus();
@@ -2554,6 +2559,19 @@ export default function BillingPage() {
                               />
                               <p className="text-[10px] text-slate-450">Залиште порожнім, якщо не бажаєте змінювати</p>
                             </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 py-2">
+                            <input
+                              type="checkbox"
+                              id="rcShowApartmentMetersInit"
+                              checked={rcShowApartmentMeters}
+                              onChange={(e) => setRcShowApartmentMeters(e.target.checked)}
+                              className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 cursor-pointer"
+                            />
+                            <label htmlFor="rcShowApartmentMetersInit" className="text-xs font-bold text-slate-705 dark:text-slate-200 cursor-pointer select-none">
+                              Відображати лічильники квартир мешканців у реєстрі прозорості
+                            </label>
                           </div>
 
                           <div className="flex justify-end pt-2">
@@ -5334,6 +5352,19 @@ export default function BillingPage() {
                       </div>
                     </div>
                     <p className="text-[10px] text-slate-400">Завантажте власне фото або вкажіть посилання на фонове зображення</p>
+                  </div>
+
+                  <div className="flex items-center gap-3 py-2">
+                    <input
+                      type="checkbox"
+                      id="rcShowApartmentMetersSetup"
+                      checked={rcShowApartmentMeters}
+                      onChange={(e) => setRcShowApartmentMeters(e.target.checked)}
+                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 cursor-pointer"
+                    />
+                    <label htmlFor="rcShowApartmentMetersSetup" className="text-xs font-bold text-slate-705 dark:text-slate-200 cursor-pointer select-none">
+                      Відображати лічильники квартир мешканців у реєстрі прозорості
+                    </label>
                   </div>
 
                   <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">

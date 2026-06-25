@@ -37,6 +37,14 @@ export default function ResidentTransparency() {
   const [refreshing, setRefreshing] = useState(false);
   const [transparency, setTransparency] = useState<any>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [expandedNodes, setExpandedNodes] = useState<Record<number, boolean>>({});
+
+  const toggleNode = (id: number) => {
+    setExpandedNodes(prev => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
 
   const getMeterIcon = (type: string, color: string, size = 18) => {
     switch (type) {
@@ -90,20 +98,29 @@ export default function ResidentTransparency() {
     : 0;
 
   const renderMeterNode = (meter: any, index: number, total: number, depth = 0) => {
-    const hasChildren = meter.child_meters && meter.child_meters.length > 0;
+    let children = meter.child_meters || [];
+    if (transparency?.show_apartment_meters_in_transparency === false) {
+      children = children.filter((c: any) => c.member_name === 'Сублічильник' || !c.member_name);
+    }
+    const hasChildren = children.length > 0;
+    const isExpandedNode = expandedNodes[meter.id] || false;
     
     return (
       <View key={meter.id} style={styles.nodeContainer}>
-        <View style={[
-          styles.meterRow, 
-          depth === 0 ? styles.mainMeterNode : styles.childMeterNode,
-          { 
-            backgroundColor: depth === 0 ? colors.card : colors.inputBg,
-            borderColor: depth === 0 ? colors.warning : colors.cardBorder,
-            borderWidth: depth === 0 ? 1.5 : 1,
-            borderRadius: 12,
-          }
-        ]}>
+        <Pressable 
+          disabled={!hasChildren}
+          onPress={() => toggleNode(meter.id)}
+          style={[
+            styles.meterRow, 
+            depth === 0 ? styles.mainMeterNode : styles.childMeterNode,
+            { 
+              backgroundColor: depth === 0 ? colors.card : colors.inputBg,
+              borderColor: depth === 0 ? colors.warning : colors.cardBorder,
+              borderWidth: depth === 0 ? 1.5 : 1,
+              borderRadius: 12,
+            }
+          ]}
+        >
           {/* Horizontal tick connector for child nodes */}
           {depth > 0 && (
             <View style={[styles.horizontalTick, { backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }]} />
@@ -122,17 +139,39 @@ export default function ResidentTransparency() {
                 : `${meter.member_identifier} (${meter.member_name})`}
             </Text>
           </View>
-          <View style={styles.valContainer}>
-            <Text style={[styles.meterVal, { color: depth === 0 ? colors.warning : colors.primary, fontSize: depth === 0 ? 15 : 13 }]}>
-              {meter.consumption.toFixed(2)}
-            </Text>
-            <Text style={[styles.meterUnit, { color: colors.textMuted }]}>
-              {typeUnits[meter.type] || 'од.'}
-            </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {hasChildren && !isExpandedNode && (
+              <View style={{
+                backgroundColor: colors.primaryMuted,
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+                borderRadius: 8,
+              }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: colors.primary }}>
+                  {children.length}
+                </Text>
+              </View>
+            )}
+            <View style={styles.valContainer}>
+              <Text style={[styles.meterVal, { color: depth === 0 ? colors.warning : colors.primary, fontSize: depth === 0 ? 15 : 13 }]}>
+                {meter.consumption.toFixed(2)}
+              </Text>
+              <Text style={[styles.meterUnit, { color: colors.textMuted }]}>
+                {typeUnits[meter.type] || 'од.'}
+              </Text>
+            </View>
+            {hasChildren && (
+              <View style={{ 
+                marginLeft: 4, 
+                transform: [{ rotate: isExpandedNode ? '180deg' : '0deg' }] 
+              }}>
+                <ChevronDown size={14} color={colors.textMuted} />
+              </View>
+            )}
           </View>
-        </View>
+        </Pressable>
 
-        {hasChildren && (
+        {hasChildren && isExpandedNode && (
           <View style={[
             styles.childrenWrapper, 
             { 
@@ -142,8 +181,8 @@ export default function ResidentTransparency() {
               paddingLeft: 12,
             }
           ]}>
-            {meter.child_meters.map((child: any, cIndex: number) => 
-              renderMeterNode(child, cIndex, meter.child_meters.length, depth + 1)
+            {children.map((child: any, cIndex: number) => 
+              renderMeterNode(child, cIndex, children.length, depth + 1)
             )}
           </View>
         )}

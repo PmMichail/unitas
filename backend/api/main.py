@@ -360,6 +360,7 @@ class Profile(Base):
     lat = Column(Float, nullable=True) # Geolocation latitude
     lon = Column(Float, nullable=True) # Geolocation longitude
     header_image_url = Column(Text, nullable=True) # Cover/header banner image URL
+    show_apartment_meters_in_transparency = Column(Boolean, default=True) # Whether to show apartment/resident meters in transparency registry
     
     owner = relationship("User", back_populates="profiles")
     employees = relationship("Employee", back_populates="profile")
@@ -5986,6 +5987,7 @@ def sync_child_profile(db: Session, parent: Profile):
         child.lat = parent.lat
         child.lon = parent.lon
         child.header_image_url = parent.header_image_url
+        child.show_apartment_meters_in_transparency = parent.show_apartment_meters_in_transparency
         db.flush()
 
 @app.put("/api/profiles/{profile_id}")
@@ -9822,12 +9824,15 @@ def get_descendant_meters(db: Session, parent_id: int) -> list:
         descendants.append(child)
         descendants.extend(get_descendant_meters(db, child.id))
     return descendants
-def serialize_meter_node(db, meter):
+def serialize_meter_node(db, meter, show_apartment_meters: bool = True):
     cons = calculate_meter_monthly_consumption(db, meter.id, meter.initial_reading or 0.0)
     member = db.query(UnitOrMember).filter(UnitOrMember.id == meter.member_id).first() if meter.member_id else None
     
     children = db.query(Meter).filter(Meter.parent_id == meter.id).all()
-    children_data = [serialize_meter_node(db, child) for child in children]
+    if not show_apartment_meters:
+        children = [c for c in children if c.member_id is None]
+        
+    children_data = [serialize_meter_node(db, child, show_apartment_meters) for child in children]
     
     return {
         "id": meter.id,
@@ -9841,6 +9846,11 @@ def serialize_meter_node(db, meter):
 
 @app.get("/api/member/transparency")
 def get_member_transparency(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == auth["profile_id"]).first()
+    show_apartment_meters = getattr(profile, "show_apartment_meters_in_transparency", True)
+    if show_apartment_meters is None:
+        show_apartment_meters = True
+
     members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == auth["profile_id"]).all()
     debts = []
     for m in members:
@@ -9862,7 +9872,7 @@ def get_member_transparency(auth: dict = Depends(verify_member_token), db: Sessi
         mm_cons = calculate_meter_monthly_consumption(db, mm.id, mm.initial_reading or 0.0)
         total_main_consumption += mm_cons
         
-        mm_data = serialize_meter_node(db, mm)
+        mm_data = serialize_meter_node(db, mm, show_apartment_meters)
         main_meters_data.append(mm_data)
         
     average_consumption = total_main_consumption / len(main_meters) if main_meters else 0.0
@@ -9871,7 +9881,8 @@ def get_member_transparency(auth: dict = Depends(verify_member_token), db: Sessi
         "own_consumption": round(total_own_consumption, 2), 
         "average_consumption": round(average_consumption, 2),
         "own_consumption_by_type": {k: round(v, 2) for k, v in own_consumption_by_type.items()},
-        "main_meters": main_meters_data
+        "main_meters": main_meters_data,
+        "show_apartment_meters_in_transparency": show_apartment_meters
     }
 
 @app.get("/api/member/surveys")
@@ -19505,6 +19516,15 @@ def migrate_database():
                 print(f"Error adding lon: {e}")
                 db.rollback()
 
+        if 'show_apartment_meters_in_transparency' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN show_apartment_meters_in_transparency BOOLEAN DEFAULT TRUE"))
+                db.commit()
+                print("Added show_apartment_meters_in_transparency column to profiles table")
+            except Exception as e:
+                print(f"Error adding show_apartment_meters_in_transparency: {e}")
+                db.rollback()
+
         # Add is_member_module_active column to subscriptions table if not present
         subscriptions_columns = [col['name'] for col in inspector.get_columns('subscriptions')]
         if 'is_member_module_active' not in subscriptions_columns:
@@ -19737,6 +19757,7 @@ def purchase_resident_cabinet_module(
     liqpay_private_key: Optional[str] = Form(None),
     color_theme: str = Form("#3b82f6"),
     header_image_url: Optional[str] = Form(None),
+    show_apartment_meters_in_transparency: Optional[bool] = Form(None),
     user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
@@ -19786,6 +19807,8 @@ def purchase_resident_cabinet_module(
     profile.color_theme = color_theme.strip() or "#3b82f6"
     if header_image_url is not None:
         profile.header_image_url = header_image_url.strip() or None
+    if show_apartment_meters_in_transparency is not None:
+        profile.show_apartment_meters_in_transparency = show_apartment_meters_in_transparency
 
     if not profile.member_module_activated_at:
         profile.member_module_activated_at = datetime.utcnow()
@@ -19801,6 +19824,7 @@ def purchase_resident_cabinet_module(
         osbb_enterprise.liqpay_private_key = profile.liqpay_private_key
         osbb_enterprise.color_theme = profile.color_theme
         osbb_enterprise.header_image_url = profile.header_image_url
+        osbb_enterprise.show_apartment_meters_in_transparency = profile.show_apartment_meters_in_transparency
         osbb_enterprise.has_resident_cabinet = True
         osbb_enterprise.is_member_module_active = True
         osbb_enterprise.slug = None # Keep slug None on child to prevent UNIQUE constraint violation
@@ -19817,6 +19841,7 @@ def purchase_resident_cabinet_module(
             liqpay_private_key=profile.liqpay_private_key,
             color_theme=profile.color_theme,
             header_image_url=profile.header_image_url,
+            show_apartment_meters_in_transparency=profile.show_apartment_meters_in_transparency,
             has_resident_cabinet=True,
             is_member_module_active=True,
             parent_profile_id=profile.id
@@ -19835,7 +19860,8 @@ def purchase_resident_cabinet_module(
             "id": profile.id,
             "has_resident_cabinet": profile.has_resident_cabinet,
             "slug": profile.slug,
-            "color_theme": profile.color_theme
+            "color_theme": profile.color_theme,
+            "show_apartment_meters_in_transparency": profile.show_apartment_meters_in_transparency
         },
         "osbb_enterprise": {
             "id": osbb_enterprise.id,
@@ -19896,6 +19922,7 @@ def get_resident_cabinet_status(
         "slug": profile.slug,
         "color_theme": profile.color_theme,
         "header_image_url": profile.header_image_url,
+        "show_apartment_meters_in_transparency": getattr(profile, "show_apartment_meters_in_transparency", True),
         "has_monobank": bool(profile.mono_api_token),
         "has_liqpay": bool(profile.liqpay_public_key) and bool(profile.liqpay_private_key),
         "subscription": {
