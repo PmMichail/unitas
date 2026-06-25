@@ -9822,6 +9822,22 @@ def get_descendant_meters(db: Session, parent_id: int) -> list:
         descendants.append(child)
         descendants.extend(get_descendant_meters(db, child.id))
     return descendants
+def serialize_meter_node(db, meter):
+    cons = calculate_meter_monthly_consumption(db, meter.id, meter.initial_reading or 0.0)
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == meter.member_id).first() if meter.member_id else None
+    
+    children = db.query(Meter).filter(Meter.parent_id == meter.id).all()
+    children_data = [serialize_meter_node(db, child) for child in children]
+    
+    return {
+        "id": meter.id,
+        "name": meter.name,
+        "type": meter.type,
+        "member_name": member.owner_name if member else "Сублічильник",
+        "member_identifier": member.identifier if member else meter.name,
+        "consumption": round(cons, 2),
+        "child_meters": children_data
+    }
 
 @app.get("/api/member/transparency")
 def get_member_transparency(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
@@ -9846,27 +9862,8 @@ def get_member_transparency(auth: dict = Depends(verify_member_token), db: Sessi
         mm_cons = calculate_meter_monthly_consumption(db, mm.id, mm.initial_reading or 0.0)
         total_main_consumption += mm_cons
         
-        descendants = get_descendant_meters(db, mm.id)
-        children_data = []
-        for cm in descendants:
-            cm_cons = calculate_meter_monthly_consumption(db, cm.id, cm.initial_reading or 0.0)
-            cm_member = db.query(UnitOrMember).filter(UnitOrMember.id == cm.member_id).first() if cm.member_id else None
-            children_data.append({
-                "id": cm.id,
-                "name": cm.name,
-                "type": cm.type,
-                "member_name": cm_member.owner_name if cm_member else "Сублічильник",
-                "member_identifier": cm_member.identifier if cm_member else cm.name,
-                "consumption": round(cm_cons, 2)
-            })
-        
-        main_meters_data.append({
-            "id": mm.id,
-            "name": mm.name,
-            "type": mm.type,
-            "consumption": round(mm_cons, 2),
-            "child_meters": children_data
-        })
+        mm_data = serialize_meter_node(db, mm)
+        main_meters_data.append(mm_data)
         
     average_consumption = total_main_consumption / len(main_meters) if main_meters else 0.0
     return {

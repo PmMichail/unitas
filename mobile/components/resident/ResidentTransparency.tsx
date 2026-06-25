@@ -82,6 +82,74 @@ export default function ResidentTransparency() {
   }
 
   const debts = transparency?.debts || [];
+  const ownConsumption = transparency?.own_consumption || 0;
+  const avgConsumption = transparency?.average_consumption || 0;
+  const isSaving = ownConsumption <= avgConsumption;
+  const differencePercent = avgConsumption > 0 
+    ? Math.abs(Math.round(((avgConsumption - ownConsumption) / avgConsumption) * 100)) 
+    : 0;
+
+  const renderMeterNode = (meter: any, index: number, total: number, depth = 0) => {
+    const hasChildren = meter.child_meters && meter.child_meters.length > 0;
+    
+    return (
+      <View key={meter.id} style={styles.nodeContainer}>
+        <View style={[
+          styles.meterRow, 
+          depth === 0 ? styles.mainMeterNode : styles.childMeterNode,
+          { 
+            backgroundColor: depth === 0 ? colors.card : colors.inputBg,
+            borderColor: depth === 0 ? colors.warning : colors.cardBorder,
+            borderWidth: depth === 0 ? 1.5 : 1,
+            borderRadius: 12,
+          }
+        ]}>
+          {/* Horizontal tick connector for child nodes */}
+          {depth > 0 && (
+            <View style={[styles.horizontalTick, { backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }]} />
+          )}
+
+          <View style={[styles.iconCircle, { backgroundColor: depth === 0 ? colors.warningMuted : colors.primaryMuted }]}>
+            {getMeterIcon(meter.type, depth === 0 ? colors.warning : colors.primary, 14)}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.meterName, { color: colors.text, fontSize: depth === 0 ? 14 : 12 }]}>
+              {meter.name}
+            </Text>
+            <Text style={[styles.meterSubText, { color: colors.textMuted }]}>
+              {depth === 0 
+                ? `Головний (${typeLabels[meter.type] || meter.type})` 
+                : `${meter.member_identifier} (${meter.member_name})`}
+            </Text>
+          </View>
+          <View style={styles.valContainer}>
+            <Text style={[styles.meterVal, { color: depth === 0 ? colors.warning : colors.primary, fontSize: depth === 0 ? 15 : 13 }]}>
+              {meter.consumption.toFixed(2)}
+            </Text>
+            <Text style={[styles.meterUnit, { color: colors.textMuted }]}>
+              {typeUnits[meter.type] || 'од.'}
+            </Text>
+          </View>
+        </View>
+
+        {hasChildren && (
+          <View style={[
+            styles.childrenWrapper, 
+            { 
+              borderLeftColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
+              borderLeftWidth: 1.5,
+              marginLeft: 16,
+              paddingLeft: 12,
+            }
+          ]}>
+            {meter.child_meters.map((child: any, cIndex: number) => 
+              renderMeterNode(child, cIndex, meter.child_meters.length, depth + 1)
+            )}
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <ScrollView 
@@ -94,8 +162,13 @@ export default function ResidentTransparency() {
       {/* Consumption comparison */}
       <Card style={[styles.metricsCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
         <View style={styles.metricsHeader}>
-          <Flame size={20} color={colors.warning} />
-          <Text style={[styles.metricsTitle, { color: colors.text }]}>Енергоефективність будинку</Text>
+          <View style={[styles.metricsIconCircle, { backgroundColor: colors.warningMuted }]}>
+            <Flame size={20} color={colors.warning} />
+          </View>
+          <View>
+            <Text style={[styles.metricsTitle, { color: colors.text }]}>Енергоефективність будинку</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted }}>Аналітика та порівняння споживання</Text>
+          </View>
         </View>
 
         <Text style={[styles.sectionSubtitle, { color: colors.text, marginBottom: 8 }]}>Моє споживання за місяць:</Text>
@@ -103,7 +176,7 @@ export default function ResidentTransparency() {
           Object.entries(transparency.own_consumption_by_type).map(([type, val]: [string, any]) => (
             <View key={type} style={styles.ownConsumptionRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                {getMeterIcon(type, colors.primary, 16)}
+                {getMeterIcon(type, colors.primary, 15)}
                 <Text style={[styles.ownConsumptionLabel, { color: colors.text }]}>
                   {typeLabels[type] || type}
                 </Text>
@@ -114,13 +187,48 @@ export default function ResidentTransparency() {
             </View>
           ))
         ) : (
-          <Text style={{ color: colors.textMuted, fontSize: 13, fontStyle: 'italic', marginBottom: 12 }}>
+          <Text style={{ color: colors.textMuted, fontSize: 12, fontStyle: 'italic', marginBottom: 12 }}>
             Немає активних лічильників
           </Text>
         )}
 
+        {/* Comparison Progress Bar Gauge */}
+        {avgConsumption > 0 && ownConsumption > 0 && (
+          <View style={[styles.comparisonBlock, { backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }]}>
+            <View style={styles.comparisonHeader}>
+              <Text style={[styles.comparisonTitle, { color: colors.text }]}>Порівняння із середнім</Text>
+              <Text style={[styles.comparisonSubtitle, { color: isSaving ? colors.success : colors.error }]}>
+                {isSaving 
+                  ? `менше на ${differencePercent}%` 
+                  : `більше на ${differencePercent}%`}
+              </Text>
+            </View>
+            
+            <View style={styles.progressBarBg}>
+              <View 
+                style={[
+                  styles.progressBarFill, 
+                  { 
+                    width: `${Math.min(100, (ownConsumption / avgConsumption) * 100)}%`,
+                    backgroundColor: isSaving ? colors.success : colors.error 
+                  }
+                ]} 
+              />
+            </View>
+
+            <View style={styles.comparisonLegend}>
+              <Text style={[styles.legendText, { color: colors.textMuted }]}>
+                Моє: <Text style={{ color: colors.text, fontWeight: 'bold' }}>{ownConsumption.toFixed(1)} кВт·год</Text>
+              </Text>
+              <Text style={[styles.legendText, { color: colors.textMuted }]}>
+                Сер. по будинку: <Text style={{ color: colors.text, fontWeight: 'bold' }}>{avgConsumption.toFixed(1)} кВт·год</Text>
+              </Text>
+            </View>
+          </View>
+        )}
+
         <View style={styles.gdprNotice}>
-          <ShieldAlert size={14} color={colors.textMuted} />
+          <ShieldAlert size={12} color={colors.textMuted} />
           <Text style={[styles.gdprText, { color: colors.textMuted }]}>
             Дані споживання деперсоналізовані та зведені для захисту приватності.
           </Text>
@@ -128,55 +236,11 @@ export default function ResidentTransparency() {
       </Card>
 
       {/* Main & Child Meters List */}
-      <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 12 }]}>Загальнобудинкові лічильники</Text>
+      <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 12, marginBottom: 8 }]}>Загальнобудинкові лічильники</Text>
       {transparency?.main_meters && transparency.main_meters.length > 0 ? (
-        transparency.main_meters.map((mainMeter: any) => (
-          <Card key={mainMeter.id} style={[styles.meterCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
-            <View style={styles.mainMeterRow}>
-              <View style={[styles.mainMeterIconContainer, { backgroundColor: colors.warningMuted }]}>
-                {getMeterIcon(mainMeter.type, colors.warning, 18)}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.mainMeterName, { color: colors.text }]}>{mainMeter.name}</Text>
-                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>
-                  Головний лічильник ({typeLabels[mainMeter.type] || mainMeter.type})
-                </Text>
-              </View>
-              <View style={styles.mainMeterValContainer}>
-                <Text style={[styles.mainMeterVal, { color: colors.warning }]}>
-                  {mainMeter.consumption.toFixed(2)}
-                </Text>
-                <Text style={{ fontSize: 10, color: colors.textMuted }}>
-                  {typeUnits[mainMeter.type] || 'од.'}
-                </Text>
-              </View>
-            </View>
-
-            {mainMeter.child_meters && mainMeter.child_meters.length > 0 && (
-              <View style={[styles.childMetersContainer, { borderTopColor: colors.cardBorder }]}>
-                <Text style={[styles.childTitle, { color: colors.text }]}>Підпорядковані лічильники мешканців:</Text>
-                {mainMeter.child_meters.map((child: any) => (
-                  <View key={child.id} style={styles.childMeterRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.childMeterName, { color: colors.text }]}>
-                        {child.member_identifier} ({child.member_name})
-                      </Text>
-                      <Text style={{ fontSize: 11, color: colors.textMuted }}>
-                        {child.name}
-                      </Text>
-                    </View>
-                    <View style={styles.childMeterValContainer}>
-                      <Text style={[styles.childMeterVal, { color: colors.primary }]}>
-                        {child.consumption.toFixed(2)}
-                      </Text>
-                      <Text style={{ fontSize: 10, color: colors.textMuted, marginLeft: 4 }}>
-                        {typeUnits[child.type] || 'од.'}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
+        transparency.main_meters.map((mainMeter: any, mIndex: number) => (
+          <Card key={mainMeter.id} style={styles.meterCard}>
+            {renderMeterNode(mainMeter, mIndex, transparency.main_meters.length, 0)}
           </Card>
         ))
       ) : (
@@ -288,7 +352,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
-    gap: 8,
+    gap: 12,
+  },
+  metricsIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   metricsTitle: {
     fontSize: 15,
@@ -437,71 +508,104 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   meterCard: {
-    padding: 16,
+    padding: 12,
     marginBottom: 12,
-  },
-  mainMeterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  mainMeterIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mainMeterName: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  mainMeterValContainer: {
-    alignItems: 'flex-end',
-  },
-  mainMeterVal: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  childMetersContainer: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-  },
-  childTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  childMeterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.03)',
-  },
-  childMeterName: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  childMeterValContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  childMeterVal: {
-    fontSize: 13,
-    fontWeight: '700',
   },
   sectionTitle: {
     fontSize: 15,
     fontWeight: '700',
-    marginBottom: 12,
   },
   emptyCard: {
     padding: 24,
     alignItems: 'center',
+  },
+  // Premium visual hierarchy & tree connector styles
+  nodeContainer: {
+    position: 'relative',
+    marginVertical: 4,
+  },
+  meterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    gap: 10,
+  },
+  mainMeterNode: {
+    paddingVertical: 12,
+  },
+  childMeterNode: {
+    paddingVertical: 8,
+  },
+  horizontalTick: {
+    position: 'absolute',
+    height: 1.5,
+    width: 12,
+    left: -12,
+    top: 24,
+  },
+  iconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  meterName: {
+    fontWeight: '700',
+  },
+  meterSubText: {
+    fontSize: 10,
+    marginTop: 2,
+  },
+  valContainer: {
+    alignItems: 'flex-end',
+  },
+  meterVal: {
+    fontWeight: '800',
+  },
+  meterUnit: {
+    fontSize: 9,
+    marginTop: 1,
+  },
+  childrenWrapper: {
+    marginTop: 4,
+  },
+  comparisonBlock: {
+    padding: 12,
+    marginTop: 12,
+    borderRadius: 12,
+  },
+  comparisonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  comparisonTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  comparisonSubtitle: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  progressBarBg: {
+    height: 8,
+    backgroundColor: 'rgba(120, 120, 128, 0.12)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  comparisonLegend: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  legendText: {
+    fontSize: 11,
   },
 });
