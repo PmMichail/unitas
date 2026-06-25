@@ -28,7 +28,8 @@ import {
   X,
   Send,
   MessageSquare,
-  Trash2
+  Trash2,
+  AlertCircle
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const [companyId, setCompanyId] = useState<number>(1);
   const [statements, setStatements] = useState<any[]>([]);
   const [dashboardData, setDashboardData] = useState<any>(null);
+  const [unapprovedCount, setUnapprovedCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -260,9 +262,25 @@ export default function Dashboard() {
     fetchDashboardData();
   }, [companyId, periodType, selectedYear, selectedMonth, selectedQuarter]);
 
+  const fetchModerationCount = async () => {
+    if (!companyId || selectedProfile?.organization_subtype !== "osbb") {
+      setUnapprovedCount(0);
+      return;
+    }
+    try {
+      const data = await api.getMembersModeration(companyId, "pending");
+      if (Array.isArray(data)) {
+        setUnapprovedCount(data.length);
+      }
+    } catch (err) {
+      console.warn("Failed to load moderation members for count check");
+    }
+  };
+
   useEffect(() => {
     fetchLegislationData();
     fetchStatements();
+    fetchModerationCount();
   }, [companyId]);
 
   useEffect(() => {
@@ -552,6 +570,18 @@ export default function Dashboard() {
             {/* Dashboard View */}
             {activeTab === "dashboard" && (
               <div className="mt-8 space-y-8">
+                
+                {unapprovedCount > 0 && (
+                  <div className="p-4 rounded-xl border border-amber-250 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 text-amber-800 dark:text-amber-400 text-sm font-semibold flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle size={20} className="text-amber-500" />
+                      <span>У вас є <b>{unapprovedCount}</b> непідтверджених мешканців, які чекають на модерацію.</span>
+                    </div>
+                    <Link href="/billing?tab=moderation" className="text-xs bg-amber-600 hover:bg-amber-550 text-white rounded-lg px-3.5 py-1.5 font-bold transition-all">
+                      Перейти до модерації
+                    </Link>
+                  </div>
+                )}
                 
                  {/* Intro Card */}
                  <div className="p-6 rounded-2xl glass-panel bg-gradient-to-r from-slate-100/90 to-indigo-50/40 dark:from-slate-900/80 dark:to-indigo-950/30 flex flex-col md:flex-row md:justify-between md:items-center transition-all duration-300">

@@ -14,6 +14,7 @@ import {
   FlatList,
   Platform,
   Dimensions,
+  Clipboard,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -40,7 +41,8 @@ import {
   ChevronRight,
   Clock,
   Briefcase,
-  Phone
+  Phone,
+  CreditCard
 } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
@@ -55,9 +57,13 @@ export default function ResidentDashboard() {
   const [data, setData] = useState<any>(null);
   const [meterInputs, setMeterInputs] = useState<Record<number, string>>({});
   const [submittingMeterId, setSubmittingMeterId] = useState<number | null>(null);
+  
+  const [payAmount, setPayAmount] = useState('');
+  const [billingHistory, setBillingHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Modal selector state
-  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | null>(null);
+  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | 'billing_history' | null>(null);
 
   // 1. Documents Modal states
   const [documents, setDocuments] = useState<any[]>([]);
@@ -111,6 +117,21 @@ export default function ResidentDashboard() {
     try {
       const response = await api.getMemberDashboard(memberToken);
       setData(response);
+      
+      if (response?.meters) {
+        const initialMeterInputs: Record<number, string> = {};
+        response.meters.forEach((meter: any) => {
+          if (meter.is_submitted && meter.current_submitted_value !== undefined && meter.current_submitted_value !== null) {
+            initialMeterInputs[meter.id] = String(meter.current_submitted_value);
+          }
+        });
+        setMeterInputs(prev => ({ ...initialMeterInputs, ...prev }));
+      }
+      
+      const bal = Number(response?.member?.balance || 0);
+      if (bal < 0) {
+        setPayAmount(String(Math.abs(bal)));
+      }
     } catch (e: any) {
       console.error('Error loading resident dashboard:', e);
       if (e.message?.includes('401') || e.message?.includes('403')) {
@@ -135,20 +156,16 @@ export default function ResidentDashboard() {
   };
 
   const handlePayMono = async () => {
-    if (!data?.member?.balance) {
-      Alert.alert('Повідомлення', 'У вас немає заборгованості для оплати.');
-      return;
-    }
-    const debtAmount = Math.abs(Number(data.member.balance));
-    if (debtAmount <= 0) {
-      Alert.alert('Повідомлення', 'Немає боргу для оплати.');
+    const amount = parseFloat(payAmount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Помилка', 'Введіть коректну суму для оплати.');
       return;
     }
 
     try {
       setLoading(true);
       const res = await api.createMemberMonoInvoice(memberToken!, {
-        amount: debtAmount,
+        amount: amount,
         charge_type: 'regular',
         description: `Оплата внесків ОСББ за рахунком ${data.member.account_number || data.member.identifier}`,
       });
@@ -162,6 +179,16 @@ export default function ResidentDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePayLiqpay = async () => {
+    const amount = parseFloat(payAmount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Помилка', 'Введіть коректну суму для оплати.');
+      return;
+    }
+    const url = `${API_BASE_URL}/api/member/billing/liqpay/pay-redirect?amount=${amount}&token=${memberToken}`;
+    Linking.openURL(url);
   };
 
   const handleDownloadReceipt = () => {
@@ -474,6 +501,20 @@ export default function ResidentDashboard() {
     Linking.openURL(`tel:${phone}`);
   };
 
+  const openBillingHistory = async () => {
+    setActiveModal('billing_history');
+    setLoadingHistory(true);
+    try {
+      const history = await api.getMemberBillingHistory(memberToken!);
+      setBillingHistory(history || []);
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося завантажити історію фінансів');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   // Automated notification helpers (test button triggers)
   const handleTriggerTestReminder = async () => {
     try {
@@ -537,23 +578,58 @@ export default function ResidentDashboard() {
 
       {/* Balance card */}
       <Card style={styles.balanceCard}>
-        <Text style={[styles.label, { color: colors.textMuted }]}>Поточний баланс</Text>
-        <Text style={[
-          styles.balanceText, 
-          { color: balance < 0 ? '#f97316' : '#84cc16' }
-        ]}>
-          {balance.toFixed(2)} грн
-        </Text>
+        <Pressable onPress={openBillingHistory}>
+          <Text style={[styles.label, { color: colors.textMuted }]}>Поточний баланс (Натисніть для історії)</Text>
+          <Text style={[
+            styles.balanceText, 
+            { color: balance < 0 ? '#f97316' : '#84cc16' }
+          ]}>
+            {balance.toFixed(2)} грн
+          </Text>
+        </Pressable>
         <Text style={[styles.subLabel, { color: colors.textMuted }]}>
           {balance < 0 ? 'У вас є заборгованість' : 'Передплата / Борг відсутній'}
         </Text>
 
         <View style={styles.actionButtons}>
-          <Button
-            title="Сплатити через Mono"
-            onPress={handlePayMono}
-            style={styles.payBtn}
-          />
+          {(data?.profile?.has_monobank || data?.profile?.has_liqpay) && (
+            <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 6, marginVertical: 8, width: '100%' }}>
+              <TextInput
+                style={{
+                  flex: 1.2,
+                  borderColor: colors.cardBorder,
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  paddingHorizontal: 8,
+                  color: colors.text,
+                  backgroundColor: colors.inputBg,
+                  fontSize: 14,
+                  fontWeight: 'bold',
+                  textAlign: 'center',
+                }}
+                placeholder="Сума"
+                placeholderTextColor={colors.textMuted + '80'}
+                value={payAmount}
+                onChangeText={setPayAmount}
+                keyboardType="numeric"
+              />
+              {data?.profile?.has_monobank && (
+                <Button
+                  title="Mono Pay"
+                  onPress={handlePayMono}
+                  style={{ flex: 2 }}
+                />
+              )}
+              {data?.profile?.has_liqpay && (
+                <Button
+                  title="LiqPay"
+                  onPress={handlePayLiqpay}
+                  variant="secondary"
+                  style={{ flex: 2 }}
+                />
+              )}
+            </View>
+          )}
           <Button
             title="Отримати квитанцію"
             onPress={handleDownloadReceipt}
@@ -562,6 +638,46 @@ export default function ResidentDashboard() {
           />
         </View>
       </Card>
+
+      {/* Bank Transfer Details Section */}
+      {profile?.iban && (
+        <Card style={{ padding: 16, marginTop: 12, gap: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <CreditCard size={20} color={colors.primary} />
+            <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.text }}>Реквізити для оплати (IBAN)</Text>
+          </View>
+          <View style={{ gap: 8 }}>
+            <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
+              <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Рахунок отримувача</Text>
+              <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.iban}</Text>
+              <Pressable onPress={() => {
+                Clipboard.setString(profile.iban);
+                Alert.alert('Скопійовано', 'IBAN скопійовано в буфер обміну.');
+              }}>
+                <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати IBAN</Text>
+              </Pressable>
+            </View>
+            
+            {profile.tax_id && (
+              <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
+                <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Код ЄДРПОУ</Text>
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.tax_id}</Text>
+                <Pressable onPress={() => {
+                  Clipboard.setString(profile.tax_id);
+                  Alert.alert('Скопійовано', 'Код ЄДРПОУ скопійовано.');
+                }}>
+                  <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати ЄДРПОУ</Text>
+                </Pressable>
+              </View>
+            )}
+
+            <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12 }}>
+              <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Отримувач / Банк</Text>
+              <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginTop: 4 }}>{profile.bank_name || profile.name}</Text>
+            </View>
+          </View>
+        </Card>
+      )}
 
       {/* Premium Quick Action Grid */}
       <View style={styles.sectionHeader}>
@@ -640,7 +756,14 @@ export default function ResidentDashboard() {
           <Card key={meter.id} style={styles.meterCard}>
             <View style={styles.meterRow}>
               <View style={styles.meterInfo}>
-                <Text style={[styles.meterName, { color: colors.text }]}>{meter.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={[styles.meterName, { color: colors.text }]}>{meter.name}</Text>
+                  {meter.is_submitted && (
+                    <View style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                      <Text style={{ color: '#10b981', fontSize: 9, fontWeight: 'bold' }}>Надіслано</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={[styles.meterPrev, { color: colors.textMuted }]}>
                   Попереднє значення: {meter.previous_value}
                 </Text>
@@ -672,7 +795,7 @@ export default function ResidentDashboard() {
                   {submittingMeterId === meter.id ? (
                     <ActivityIndicator size="small" color="#ffffff" />
                   ) : (
-                    <Text style={styles.submitButtonText}>OK</Text>
+                    <Text style={styles.submitButtonText}>{meter.is_submitted ? 'Зберегти' : 'OK'}</Text>
                   )}
                 </Pressable>
               </View>
@@ -730,6 +853,56 @@ export default function ResidentDashboard() {
         </Text>
       </View>
 
+
+      {/* ========================================================================= */}
+      {/* 7. BILLING HISTORY MODAL OVERLAY */}
+      {/* ========================================================================= */}
+      <Modal visible={activeModal === 'billing_history'} animationType="slide" transparent={true} onRequestClose={() => setActiveModal(null)}>
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalOverlayHeader, { backgroundColor: colors.background }]}>
+            <Text style={[styles.modalHeaderTitle, { color: colors.text }]}>Історія нарахувань та оплат</Text>
+            <Pressable style={styles.closeBtn} onPress={() => setActiveModal(null)}>
+              <X size={24} color={colors.text} />
+            </Pressable>
+          </View>
+          
+          <View style={[styles.modalBody, { backgroundColor: colors.background }]}>
+            {loadingHistory ? (
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
+            ) : billingHistory.length > 0 ? (
+              <FlatList
+                data={billingHistory}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={{ padding: 16 }}
+                renderItem={({ item }) => {
+                  const isCharge = item.type === 'charge';
+                  return (
+                    <Card style={[styles.docItemCard, { borderLeftWidth: 4, borderLeftColor: isCharge ? '#f97316' : '#10b981' }]}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase' }}>
+                          {isCharge ? 'Нарахування' : 'Оплата'}
+                        </Text>
+                        <Text style={{ fontSize: 10, color: colors.textMuted }}>{item.date}</Text>
+                      </View>
+                      <Text style={{ fontSize: 13, fontWeight: 'bold', color: colors.text, marginVertical: 6 }}>
+                        {item.description}
+                      </Text>
+                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: isCharge ? '#f97316' : '#10b981' }}>
+                        {isCharge ? '-' : '+'}{item.amount.toFixed(2)} грн
+                      </Text>
+                    </Card>
+                  );
+                }}
+              />
+            ) : (
+              <View style={styles.center}>
+                <FolderOpen size={48} color={colors.textMuted} />
+                <Text style={[styles.emptyText, { color: colors.textMuted, marginTop: 12 }]}>Історія порожня.</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* ========================================================================= */}
       {/* 1. DOCUMENTS MODAL OVERLAY */}

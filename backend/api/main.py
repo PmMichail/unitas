@@ -349,6 +349,8 @@ class Profile(Base):
     
     # Multi-tenant payment fields for OSBB/ST
     mono_api_token = Column(String(255), nullable=True) # Monobank API token for this specific OSBB
+    liqpay_public_key = Column(String(255), nullable=True) # LiqPay Public Key for this specific OSBB
+    liqpay_private_key = Column(String(255), nullable=True) # LiqPay Private Key for this specific OSBB
     slug = Column(String(255), unique=True, nullable=True) # Unique identifier for URLs (e.g. 'osbb-zelenyi-kurhan')
     color_theme = Column(String(7), default='#3b82f6') # Color theme for UI
     has_resident_cabinet = Column(Boolean, default=False) # Whether resident cabinet module is active for this profile
@@ -5976,6 +5978,8 @@ def sync_child_profile(db: Session, parent: Profile):
         child.phone = parent.phone
         child.director_name = parent.director_name
         child.mono_api_token = parent.mono_api_token
+        child.liqpay_public_key = parent.liqpay_public_key
+        child.liqpay_private_key = parent.liqpay_private_key
         child.color_theme = parent.color_theme or "#3b82f6"
         child.slug = parent.slug
         db.flush()
@@ -6012,6 +6016,8 @@ def update_profile_endpoint(
     starting_debt_vz: Optional[float] = Form(None),
     starting_debt_pdfo: Optional[float] = Form(None),
     mono_api_token: Optional[str] = Form(None),
+    liqpay_public_key: Optional[str] = Form(None),
+    liqpay_private_key: Optional[str] = Form(None),
     slug: Optional[str] = Form(None),
     color_theme: Optional[str] = Form(None),
     has_resident_cabinet: Optional[bool] = Form(None),
@@ -6144,6 +6150,10 @@ def update_profile_endpoint(
         profile.starting_debt_pdfo = starting_debt_pdfo
     if mono_api_token is not None:
         profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
+    if liqpay_public_key is not None:
+        profile.liqpay_public_key = encrypt_token(liqpay_public_key.strip()) if liqpay_public_key.strip() else None
+    if liqpay_private_key is not None:
+        profile.liqpay_private_key = encrypt_token(liqpay_private_key.strip()) if liqpay_private_key.strip() else None
     if slug is not None:
         profile.slug = slug.strip().lower() or None
     if color_theme is not None:
@@ -8843,6 +8853,125 @@ def create_member_billing_invoice(
         raise HTTPException(status_code=400, detail=str(e))
     return {"pageUrl": page_url}
 
+@app.post("/api/member/billing/liqpay/checkout")
+def create_member_billing_liqpay_checkout(
+    amount: float = Form(...),
+    charge_type: str = Form("regular"),
+    description: Optional[str] = Form("Оплата внеску"),
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == auth["profile_id"]).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    member = auth["member"]
+    
+    liqpay_pub = decrypt_token((getattr(profile, "liqpay_public_key", None) or "").strip())
+    liqpay_priv = decrypt_token((getattr(profile, "liqpay_private_key", None) or "").strip())
+    if not liqpay_pub or not liqpay_priv:
+        raise HTTPException(status_code=400, detail="LiqPay API credentials for this ОСББ/СТ are not configured")
+        
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Сума оплати має бути більше нуля")
+        
+    order_id = f"liqpay_billing:{member.id}:{profile.id}:{charge_type}:{int(datetime.now().timestamp())}"
+    
+    frontend_url = os.getenv("FRONTEND_URL", "https://www.unitax.pro")
+    redirect_url = f"{frontend_url}/osbb/{profile.slug}/dashboard?success=true"
+    api_base_url = os.getenv("API_BASE_URL", "https://api.unitax.pro")
+    webhook_url = f"{api_base_url}/api/liqpay/webhook"
+    
+    data = {
+        "public_key": liqpay_pub,
+        "version": "3",
+        "action": "pay",
+        "amount": str(amount),
+        "currency": "UAH",
+        "description": description,
+        "order_id": order_id,
+        "server_url": webhook_url,
+        "result_url": redirect_url,
+        "language": "uk"
+    }
+    if liqpay_pub.startswith("sandbox_"):
+        data["sandbox"] = "1"
+        
+    encoded_data = base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
+    sign_str = liqpay_priv + encoded_data + liqpay_priv
+    signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+    
+    return {
+        "liqpay_data": encoded_data,
+        "liqpay_signature": signature,
+        "api_url": "https://www.liqpay.ua/api/3/checkout"
+    }
+
+@app.get("/api/member/billing/liqpay/pay-redirect")
+def get_member_billing_liqpay_redirect(
+    amount: float,
+    charge_type: str = "regular",
+    description: str = "Оплата внеску",
+    auth: dict = Depends(verify_member_token),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == auth["profile_id"]).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    member = auth["member"]
+    
+    liqpay_pub = decrypt_token((getattr(profile, "liqpay_public_key", None) or "").strip())
+    liqpay_priv = decrypt_token((getattr(profile, "liqpay_private_key", None) or "").strip())
+    if not liqpay_pub or not liqpay_priv:
+        raise HTTPException(status_code=400, detail="LiqPay API credentials for this ОСББ/СТ are not configured")
+        
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Сума оплати має бути більше нуля")
+        
+    order_id = f"liqpay_billing:{member.id}:{profile.id}:{charge_type}:{int(datetime.now().timestamp())}"
+    
+    frontend_url = os.getenv("FRONTEND_URL", "https://www.unitax.pro")
+    redirect_url = f"{frontend_url}/osbb/{profile.slug}/dashboard?success=true"
+    api_base_url = os.getenv("API_BASE_URL", "https://api.unitax.pro")
+    webhook_url = f"{api_base_url}/api/liqpay/webhook"
+    
+    data = {
+        "public_key": liqpay_pub,
+        "version": "3",
+        "action": "pay",
+        "amount": str(amount),
+        "currency": "UAH",
+        "description": description,
+        "order_id": order_id,
+        "server_url": webhook_url,
+        "result_url": redirect_url,
+        "language": "uk"
+    }
+    if liqpay_pub.startswith("sandbox_"):
+        data["sandbox"] = "1"
+        
+    encoded_data = base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
+    sign_str = liqpay_priv + encoded_data + liqpay_priv
+    signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+    
+    from fastapi.responses import HTMLResponse
+    html_content = f"""
+    <html>
+    <head>
+        <title>Redirecting to LiqPay...</title>
+    </head>
+    <body>
+        <form id="liqpay_form" action="https://www.liqpay.ua/api/3/checkout" method="POST">
+            <input type="hidden" name="data" value="{encoded_data}" />
+            <input type="hidden" name="signature" value="{signature}" />
+        </form>
+        <script>
+            document.getElementById('liqpay_form').submit();
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
 @app.get("/api/member/neighbors")
 def get_member_neighbors(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
     """Neighbors Board - transparency flat numbers & debts, consumption averages"""
@@ -9024,7 +9153,7 @@ def get_member_receipt_pdf(auth: dict = Depends(verify_member_token), db: Sessio
     return StreamingResponse(
         BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": make_content_disposition(filename)}
     )
 
 @app.get("/api/admin/profile/{profile_id}")
@@ -9128,7 +9257,8 @@ def admin_module_status(profile_id: int = Query(...), db: Session = Depends(get_
         "is_active": bool(profile.is_member_module_active),
         "activated_at": profile.member_module_activated_at.isoformat() if profile.member_module_activated_at else None,
         "slug": profile.slug,
-        "has_monobank": bool(profile.mono_api_token)
+        "has_monobank": bool(profile.mono_api_token),
+        "has_liqpay": bool(profile.liqpay_public_key) and bool(profile.liqpay_private_key)
     }
 
 @app.post("/api/admin/tickets/{ticket_id}/status")
@@ -9477,15 +9607,28 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
     meters = db.query(Meter).filter(Meter.member_id == member.id).all()
     meter_data = []
     for meter in meters:
-        last_reading = db.query(MeterReading).filter(MeterReading.meter_id == meter.id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).first()
+        readings = db.query(MeterReading).filter(MeterReading.meter_id == meter.id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).all()
+        last_reading = readings[0] if len(readings) > 0 else None
+        
+        if last_reading and not last_reading.is_locked:
+            prev_val = readings[1].reading_value if len(readings) >= 2 else meter.initial_reading
+            is_submitted = True
+            current_submitted_value = last_reading.reading_value
+        else:
+            prev_val = last_reading.reading_value if last_reading else meter.initial_reading
+            is_submitted = False
+            current_submitted_value = None
+            
         meter_data.append({
             "id": meter.id,
             "name": meter.name,
             "type": meter.type,
             "tariff": meter.tariff,
-            "previous_value": last_reading.reading_value if last_reading else meter.initial_reading,
+            "previous_value": prev_val,
             "last_reading_date": last_reading.reading_date.isoformat() if last_reading and last_reading.reading_date else None,
-            "is_locked": bool(last_reading.is_locked) if last_reading else False
+            "is_locked": bool(last_reading.is_locked) if last_reading else False,
+            "is_submitted": is_submitted,
+            "current_submitted_value": current_submitted_value
         })
     return {
         "profile": {
@@ -9493,7 +9636,12 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "name": profile.name,
             "address": profile.address,
             "slug": profile.slug,
-            "color_theme": profile.color_theme
+            "color_theme": profile.color_theme,
+            "iban": getattr(profile, "iban", None),
+            "tax_id": getattr(profile, "tax_id", None),
+            "bank_name": getattr(profile, "bank_name", None),
+            "has_monobank": bool(getattr(profile, "mono_api_token", None)),
+            "has_liqpay": bool(getattr(profile, "liqpay_public_key", None)) and bool(getattr(profile, "liqpay_private_key", None))
         } if profile else None,
         "member": {
             "id": member.id,
@@ -9520,36 +9668,118 @@ def submit_member_meter_reading(
     meter = db.query(Meter).filter(Meter.id == meter_id, Meter.member_id == auth["member_id"]).first()
     if not meter:
         raise HTTPException(status_code=404, detail="Лічильник не знайдено")
-    last_reading = db.query(MeterReading).filter(MeterReading.meter_id == meter_id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).first()
-    previous_value = last_reading.reading_value if last_reading else meter.initial_reading
+        
+    readings = db.query(MeterReading).filter(MeterReading.meter_id == meter_id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).all()
+    last_reading = readings[0] if len(readings) > 0 else None
+    
     if last_reading and last_reading.is_locked:
         raise HTTPException(status_code=403, detail="Період закрито, показник заблоковано")
-    if reading_value < previous_value:
-        raise HTTPException(status_code=420, detail="Нові показання не можуть бути меншими за попередні!")
+        
     parsed_date = datetime.strptime(reading_date, "%Y-%m-%d").date() if reading_date else date.today()
-    charge_amount = max(0.0, reading_value - previous_value) * (meter.tariff or 0.0)
-    reading = MeterReading(
-        meter_id=meter.id,
-        reading_date=parsed_date,
-        reading_value=reading_value,
-        charge_amount=charge_amount,
-        is_locked=False
-    )
-    db.add(reading)
-    if charge_amount > 0:
-        auth["member"].balance -= charge_amount
-        charge = BillingCharge(
-            profile_id=auth["profile_id"],
-            member_id=auth["member_id"],
-            date=parsed_date,
-            amount=charge_amount,
-            charge_type="utility",
-            period_type="monthly",
-            description=f"Нарахування за лічильником {meter.name}"
+    
+    if last_reading and not last_reading.is_locked:
+        # Edit existing unlocked reading
+        previous_value = readings[1].reading_value if len(readings) >= 2 else meter.initial_reading
+        if reading_value < previous_value:
+            raise HTTPException(status_code=420, detail="Нові показання не можуть бути меншими за попередні!")
+            
+        old_charge = last_reading.charge_amount or 0.0
+        new_charge = max(0.0, reading_value - previous_value) * (meter.tariff or 0.0)
+        
+        # Adjust member balance
+        auth["member"].balance += (old_charge - new_charge)
+        
+        # Update reading
+        last_reading.reading_value = reading_value
+        last_reading.charge_amount = new_charge
+        last_reading.reading_date = parsed_date
+        
+        # Update or create BillingCharge
+        charge = db.query(BillingCharge).filter(
+            BillingCharge.member_id == auth["member_id"],
+            BillingCharge.charge_type == "utility",
+            BillingCharge.description.like(f"%{meter.name}%")
+        ).order_by(BillingCharge.date.desc(), BillingCharge.id.desc()).first()
+        
+        if charge:
+            charge.amount = new_charge
+            charge.date = parsed_date
+        elif new_charge > 0:
+            charge = BillingCharge(
+                profile_id=auth["profile_id"],
+                member_id=auth["member_id"],
+                date=parsed_date,
+                amount=new_charge,
+                charge_type="utility",
+                period_type="monthly",
+                description=f"Нарахування за лічильником {meter.name}"
+            )
+            db.add(charge)
+            
+        db.commit()
+        return {"status": "success", "previous_value": previous_value, "current_value": reading_value, "charge_amount": round(new_charge, 2), "updated": True}
+        
+    else:
+        # Create new reading
+        previous_value = last_reading.reading_value if last_reading else meter.initial_reading
+        if reading_value < previous_value:
+            raise HTTPException(status_code=420, detail="Нові показання не можуть бути меншими за попередні!")
+            
+        charge_amount = max(0.0, reading_value - previous_value) * (meter.tariff or 0.0)
+        reading = MeterReading(
+            meter_id=meter.id,
+            reading_date=parsed_date,
+            reading_value=reading_value,
+            charge_amount=charge_amount,
+            is_locked=False
         )
-        db.add(charge)
-    db.commit()
-    return {"status": "success", "previous_value": previous_value, "current_value": reading_value, "charge_amount": round(charge_amount, 2)}
+        db.add(reading)
+        if charge_amount > 0:
+            auth["member"].balance -= charge_amount
+            charge = BillingCharge(
+                profile_id=auth["profile_id"],
+                member_id=auth["member_id"],
+                date=parsed_date,
+                amount=charge_amount,
+                charge_type="utility",
+                period_type="monthly",
+                description=f"Нарахування за лічильником {meter.name}"
+            )
+            db.add(charge)
+        db.commit()
+        return {"status": "success", "previous_value": previous_value, "current_value": reading_value, "charge_amount": round(charge_amount, 2), "updated": False}
+
+@app.get("/api/member/billing/history")
+def get_member_billing_history(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member_id = auth["member_id"]
+    charges = db.query(BillingCharge).filter(BillingCharge.member_id == member_id).all()
+    payments = db.query(ParsedPayment).filter(
+        ParsedPayment.member_id == member_id,
+        ParsedPayment.direction == "in"
+    ).all()
+    
+    history = []
+    for c in charges:
+        history.append({
+            "id": f"charge_{c.id}",
+            "type": "charge",
+            "date": c.date.isoformat() if c.date else None,
+            "amount": c.amount,
+            "description": c.description or f"Нарахування ({c.charge_type})"
+        })
+        
+    for p in payments:
+        history.append({
+            "id": f"payment_{p.id}",
+            "type": "payment",
+            "date": p.date.isoformat() if p.date else None,
+            "amount": p.amount,
+            "description": p.purpose or "Оплата"
+        })
+        
+    # Sort history by date descending
+    history.sort(key=lambda x: x["date"] or "", reverse=True)
+    return history
 
 @app.get("/api/member/transparency")
 def get_member_transparency(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
@@ -9619,11 +9849,9 @@ def vote_member_survey(
         raise HTTPException(status_code=404, detail="Опитування не знайдено")
     existing = db.query(SurveyVote).filter(SurveyVote.survey_id == survey_id, SurveyVote.member_id == auth["member_id"]).first()
     if existing:
-        existing.vote = vote
-        existing.comment = comment
-        existing.voted_at = datetime.utcnow()
-    else:
-        db.add(SurveyVote(survey_id=survey_id, member_id=auth["member_id"], vote=vote, comment=comment))
+        raise HTTPException(status_code=400, detail="Ви вже проголосували в цьому опитуванні!")
+    
+    db.add(SurveyVote(survey_id=survey_id, member_id=auth["member_id"], vote=vote, comment=comment))
     db.commit()
     return {"status": "success"}
 
@@ -15727,17 +15955,7 @@ async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
     if not data or not signature:
         raise HTTPException(status_code=400, detail="Missing data or signature")
         
-    # Verify signature inside a try/except block to avoid 500 error on fly.io
-    try:
-        if not liqpay_service.verify_callback(data, signature):
-            raise HTTPException(status_code=403, detail="Invalid signature verification failed")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Signature validation error: {str(e)}")
-        raise HTTPException(status_code=403, detail="Signature validation error")
-        
-    # Decode data
+    # Decode data first to inspect order_id
     try:
         callback_data = liqpay_service.decode_callback_data(data)
     except Exception as e:
@@ -15751,6 +15969,39 @@ async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
     
     logger.info(f"LiqPay callback: order_id={order_id}, status={status}, amount={amount}")
     
+    # Conditional signature verification
+    if order_id.startswith("liqpay_billing:"):
+        parts = order_id.split(":")
+        if len(parts) >= 3:
+            try:
+                profile_id = int(parts[2])
+                profile = db.query(Profile).filter(Profile.id == profile_id).first()
+                if not profile:
+                    raise HTTPException(status_code=404, detail="Profile not found")
+                custom_priv = decrypt_token((getattr(profile, "liqpay_private_key", None) or "").strip())
+                if not custom_priv:
+                    raise HTTPException(status_code=400, detail="LiqPay private key not configured")
+                sign_str = custom_priv + data + custom_priv
+                expected_signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+                if signature != expected_signature:
+                    logger.error("LiqPay billing signature verification failed")
+                    raise HTTPException(status_code=403, detail="Invalid signature")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error verifying billing signature: {str(e)}")
+                raise HTTPException(status_code=403, detail="Signature validation error")
+    else:
+        # Verify signature using platform-wide private key
+        try:
+            if not liqpay_service.verify_callback(data, signature):
+                raise HTTPException(status_code=403, detail="Invalid signature verification failed")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Signature validation error: {str(e)}")
+            raise HTTPException(status_code=403, detail="Signature validation error")
+        
     # Parse order_id to determine type
     if order_id.startswith("tax_"):
         # Tax payment
@@ -15810,6 +16061,71 @@ async def liqpay_callback(request: Request, db: Session = Depends(get_db)):
                     payment.status = "failed"
                 db.commit()
                 
+    elif order_id.startswith("liqpay_billing:"):
+        # Resident Billing payment
+        parts = order_id.split(":")
+        if len(parts) >= 4:
+            member_id = int(parts[1])
+            profile_id = int(parts[2])
+            charge_type = parts[3]
+            
+            # Check if already processed
+            existing_payment = db.query(ParsedPayment).filter(
+                ParsedPayment.profile_id == profile_id,
+                ParsedPayment.member_id == member_id,
+                ParsedPayment.purpose.like(f"%{liqpay_payment_id}%")
+            ).first()
+            
+            if existing_payment:
+                logger.info(f"LiqPay billing payment {liqpay_payment_id} already processed. Skipping.")
+                return {"status": "already_processed"}
+                
+            if status in ("success", "sandbox"):
+                member = db.query(UnitOrMember).filter(
+                    UnitOrMember.id == member_id, 
+                    UnitOrMember.profile_id == profile_id
+                ).first()
+                if member:
+                    amount_val = float(amount)
+                    member.balance += amount_val
+                    
+                    # Log in ParsedPayment
+                    parsed_payment = ParsedPayment(
+                        date=date.today(),
+                        amount=amount_val,
+                        direction="in",
+                        purpose=f"Оплата через LiqPay (платіж {liqpay_payment_id})",
+                        contragent="LiqPay",
+                        type="income",
+                        profile_id=profile_id,
+                        member_id=member_id,
+                        transaction_type="income"
+                    )
+                    db.add(parsed_payment)
+                    
+                    # Log in BillingCharge
+                    billing_charge = BillingCharge(
+                        profile_id=profile_id,
+                        member_id=member_id,
+                        date=date.today(),
+                        amount=-amount_val,
+                        charge_type=charge_type,
+                        period_type="monthly",
+                        description=f"Оплата через LiqPay (платіж {liqpay_payment_id})"
+                    )
+                    db.add(billing_charge)
+                    db.commit()
+                    
+                    try:
+                        notify_resident(
+                            db,
+                            member,
+                            "Оплату LiqPay зараховано",
+                            f"Оплату на суму {amount_val:.2f} грн успішно зараховано на ваш особовий рахунок {member.account_number or member.identifier}."
+                        )
+                    except Exception as e:
+                        logger.error(f"Error sending push notification for LiqPay payment: {e}")
+                        
     return {"status": "ok"}
 
 @app.post("/api/liqpay/webhook")
@@ -18866,6 +19182,24 @@ def migrate_database():
                 print(f"Error adding mono_api_token: {e}")
                 db.rollback()
                 
+        if 'liqpay_public_key' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN liqpay_public_key VARCHAR(255)"))
+                db.commit()
+                print("Added liqpay_public_key column to profiles table")
+            except Exception as e:
+                print(f"Error adding liqpay_public_key: {e}")
+                db.rollback()
+
+        if 'liqpay_private_key' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN liqpay_private_key VARCHAR(255)"))
+                db.commit()
+                print("Added liqpay_private_key column to profiles table")
+            except Exception as e:
+                print(f"Error adding liqpay_private_key: {e}")
+                db.rollback()
+                
         if 'slug' not in profiles_columns:
             try:
                 db.execute(text("ALTER TABLE profiles ADD COLUMN slug VARCHAR(255) UNIQUE"))
@@ -19165,7 +19499,9 @@ def get_support_chats(db: Session = Depends(get_db)):
 def purchase_resident_cabinet_module(
     profile_id: int,
     slug: str = Form(...),
-    mono_api_token: str = Form(...),
+    mono_api_token: Optional[str] = Form(None),
+    liqpay_public_key: Optional[str] = Form(None),
+    liqpay_private_key: Optional[str] = Form(None),
     color_theme: str = Form("#3b82f6"),
     user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
@@ -19188,7 +19524,6 @@ def purchase_resident_cabinet_module(
     # Create or update subscription record if needed
     subscription = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
     if not subscription:
-        from datetime import datetime, timedelta
         subscription = Subscription(
             profile_id=profile_id,
             plan="basic",
@@ -19208,7 +19543,12 @@ def purchase_resident_cabinet_module(
     profile.has_resident_cabinet = True
     profile.is_member_module_active = True
     profile.slug = clean_slug
-    profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
+    if mono_api_token is not None:
+        profile.mono_api_token = encrypt_token(mono_api_token.strip()) if mono_api_token.strip() else None
+    if liqpay_public_key is not None:
+        profile.liqpay_public_key = encrypt_token(liqpay_public_key.strip()) if liqpay_public_key.strip() else None
+    if liqpay_private_key is not None:
+        profile.liqpay_private_key = encrypt_token(liqpay_private_key.strip()) if liqpay_private_key.strip() else None
     profile.color_theme = color_theme.strip() or "#3b82f6"
     if not profile.member_module_activated_at:
         profile.member_module_activated_at = datetime.utcnow()
@@ -19220,6 +19560,8 @@ def purchase_resident_cabinet_module(
         osbb_enterprise.tax_id = profile.tax_id
         osbb_enterprise.address = profile.address
         osbb_enterprise.mono_api_token = profile.mono_api_token
+        osbb_enterprise.liqpay_public_key = profile.liqpay_public_key
+        osbb_enterprise.liqpay_private_key = profile.liqpay_private_key
         osbb_enterprise.color_theme = profile.color_theme
         osbb_enterprise.has_resident_cabinet = True
         osbb_enterprise.is_member_module_active = True
@@ -19233,6 +19575,8 @@ def purchase_resident_cabinet_module(
             tax_system="non_profit",
             slug=None, # Keep slug None on child to prevent UNIQUE constraint violation
             mono_api_token=profile.mono_api_token,
+            liqpay_public_key=profile.liqpay_public_key,
+            liqpay_private_key=profile.liqpay_private_key,
             color_theme=profile.color_theme,
             has_resident_cabinet=True,
             is_member_module_active=True,
@@ -19312,6 +19656,8 @@ def get_resident_cabinet_status(
         "is_active": is_active,
         "slug": profile.slug,
         "color_theme": profile.color_theme,
+        "has_monobank": bool(profile.mono_api_token),
+        "has_liqpay": bool(profile.liqpay_public_key) and bool(profile.liqpay_private_key),
         "subscription": {
             "status": subscription.status if subscription else None,
             "expires_at": subscription.expires_at.isoformat() if subscription and subscription.expires_at else None,

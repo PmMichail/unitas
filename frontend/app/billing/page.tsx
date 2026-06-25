@@ -119,6 +119,16 @@ export default function BillingPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [balanceFilter, setBalanceFilter] = useState<"all" | "debt" | "prepaid">("all");
   const [activeTab, setActiveTab] = useState<"members" | "contractors" | "payments" | "meters" | "moderation" | "resident_cabinet">("members");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("tab") === "moderation") {
+        setActiveTab("moderation");
+      }
+    }
+  }, []);
+
   const [expandedMeters, setExpandedMeters] = useState<Record<number, boolean>>({});
 
   // Modals
@@ -201,6 +211,8 @@ export default function BillingPage() {
   const [rcModalStep, setRcModalStep] = useState<"configure" | "review" | "payment">("configure");
   const [rcSlug, setRcSlug] = useState("");
   const [rcMonoApiToken, setRcMonoApiToken] = useState("");
+  const [rcLiqpayPublicKey, setRcLiqpayPublicKey] = useState("");
+  const [rcLiqpayPrivateKey, setRcLiqpayPrivateKey] = useState("");
   const [rcColorTheme, setRcColorTheme] = useState("#3b82f6");
   const [rcPurchasing, setRcPurchasing] = useState(false);
   const [rcLoading, setRcLoading] = useState(false);
@@ -451,8 +463,8 @@ export default function BillingPage() {
         showToast("Вкажіть slug для URL", "error");
         return;
       }
-      if (!rcMonoApiToken.trim()) {
-        showToast("Вкажіть Mono API Token", "error");
+      if (!rcMonoApiToken.trim() && (!rcLiqpayPublicKey.trim() || !rcLiqpayPrivateKey.trim())) {
+        showToast("Вкажіть Mono API Token або обидва LiqPay ключі (Public та Private)", "error");
         return;
       }
       setRcModalStep("review");
@@ -464,7 +476,9 @@ export default function BillingPage() {
       try {
         await api.purchaseResidentCabinet(selectedProfile.id, {
           slug: rcSlug,
-          mono_api_token: rcMonoApiToken,
+          mono_api_token: rcMonoApiToken || undefined,
+          liqpay_public_key: rcLiqpayPublicKey || undefined,
+          liqpay_private_key: rcLiqpayPrivateKey || undefined,
           color_theme: rcColorTheme,
         });
         showToast("Налаштування кабінету мешканця успішно збережено!", "success");
@@ -922,11 +936,17 @@ export default function BillingPage() {
       showToast("Вкажіть slug для URL", "error");
       return;
     }
+    if (!rcMonoApiToken.trim() && (!rcLiqpayPublicKey.trim() || !rcLiqpayPrivateKey.trim())) {
+      showToast("Вкажіть Mono API Token або обидва LiqPay ключі (Public та Private)", "error");
+      return;
+    }
     setRcLoading(true);
     try {
       await api.purchaseResidentCabinet(selectedProfile.id, {
         slug: rcSlug,
-        mono_api_token: rcMonoApiToken,
+        mono_api_token: rcMonoApiToken || undefined,
+        liqpay_public_key: rcLiqpayPublicKey || undefined,
+        liqpay_private_key: rcLiqpayPrivateKey || undefined,
         color_theme: rcColorTheme,
       });
       showToast("Налаштування кабінету мешканця успішно збережено!", "success");
@@ -2436,6 +2456,31 @@ export default function BillingPage() {
                               className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                             />
                             <p className="text-[10px] text-slate-450">Залиште порожнім, якщо не бажаєте змінювати поточний токен</p>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">LiqPay Public Key</label>
+                              <input
+                                type="text"
+                                placeholder="Введіть LiqPay Public Key..."
+                                value={rcLiqpayPublicKey}
+                                onChange={(e) => setRcLiqpayPublicKey(e.target.value)}
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                              <p className="text-[10px] text-slate-450">Залиште порожнім, якщо не бажаєте змінювати</p>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">LiqPay Private Key</label>
+                              <input
+                                type="password"
+                                placeholder="Введіть LiqPay Private Key..."
+                                value={rcLiqpayPrivateKey}
+                                onChange={(e) => setRcLiqpayPrivateKey(e.target.value)}
+                                className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                              <p className="text-[10px] text-slate-450">Залиште порожнім, якщо не бажаєте змінювати</p>
+                            </div>
                           </div>
 
                           <div className="flex justify-end pt-2">
@@ -5110,10 +5155,9 @@ export default function BillingPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Mono API Token *</label>
+                    <label className="text-xs font-bold text-slate-500 uppercase">Mono API Token</label>
                     <input
                       type="text"
-                      required
                       placeholder="u_token_..."
                       value={rcMonoApiToken}
                       onChange={(e) => setRcMonoApiToken(e.target.value)}
@@ -5123,6 +5167,32 @@ export default function BillingPage() {
                       <p>Токен від Monobank для прийому платежів від мешканців.</p>
                       <p>Отримати токен можна в <a href="https://api.monobank.ua/" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">особистому кабінеті Monobank</a> → Налаштування → API токени.</p>
                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">LiqPay Public Key</label>
+                      <input
+                        type="text"
+                        placeholder="sandbox_i00000000000..."
+                        value={rcLiqpayPublicKey}
+                        onChange={(e) => setRcLiqpayPublicKey(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">LiqPay Private Key</label>
+                      <input
+                        type="password"
+                        placeholder="sandbox_private_key..."
+                        value={rcLiqpayPrivateKey}
+                        onChange={(e) => setRcLiqpayPrivateKey(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 -mt-1">
+                    <p>Ключі від LiqPay для прийому оплат картками та через Privat24.</p>
                   </div>
 
                   <div className="space-y-2">

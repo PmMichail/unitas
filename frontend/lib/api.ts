@@ -79,6 +79,11 @@ export const api = {
     return response.data;
   },
 
+  getMemberBillingHistory: async (token: string) => {
+    const response = await client.get(`/api/member/billing/history`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
   submitMemberMeterReading: async (token: string, meterId: number, data: { reading_value: number; reading_date?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/member/meters/${meterId}/readings`, formData, { headers: { Authorization: `Bearer ${token}` } });
@@ -115,6 +120,12 @@ export const api = {
   createMemberMonoInvoice: async (token: string, data: { amount: number; charge_type?: string; description?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/member/billing/invoice`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  createMemberLiqpayCheckout: async (token: string, data: { amount: number; charge_type?: string; description?: string }) => {
+    const formData = toFormData(data);
+    const response = await client.post(`/api/member/billing/liqpay/checkout`, formData, { headers: { Authorization: `Bearer ${token}` } });
     return response.data;
   },
 
@@ -980,7 +991,9 @@ export const api = {
   // Resident Cabinet Module
   purchaseResidentCabinet: async (profileId: number, data: {
     slug: string;
-    mono_api_token: string;
+    mono_api_token?: string;
+    liqpay_public_key?: string;
+    liqpay_private_key?: string;
     color_theme?: string;
     user_id?: number;
   }) => {
