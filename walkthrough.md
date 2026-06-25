@@ -176,5 +176,7 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
 - **Type Checking**: Validated type safety using `npx tsc --noEmit` on the frontend with 0 compilation errors.
 - **Production Deploy**: Successfully pushed all updates to GitHub and redeployed both `unitas-backend` and `unitas-frontend` services to Fly.io.
 
-
-
+### 4. LiqPay Checkout & Resident Dashboard Layout Fixes
+- **LiqPay Signature Format**: Corrected signature calculation in `backend/api/main.py` and `backend/services/liqpay_service.py`. Standardized digest calculation to generate a Base64-encoded binary SHA-1 digest (`base64.b64encode(hashlib.sha1(...).digest()).decode('utf-8')`) rather than a hex digest string, which resolved the `"Помилка формування запиту"` validation rejection from the LiqPay checkout gateway.
+- **Dashboard Layout Alignment**: Restructured the payment input, Mono Pay/LiqPay buttons, and PDF receipt download button in `frontend/app/osbb/[slug]/dashboard/page.tsx` into clearly separated, vertically stacked groups with dedicated category labels ("Швидка онлайн-оплата" and "Рахунок на оплату"). This layout modification utilizes modern Tailwind CSS wraps (`flex-wrap`) to prevent horizontal clipping or off-screen button overflow on mobile and tablet viewport widths.
+- **Verification & Deployment**: Executed a full Next.js production build check (`npm run build`) locally to confirm zero TypeScript compile issues and successfully deployed the backend and frontend updates to Fly.io.

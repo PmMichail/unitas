@@ -73,4 +73,9 @@
 - [x] Verify production deployment
 - [x] Update walkthrough.md and task.md
 
-
+## Payment Alignment and LiqPay Checkout Fixes
+- [x] Correct LiqPay signature calculation from hex string to base64 binary SHA1 digest
+- [x] Restructure resident payment dashboard layout (split actions, stack elements, add flex-wrap) to prevent off-screen button overflow
+- [x] Verify frontend compile safety locally via production build check
+- [x] Deploy backend and frontend updates to Fly.io production
+- [x] Verify remote signature parameters and layout flow
