@@ -74,8 +74,10 @@
 - [x] Update walkthrough.md and task.md
 
 ## Payment Alignment and LiqPay Checkout Fixes
-- [x] Correct LiqPay signature calculation from hex string to base64 binary SHA1 digest
-- [x] Restructure resident payment dashboard layout (split actions, stack elements, add flex-wrap) to prevent off-screen button overflow
+- [x] Correct LiqPay signature calculation from hex string to base64 binary SHA1 digest (both POST and GET redirect endpoints)
+- [x] Restructure resident payment dashboard layout (split actions, stack elements, add flex-wrap) to prevent off-screen button overflow on Web and Mobile
+- [x] Fix mobile meter reading input squish by replacing fixed width submit button with dynamic padding
 - [x] Verify frontend compile safety locally via production build check
 - [x] Deploy backend and frontend updates to Fly.io production
 - [x] Verify remote signature parameters and layout flow
+
