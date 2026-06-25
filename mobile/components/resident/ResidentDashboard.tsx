@@ -15,6 +15,8 @@ import {
   Platform,
   Dimensions,
   Clipboard,
+  Image,
+  ImageBackground,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -42,7 +44,8 @@ import {
   Clock,
   Briefcase,
   Phone,
-  CreditCard
+  CreditCard,
+  Home
 } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
@@ -568,336 +571,398 @@ export default function ResidentDashboard() {
   return (
     <ScrollView 
       style={[styles.container, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={styles.scrollContent}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
       }
     >
-      {/* Profile summary card */}
-      <Card style={styles.profileCard}>
-        <Text style={[styles.welcomeText, { color: colors.text }]}>Вітаємо,</Text>
-        <Text style={[styles.nameText, { color: colors.text }]}>{member?.owner_name || 'Шановний мешканець'}</Text>
-        <Text style={[styles.flatText, { color: colors.textMuted }]}>
-          {member?.property_type || 'кв.'} {member?.identifier} • особовий рахунок: {member?.account_number || 'Не призначено'}
-        </Text>
-        <Text style={[styles.orgText, { color: colors.primary }]}>{profile?.name}</Text>
-      </Card>
-
-      {/* Balance card */}
-      <Card style={styles.balanceCard}>
-        <Pressable onPress={openBillingHistory}>
-          <Text style={[styles.label, { color: colors.textMuted }]}>Поточний баланс (Натисніть для історії)</Text>
-          <Text style={[
-            styles.balanceText, 
-            { color: balance < 0 ? '#f97316' : '#84cc16' }
-          ]}>
-            {balance.toFixed(2)} грн
-          </Text>
-        </Pressable>
-        <Text style={[styles.subLabel, { color: colors.textMuted }]}>
-          {balance < 0 ? 'У вас є заборгованість' : 'Передплата / Борг відсутній'}
-        </Text>
-
-        <View style={[styles.actionButtons, { flexDirection: 'column', gap: 12 }]}>
-          {(data?.profile?.has_monobank || data?.profile?.has_liqpay) && (
-            <View style={{ width: '100%', gap: 8 }}>
-              <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
-                Швидка онлайн-оплата
+      {/* Header Banner Image with organization overlay */}
+      <ImageBackground 
+        source={profile?.header_image_url ? { uri: profile.header_image_url.startsWith('/') ? `${API_BASE_URL}${profile.header_image_url}` : profile.header_image_url } : require('../../assets/suburban_neighborhood.png')} 
+        style={styles.headerBanner}
+        imageStyle={styles.headerBannerImage}
+      >
+        <View style={styles.headerOverlay}>
+          <View style={[styles.floatingOrgCard, { backgroundColor: isDark ? 'rgba(11, 15, 25, 0.88)' : 'rgba(255, 255, 255, 0.92)', borderColor: colors.warning }]}>
+            <View style={[styles.floatingOrgIconCircle, { backgroundColor: colors.primaryMuted }]}>
+              <Home size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.floatingOrgName, { color: colors.text }]} numberOfLines={2}>
+                {profile?.name || 'Садове Товариство'}
               </Text>
-              
-              {/* Payment purpose selector */}
-              <View style={{ flexDirection: 'row', backgroundColor: colors.inputBg, borderRadius: 10, padding: 3, borderWidth: 1, borderColor: colors.cardBorder, marginBottom: 4 }}>
-                <Pressable
-                  style={{
-                    flex: 1,
-                    paddingVertical: 8,
-                    alignItems: 'center',
-                    borderRadius: 8,
-                    backgroundColor: payPurpose === 'regular' ? colors.primary : 'transparent',
-                  }}
-                  onPress={() => setPayPurpose('regular')}
-                >
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'regular' ? '#ffffff' : colors.text }}>
-                    Членські внески
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={{
-                    flex: 1,
-                    paddingVertical: 8,
-                    alignItems: 'center',
-                    borderRadius: 8,
-                    backgroundColor: payPurpose === 'utility' ? colors.primary : 'transparent',
-                  }}
-                  onPress={() => setPayPurpose('utility')}
-                >
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'utility' ? '#ffffff' : colors.text }}>
-                    Електроенергія
-                  </Text>
-                </Pressable>
-              </View>
+              <Text style={[styles.floatingOrgSub, { color: colors.textMuted }]}>
+                {profile?.bank_name || 'м. Дніпро, вул. Іжевська 1'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </ImageBackground>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, backgroundColor: colors.inputBg, paddingHorizontal: 12, height: 44 }}>
-                <TextInput
-                  style={{
-                    flex: 1,
-                    color: colors.text,
-                    fontSize: 14,
-                    fontWeight: 'bold',
-                  }}
-                  placeholder="Введіть суму"
-                  placeholderTextColor={colors.textMuted + '80'}
-                  value={payAmount}
-                  onChangeText={setPayAmount}
-                  keyboardType="numeric"
-                />
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.textMuted }}>грн</Text>
+      <View style={styles.mainContent}>
+        {/* Property Address Card (🔑 Key card style like Dah) */}
+        <Card style={[styles.propertyInfoCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
+          <View style={styles.propertyRow}>
+            <View style={[styles.propertyIconContainer, { backgroundColor: colors.primaryMuted }]}>
+              <Text style={{ fontSize: 20 }}>🔑</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.propertyLabel, { color: colors.textMuted }]}>ОБ'ЄКТ ТА АДРЕСА</Text>
+              <Text style={[styles.propertyValue, { color: colors.text }]}>
+                {member?.property_type || 'кв.'} {member?.identifier}
+              </Text>
+              <Text style={[styles.accountNumberText, { color: colors.textMuted }]}>
+                особовий рахунок: {member?.account_number || 'Не призначено'}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.ownerBadge, { backgroundColor: colors.inputBg }]}>
+            <Text style={[styles.ownerName, { color: colors.text }]} numberOfLines={1}>
+              👤 {member?.owner_name || 'Шановний мешканець'}
+            </Text>
+          </View>
+        </Card>
+
+        {/* Balance card */}
+        <Card style={[styles.balanceCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
+          <Pressable onPress={openBillingHistory}>
+            <Text style={[styles.label, { color: colors.textMuted }]}>Поточний баланс (Натисніть для історії)</Text>
+            <Text style={[
+              styles.balanceText, 
+              { color: balance < 0 ? '#f97316' : '#84cc16' }
+            ]}>
+              {balance.toFixed(2)} грн
+            </Text>
+          </Pressable>
+          <Text style={[styles.subLabel, { color: colors.textMuted }]}>
+            {balance < 0 ? 'У вас є заборгованість' : 'Передплата / Борг відсутній'}
+          </Text>
+
+          {(() => {
+            const totalDebt = balance < 0 ? Math.abs(balance) : 0;
+            const duesDebt = member?.dues_debt || 0;
+            const utilityDebt = Math.max(0, totalDebt - duesDebt);
+            return (
+              <>
+                {duesDebt > 0 && (
+                  <View style={[styles.duesDebtAlert, { backgroundColor: isDark ? 'rgba(249, 115, 22, 0.12)' : '#fffbeb', borderColor: isDark ? 'rgba(249, 115, 22, 0.3)' : '#fde68a', marginBottom: utilityDebt > 0 ? 6 : 0 }]}>
+                    <Text style={[styles.duesDebtAlertText, { color: isDark ? '#fb923c' : '#d97706' }]}>
+                      ⚠️ Борг по внесках: <Text style={{ fontWeight: 'bold' }}>{duesDebt.toFixed(2)} грн</Text>
+                    </Text>
+                  </View>
+                )}
+                {utilityDebt > 0 && (
+                  <View style={[styles.duesDebtAlert, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#fef2f2', borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : '#fecaca' }]}>
+                    <Text style={[styles.duesDebtAlertText, { color: isDark ? '#f87171' : '#dc2626' }]}>
+                      ⚡ Борг за електроенергію: <Text style={{ fontWeight: 'bold' }}>{utilityDebt.toFixed(2)} грн</Text>
+                    </Text>
+                  </View>
+                )}
+              </>
+            );
+          })()}
+
+          <View style={[styles.actionButtons, { flexDirection: 'column', gap: 12 }]}>
+            {(data?.profile?.has_monobank || data?.profile?.has_liqpay) && (
+              <View style={{ width: '100%', gap: 8 }}>
+                <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
+                  Швидка онлайн-оплата
+                </Text>
+                
+                {/* Payment purpose selector */}
+                <View style={{ flexDirection: 'row', backgroundColor: colors.inputBg, borderRadius: 10, padding: 3, borderWidth: 1, borderColor: colors.cardBorder, marginBottom: 4 }}>
+                  <Pressable
+                    style={{
+                      flex: 1,
+                      paddingVertical: 8,
+                      alignItems: 'center',
+                      borderRadius: 8,
+                      backgroundColor: payPurpose === 'regular' ? colors.primary : 'transparent',
+                    }}
+                    onPress={() => setPayPurpose('regular')}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'regular' ? '#ffffff' : colors.text }}>
+                      Членські внески
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={{
+                      flex: 1,
+                      paddingVertical: 8,
+                      alignItems: 'center',
+                      borderRadius: 8,
+                      backgroundColor: payPurpose === 'utility' ? colors.primary : 'transparent',
+                    }}
+                    onPress={() => setPayPurpose('utility')}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'utility' ? '#ffffff' : colors.text }}>
+                      Електроенергія
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, backgroundColor: colors.inputBg, paddingHorizontal: 12, height: 44 }}>
+                  <TextInput
+                    style={{
+                      flex: 1,
+                      color: colors.text,
+                      fontSize: 14,
+                      fontWeight: 'bold',
+                    }}
+                    placeholder="Введіть суму"
+                    placeholderTextColor={colors.textMuted + '80'}
+                    value={payAmount}
+                    onChangeText={setPayAmount}
+                    keyboardType="numeric"
+                  />
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.textMuted }}>грн</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                  {data?.profile?.has_monobank && (
+                    <Button
+                      title="Mono Pay"
+                      onPress={handlePayMono}
+                      style={{ flex: 1 }}
+                    />
+                  )}
+                  {data?.profile?.has_liqpay && (
+                    <Button
+                      title="LiqPay"
+                      onPress={handlePayLiqpay}
+                      variant="secondary"
+                      style={{ flex: 1 }}
+                    />
+                  )}
+                </View>
               </View>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
-                {data?.profile?.has_monobank && (
-                  <Button
-                    title="Mono Pay"
-                    onPress={handlePayMono}
-                    style={{ flex: 1 }}
-                  />
-                )}
-                {data?.profile?.has_liqpay && (
-                  <Button
-                    title="LiqPay"
-                    onPress={handlePayLiqpay}
-                    variant="secondary"
-                    style={{ flex: 1 }}
-                  />
-                )}
+            )}
+            <View style={{ width: '100%', gap: 8, marginTop: 4 }}>
+              <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
+                Рахунок на оплату
+              </Text>
+              <Button
+                title="Отримати квитанцію (PDF)"
+                onPress={handleDownloadReceipt}
+                variant="outline"
+                style={{ width: '100%' }}
+              />
+            </View>
+          </View>
+        </Card>
+
+        {/* Bank Transfer Details Section */}
+        {profile?.iban && (
+          <Card style={{ padding: 16, marginTop: 12, gap: 12, borderColor: colors.warning, borderWidth: 1.5 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <CreditCard size={20} color={colors.primary} />
+              <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.text }}>Реквізити для оплати (IBAN)</Text>
+            </View>
+            <View style={{ gap: 8 }}>
+              <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
+                <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Рахунок отримувача</Text>
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.iban}</Text>
+                <Pressable onPress={() => {
+                  Clipboard.setString(profile.iban);
+                  Alert.alert('Скопійовано', 'IBAN скопійовано в буфер обміну.');
+                }}>
+                  <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати IBAN</Text>
+                </Pressable>
+              </View>
+              
+              {profile.tax_id && (
+                <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
+                  <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Код ЄДРПОУ</Text>
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.tax_id}</Text>
+                  <Pressable onPress={() => {
+                    Clipboard.setString(profile.tax_id);
+                    Alert.alert('Скопійовано', 'Код ЄДРПОУ скопійовано.');
+                  }}>
+                    <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати ЄДРПОУ</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12 }}>
+                <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Отримувач / Банк</Text>
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginTop: 4 }}>{profile.bank_name || profile.name}</Text>
               </View>
             </View>
-          )}
-          <View style={{ width: '100%', gap: 8, marginTop: 4 }}>
-            <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
-              Рахунок на оплату
+          </Card>
+        )}
+
+        {/* Premium Quick Action Grid */}
+        <View style={styles.sectionHeader}>
+          <Cpu size={22} color={colors.primary} style={styles.sectionIcon} />
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Розумний кабінет (Преміум)</Text>
+        </View>
+
+        <View style={styles.gridContainer}>
+          {/* Row 1 */}
+          <View style={styles.gridRow}>
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openDocuments}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(6, 182, 212, 0.15)' }]}>
+                <FolderOpen size={24} color="#06b6d4" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Документи</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Рішення, кошториси</Text>
+            </Pressable>
+
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openSecurity}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
+                <Shield size={24} color="#ef4444" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Безпека</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Камери & ворота</Text>
+            </Pressable>
+          </View>
+
+          {/* Row 2 */}
+          <View style={styles.gridRow}>
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openBookings}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+                <CalendarIcon size={24} color="#10b981" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Бронювання</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Зони відпочинку</Text>
+            </Pressable>
+
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openServices}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(168, 85, 247, 0.15)' }]}>
+                <Wrench size={24} color="#a855f7" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Сервіси</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Клінінг, ремонт</Text>
+            </Pressable>
+          </View>
+
+          {/* Row 3 */}
+          <View style={styles.gridRow}>
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openSmartHome}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(249, 115, 22, 0.15)' }]}>
+                <Cpu size={24} color="#f97316" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Розумний Дім</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Телеметрія & опалення</Text>
+            </Pressable>
+
+            <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.2 }]} onPress={openContacts}>
+              <View style={[styles.iconCircle, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+                <Phone size={24} color="#3b82f6" />
+              </View>
+              <Text style={[styles.gridTitle, { color: colors.text }]}>Контакти</Text>
+              <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Телефони правління</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Meter readings header */}
+        <View style={styles.sectionHeader}>
+          <Gauge size={22} color={colors.primary} style={styles.sectionIcon} />
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Показання лічильників (Ручне введення)</Text>
+        </View>
+
+        {/* Meter reading list */}
+        {data?.meters && data.meters.length > 0 ? (
+          data.meters.map((meter: any) => (
+            <Card key={meter.id} style={[styles.meterCard, { borderColor: colors.warning, borderWidth: 1.2 }]}>
+              <View style={styles.meterRow}>
+                <View style={styles.meterInfo}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={[styles.meterName, { color: colors.text }]}>{meter.name}</Text>
+                    {meter.is_submitted && (
+                      <View style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                        <Text style={{ color: '#10b981', fontSize: 9, fontWeight: 'bold' }}>Надіслано</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={[styles.meterPrev, { color: colors.textMuted }]}>
+                    Попереднє значення: {meter.previous_value}
+                  </Text>
+                </View>
+
+                {meter.is_locked ? (
+                  <View style={styles.lockBadge}>
+                    <Lock size={14} color={colors.textMuted} />
+                    <Text style={[styles.lockText, { color: colors.textMuted }]}>Період закрито</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              {!meter.is_locked ? (
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.input, { color: colors.text, borderColor: colors.cardBorder, backgroundColor: colors.inputBg }]}
+                    placeholder="Введіть нове показання"
+                    placeholderTextColor={colors.textMuted + '80'}
+                    value={meterInputs[meter.id] || ''}
+                    onChangeText={(text) => setMeterInputs({ ...meterInputs, [meter.id]: text })}
+                    keyboardType="numeric"
+                  />
+                  <Pressable 
+                    style={[styles.submitButton, { backgroundColor: colors.primary }]}
+                    onPress={() => handleMeterSubmit(meter)}
+                    disabled={submittingMeterId === meter.id}
+                  >
+                    {submittingMeterId === meter.id ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.submitButtonText}>{meter.is_submitted ? 'Зберегти' : 'OK'}</Text>
+                    )}
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.lockedPlaceholder}>
+                  <Lock size={16} color={colors.textMuted} />
+                  <Text style={[styles.lockedPlaceholderText, { color: colors.textMuted }]}>
+                    Внесення показань заблоковано адміністрацією
+                  </Text>
+                </View>
+              )}
+            </Card>
+          ))
+        ) : (
+          <Card style={[styles.emptyCard, { borderColor: colors.warning, borderWidth: 1.2 }]}>
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              У вашому профілі немає активних лічильників.
             </Text>
+          </Card>
+        )}
+
+        {/* Automated reminders trigger & simulation box */}
+        <View style={styles.sectionHeader}>
+          <Clock size={22} color={colors.primary} style={styles.sectionIcon} />
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Авто-сповіщення & Нагадування</Text>
+        </View>
+        
+        <Card style={[styles.reminderCard, { borderColor: colors.warning, borderWidth: 1.2 }]}>
+          <Text style={[styles.reminderTitle, { color: colors.text }]}>Тестування розумних нагадувань</Text>
+          <Text style={[styles.reminderDesc, { color: colors.textMuted }]}>
+            Система автоматично нагадує про дедлайни платежів (до 25 числа) та передачі показників лічильників (до кінця місяця).
+          </Text>
+          <View style={styles.reminderButtons}>
             <Button
-              title="Отримати квитанцію (PDF)"
-              onPress={handleDownloadReceipt}
+              title="Надіслати мені тест"
+              onPress={handleTriggerTestReminder}
+              style={styles.reminderBtn}
+              textStyle={{ fontSize: 13 }}
+            />
+            <Button
+              title="Симулювати Скан Дедлайнів"
+              onPress={handleSimulateAutomatedCron}
               variant="outline"
-              style={{ width: '100%' }}
+              style={styles.reminderBtn}
+              textStyle={{ fontSize: 13 }}
             />
           </View>
-        </View>
-      </Card>
-
-      {/* Bank Transfer Details Section */}
-      {profile?.iban && (
-        <Card style={{ padding: 16, marginTop: 12, gap: 12 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <CreditCard size={20} color={colors.primary} />
-            <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.text }}>Реквізити для оплати (IBAN)</Text>
-          </View>
-          <View style={{ gap: 8 }}>
-            <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
-              <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Рахунок отримувача</Text>
-              <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.iban}</Text>
-              <Pressable onPress={() => {
-                Clipboard.setString(profile.iban);
-                Alert.alert('Скопійовано', 'IBAN скопійовано в буфер обміну.');
-              }}>
-                <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати IBAN</Text>
-              </Pressable>
-            </View>
-            
-            {profile.tax_id && (
-              <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder }}>
-                <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Код ЄДРПОУ</Text>
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginVertical: 4 }}>{profile.tax_id}</Text>
-                <Pressable onPress={() => {
-                  Clipboard.setString(profile.tax_id);
-                  Alert.alert('Скопійовано', 'Код ЄДРПОУ скопійовано.');
-                }}>
-                  <Text style={{ fontSize: 11, color: colors.primary, fontWeight: 'bold' }}>Скопіювати ЄДРПОУ</Text>
-                </Pressable>
-              </View>
-            )}
-
-            <View style={{ backgroundColor: 'rgba(99, 102, 241, 0.05)', padding: 12, borderRadius: 12 }}>
-              <Text style={{ fontSize: 10, color: colors.textMuted, fontWeight: 'bold', textTransform: 'uppercase' }}>Отримувач / Банк</Text>
-              <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginTop: 4 }}>{profile.bank_name || profile.name}</Text>
-            </View>
-          </View>
         </Card>
-      )}
 
-      {/* Premium Quick Action Grid */}
-      <View style={styles.sectionHeader}>
-        <Cpu size={22} color={colors.primary} style={styles.sectionIcon} />
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Розумний кабінет (Преміум)</Text>
-      </View>
-
-      <View style={styles.gridContainer}>
-        {/* Row 1 */}
-        <View style={styles.gridRow}>
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openDocuments}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(6, 182, 212, 0.15)' }]}>
-              <FolderOpen size={24} color="#06b6d4" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Документи</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Рішення, кошториси</Text>
-          </Pressable>
-
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openSecurity}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(239, 68, 68, 0.15)' }]}>
-              <Shield size={24} color="#ef4444" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Безпека</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Камери & ворота</Text>
-          </Pressable>
-        </View>
-
-        {/* Row 2 */}
-        <View style={styles.gridRow}>
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openBookings}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
-              <CalendarIcon size={24} color="#10b981" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Бронювання</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Зони відпочинку</Text>
-          </Pressable>
-
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openServices}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(168, 85, 247, 0.15)' }]}>
-              <Wrench size={24} color="#a855f7" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Сервіси</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Клінінг, ремонт</Text>
-          </Pressable>
-        </View>
-
-        {/* Row 3 */}
-        <View style={styles.gridRow}>
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openSmartHome}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(249, 115, 22, 0.15)' }]}>
-              <Cpu size={24} color="#f97316" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Розумний Дім</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Телеметрія & опалення</Text>
-          </Pressable>
-
-          <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={openContacts}>
-            <View style={[styles.iconCircle, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
-              <Phone size={24} color="#3b82f6" />
-            </View>
-            <Text style={[styles.gridTitle, { color: colors.text }]}>Контакти</Text>
-            <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Телефони правління</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {/* Meter readings header */}
-      <View style={styles.sectionHeader}>
-        <Gauge size={22} color={colors.primary} style={styles.sectionIcon} />
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Показання лічильників (Ручне введення)</Text>
-      </View>
-
-      {/* Meter reading list */}
-      {data?.meters && data.meters.length > 0 ? (
-        data.meters.map((meter: any) => (
-          <Card key={meter.id} style={styles.meterCard}>
-            <View style={styles.meterRow}>
-              <View style={styles.meterInfo}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={[styles.meterName, { color: colors.text }]}>{meter.name}</Text>
-                  {meter.is_submitted && (
-                    <View style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                      <Text style={{ color: '#10b981', fontSize: 9, fontWeight: 'bold' }}>Надіслано</Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={[styles.meterPrev, { color: colors.textMuted }]}>
-                  Попереднє значення: {meter.previous_value}
-                </Text>
-              </View>
-
-              {meter.is_locked ? (
-                <View style={styles.lockBadge}>
-                  <Lock size={14} color={colors.textMuted} />
-                  <Text style={[styles.lockText, { color: colors.textMuted }]}>Період закрито</Text>
-                </View>
-              ) : null}
-            </View>
-
-            {!meter.is_locked ? (
-              <View style={styles.inputRow}>
-                <TextInput
-                  style={[styles.input, { color: colors.text, borderColor: colors.cardBorder, backgroundColor: colors.inputBg }]}
-                  placeholder="Введіть нове показання"
-                  placeholderTextColor={colors.textMuted + '80'}
-                  value={meterInputs[meter.id] || ''}
-                  onChangeText={(text) => setMeterInputs({ ...meterInputs, [meter.id]: text })}
-                  keyboardType="numeric"
-                />
-                <Pressable 
-                  style={[styles.submitButton, { backgroundColor: colors.primary }]}
-                  onPress={() => handleMeterSubmit(meter)}
-                  disabled={submittingMeterId === meter.id}
-                >
-                  {submittingMeterId === meter.id ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
-                  ) : (
-                    <Text style={styles.submitButtonText}>{meter.is_submitted ? 'Зберегти' : 'OK'}</Text>
-                  )}
-                </Pressable>
-              </View>
-            ) : (
-              <View style={styles.lockedPlaceholder}>
-                <Lock size={16} color={colors.textMuted} />
-                <Text style={[styles.lockedPlaceholderText, { color: colors.textMuted }]}>
-                  Внесення показань заблоковано адміністрацією
-                </Text>
-              </View>
-            )}
-          </Card>
-        ))
-      ) : (
-        <Card style={styles.emptyCard}>
-          <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-            У вашому профілі немає активних лічильників.
+        {/* No P2P chat warning */}
+        <View style={[styles.warningRow, { borderColor: colors.warning, borderWidth: 1.2 }]}>
+          <AlertCircle size={16} color={colors.primary} />
+          <Text style={[styles.warningText, { color: colors.textMuted }]}>
+            Кабінет працює в режимі суворої ізоляції. Загальні чати мешканців відсутні задля запобігання конфліктам та спаму.
           </Text>
-        </Card>
-      )}
-
-      {/* Automated reminders trigger & simulation box */}
-      <View style={styles.sectionHeader}>
-        <Clock size={22} color={colors.primary} style={styles.sectionIcon} />
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Авто-сповіщення & Нагадування</Text>
-      </View>
-      
-      <Card style={styles.reminderCard}>
-        <Text style={[styles.reminderTitle, { color: colors.text }]}>Тестування розумних нагадувань</Text>
-        <Text style={[styles.reminderDesc, { color: colors.textMuted }]}>
-          Система автоматично нагадує про дедлайни платежів (до 25 числа) та передачі показників лічильників (до кінця місяця).
-        </Text>
-        <View style={styles.reminderButtons}>
-          <Button
-            title="Надіслати мені тест"
-            onPress={handleTriggerTestReminder}
-            style={styles.reminderBtn}
-            textStyle={{ fontSize: 13 }}
-          />
-          <Button
-            title="Симулювати Скан Дедлайнів"
-            onPress={handleSimulateAutomatedCron}
-            variant="outline"
-            style={styles.reminderBtn}
-            textStyle={{ fontSize: 13 }}
-          />
         </View>
-      </Card>
-
-      {/* No P2P chat warning */}
-      <View style={[styles.warningRow, { borderColor: colors.primaryMuted }]}>
-        <AlertCircle size={16} color={colors.primary} />
-        <Text style={[styles.warningText, { color: colors.textMuted }]}>
-          Кабінет працює в режимі суворої ізоляції. Загальні чати мешканців відсутні задля запобігання конфліктам та спаму.
-        </Text>
       </View>
 
 
@@ -1439,6 +1504,92 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
+  scrollContent: {
+    paddingBottom: 32,
+  },
+  mainContent: {
+    padding: 16,
+  },
+  headerBanner: {
+    width: '100%',
+    height: 180,
+    justifyContent: 'flex-end',
+  },
+  headerBannerImage: {
+    resizeMode: 'cover',
+  },
+  headerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    justifyContent: 'flex-end',
+    padding: 16,
+  },
+  floatingOrgCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    gap: 12,
+  },
+  floatingOrgIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  floatingOrgName: {
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    lineHeight: 16,
+  },
+  floatingOrgSub: {
+    fontSize: 10,
+    marginTop: 2,
+  },
+  propertyInfoCard: {
+    padding: 16,
+    marginBottom: 12,
+  },
+  propertyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  propertyIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  propertyLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  propertyValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  accountNumberText: {
+    fontSize: 11,
+    marginTop: 2,
+  },
+  ownerBadge: {
+    marginTop: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  ownerName: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   center: {
     flex: 1,
     justifyContent: 'center',
@@ -1481,15 +1632,33 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     fontWeight: '600',
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   balanceText: {
-    fontSize: 36,
-    fontWeight: '900',
+    fontSize: 26,
+    fontWeight: '700',
     marginVertical: 10,
+    letterSpacing: -0.5,
+    textAlign: 'center',
   },
   subLabel: {
     fontSize: 13,
     marginBottom: 16,
+  },
+  duesDebtAlert: {
+    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 10,
+  },
+  duesDebtAlertText: {
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   actionButtons: {
     flexDirection: 'row',

@@ -91,7 +91,7 @@ export default function ResidentSurveys() {
 
       {surveys.length > 0 ? (
         surveys.map((survey) => (
-          <Card key={survey.id} style={styles.surveyCard}>
+          <Card key={survey.id} style={[styles.surveyCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
             <Text style={[styles.surveyTitle, { color: colors.text }]}>{survey.title}</Text>
             {survey.description ? (
               <Text style={[styles.surveyDesc, { color: colors.textMuted }]}>{survey.description}</Text>
@@ -159,7 +159,7 @@ export default function ResidentSurveys() {
           </Card>
         ))
       ) : (
-        <Card style={styles.emptyCard}>
+        <Card style={[styles.emptyCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <Info size={32} color={colors.textMuted} />
           <Text style={[styles.emptyText, { color: colors.textMuted }]}>
             Наразі немає активних загальних опитувань мешканців.

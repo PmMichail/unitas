@@ -39,6 +39,7 @@ import {
   Clock
 } from 'lucide-react-native';
 import { api } from '../../services/api';
+import * as SecureStore from 'expo-secure-store';
 
 export default function LoginScreen() {
   const { colors, isDark } = useTheme();
@@ -90,6 +91,32 @@ export default function LoginScreen() {
   const [resPhone, setResPhone] = useState('');
   const [resEmail, setResEmail] = useState('');
   const [locLoading, setLocLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+
+  // Load saved credentials on mount
+  useEffect(() => {
+    const loadSavedCredentials = async () => {
+      try {
+        const rememberMeVal = await SecureStore.getItemAsync('remember_me');
+        if (rememberMeVal === 'true' || rememberMeVal === null) {
+          setRememberMe(true);
+          const savedOsbbStr = await SecureStore.getItemAsync('saved_osbb');
+          const savedPhone = await SecureStore.getItemAsync('saved_phone');
+          if (savedOsbbStr) {
+            setSelectedOsbb(JSON.parse(savedOsbbStr));
+          }
+          if (savedPhone) {
+            setResPhone(savedPhone);
+          }
+        } else if (rememberMeVal === 'false') {
+          setRememberMe(false);
+        }
+      } catch (err) {
+        console.error('Failed to load saved credentials from SecureStore:', err);
+      }
+    };
+    loadSavedCredentials();
+  }, []);
 
   // Address and Role Select States for Registration
   const [streetsData, setStreetsData] = useState<any>(null);
@@ -472,7 +499,19 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const response = await residentLogin(selectedOsbb.slug, resPhone.trim(), resPassword.trim());
-      if (response.status === 'pending') {
+      
+      // Save credentials if Remember Me is checked
+      if (rememberMe) {
+        await SecureStore.setItemAsync('saved_osbb', JSON.stringify(selectedOsbb));
+        await SecureStore.setItemAsync('saved_phone', resPhone.trim());
+        await SecureStore.setItemAsync('remember_me', 'true');
+      } else {
+        await SecureStore.deleteItemAsync('saved_osbb');
+        await SecureStore.deleteItemAsync('saved_phone');
+        await SecureStore.setItemAsync('remember_me', 'false');
+      }
+
+      if (response && response.status === 'pending') {
         setPendingMemberId(response.member_id);
         setPendingOsbbPhone(response.phone || '');
         setPendingOsbbSlug(selectedOsbb.slug);
@@ -960,26 +999,34 @@ export default function LoginScreen() {
                       Знайдіть вашу житлову або садівничу організацію (ОСББ/СТ) за назвою або кодом ЄДРПОУ.
                     </Text>
                     
-                    <View style={styles.searchInputContainer}>
-                      <Search size={18} color={colors.textMuted} style={styles.searchIcon} />
-                      <Input
-                        placeholder="Введіть назву або ЄДРПОУ..."
-                        value={osbbQuery}
-                        onChangeText={handleSearchOsbb}
-                        style={styles.searchInput}
+                    <View style={styles.searchRow}>
+                      <View style={[styles.searchInputContainer, { flex: 1, marginBottom: 0 }]}>
+                        <Search size={18} color={colors.textMuted} style={styles.searchIcon} />
+                        <Input
+                          placeholder="Введіть назву або ЄДРПОУ..."
+                          value={osbbQuery}
+                          onChangeText={handleSearchOsbb}
+                          style={styles.searchInput}
+                        />
+                      </View>
+                      <Button
+                        title="Знайти"
+                        onPress={() => handleSearchOsbb(osbbQuery)}
+                        style={styles.searchRowButton}
+                        textStyle={styles.searchRowButtonText}
                       />
                     </View>
 
                     <Pressable
-                      style={[styles.nearbyBtn, { borderColor: colors.primary }]}
+                      style={styles.secondaryGeoLink}
                       onPress={handleSearchNearby}
                       disabled={locLoading}
                     >
                       {locLoading ? (
                         <ActivityIndicator size="small" color={colors.primary} />
                       ) : (
-                        <Text style={[styles.nearbyBtnText, { color: colors.primary }]}>
-                          📍 Знайти найближчі ОСББ
+                        <Text style={[styles.secondaryGeoLinkText, { color: colors.primary }]}>
+                          📍 Визначити за геолокацією
                         </Text>
                       )}
                     </Pressable>
@@ -1036,6 +1083,16 @@ export default function LoginScreen() {
                           secureTextEntry
                           autoCapitalize="none"
                         />
+
+                        <View style={styles.rememberMeRow}>
+                          <Text style={[styles.rememberMeText, { color: colors.text }]}>Запам'ятати мене</Text>
+                          <Switch
+                            value={rememberMe}
+                            onValueChange={setRememberMe}
+                            trackColor={{ false: '#767577', true: colors.primary }}
+                            thumbColor={Platform.OS === 'android' ? (rememberMe ? colors.primary : '#f4f3f4') : undefined}
+                          />
+                        </View>
                         
                         <Button
                           title="Увійти як мешканець"
@@ -1833,20 +1890,45 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  nearbyBtn: {
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    width: '100%',
+    gap: 8,
+    marginBottom: 8,
+  },
+  searchRowButton: {
+    height: 48,
+    minHeight: 48,
     justifyContent: 'center',
-    paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 12,
-    marginBottom: 8,
-    gap: 6,
   },
-  nearbyBtnText: {
+  searchRowButtonText: {
     fontSize: 14,
+    fontWeight: '700',
+  },
+  secondaryGeoLink: {
+    alignSelf: 'center',
+    marginTop: 8,
+    marginBottom: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  secondaryGeoLinkText: {
+    fontSize: 13,
     fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  rememberMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginVertical: 12,
+    paddingHorizontal: 4,
+  },
+  rememberMeText: {
+    fontSize: 14,
+    fontWeight: '500',
   },
 });

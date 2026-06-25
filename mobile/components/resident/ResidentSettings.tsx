@@ -42,7 +42,7 @@ export default function ResidentSettings() {
       <View style={styles.content}>
         
         {/* Resident Account Info */}
-        <Card style={styles.card}>
+        <Card style={[styles.card, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <View style={styles.row}>
             <View style={[styles.iconContainer, { backgroundColor: colors.primaryMuted }]}>
               <User size={24} color={colors.primary} />
@@ -81,7 +81,7 @@ export default function ResidentSettings() {
         </Card>
 
         {/* Theme Settings */}
-        <Card style={styles.card}>
+        <Card style={[styles.card, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Тема інтерфейсу</Text>
           <Text style={[styles.sectionDesc, { color: colors.textMuted }]}>
             Поточний режим: {getThemeLabel()}
@@ -107,7 +107,7 @@ export default function ResidentSettings() {
 
         {/* Biometrics Settings */}
         {isBiometricSupported && (
-          <Card style={styles.card}>
+          <Card style={[styles.card, { borderColor: colors.warning, borderWidth: 1.5 }]}>
             <View style={styles.switchRow}>
               <View style={styles.switchLabelContainer}>
                 <Fingerprint size={24} color={colors.text} style={styles.settingIcon} />
@@ -131,7 +131,7 @@ export default function ResidentSettings() {
         )}
 
         {/* System Info */}
-        <Card style={styles.card}>
+        <Card style={[styles.card, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <View style={styles.row}>
             <Info size={24} color={colors.textMuted} style={styles.settingIcon} />
             <View style={styles.textContainer}>

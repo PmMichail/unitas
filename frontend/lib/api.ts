@@ -995,6 +995,7 @@ export const api = {
     liqpay_public_key?: string;
     liqpay_private_key?: string;
     color_theme?: string;
+    header_image_url?: string;
     user_id?: number;
   }) => {
     const formData = toFormData(data);
@@ -1226,6 +1227,20 @@ export const api = {
   updateProfileServiceOrder: async (profileId: number, orderId: number, data: { status: string; price: number; contractor_name?: string }, userId?: number) => {
     const response = await client.post(`/api/profiles/${profileId}/services/orders/${orderId}/update`, data, {
       params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  deleteProfileServiceOrder: async (profileId: number, orderId: number, userId?: number) => {
+    const response = await client.delete(`/api/profiles/${profileId}/services/orders/${orderId}`, {
+      params: userId ? { user_id: userId } : undefined
+    });
+    return response.data;
+  },
+  uploadHeaderImage: async (profileId: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await client.post(`/api/profiles/${profileId}/upload-header`, formData, {
+      headers: { "Content-Type": "multipart/form-data" }
     });
     return response.data;
   }

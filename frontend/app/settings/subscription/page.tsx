@@ -354,15 +354,15 @@ export default function SubscriptionPage() {
   const getPlanName = (planCode: string) => {
     switch (planCode) {
       case "business":
-        return "Бізнес (для ФОП)";
+        return "Бізнес";
       case "basic":
-        return "Бізнес (для ОСББ)";
+        return "Базовий";
       case "premium":
-        return "Преміум (для ОСББ)";
+        return "Преміум";
       case "free":
-        return "Безкоштовний тариф (Free)";
+        return "Безкоштовний";
       default:
-        return planCode || "Безкоштовний тариф (Free)";
+        return planCode || "Безкоштовний";
     }
   };
 

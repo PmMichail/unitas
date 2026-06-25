@@ -9,6 +9,7 @@ import {
   Pressable,
   TextInput,
   RefreshControl,
+  Modal,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -27,6 +28,7 @@ export default function ResidentTickets() {
   const [titleInput, setTitleInput] = useState('');
   const [descInput, setDescInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState<any>(null);
 
   const loadTickets = async () => {
     if (!memberToken) return;
@@ -124,7 +126,7 @@ export default function ResidentTickets() {
       }
     >
       {/* Create Ticket Section */}
-      <Card style={styles.formCard}>
+      <Card style={[styles.formCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
         <View style={styles.formHeader}>
           <MessageSquarePlus size={20} color={colors.primary} />
           <Text style={[styles.formTitle, { color: colors.text }]}>Диспетчер заявок</Text>
@@ -165,29 +167,105 @@ export default function ResidentTickets() {
         tickets.map((ticket) => {
           const statusDetail = getStatusDetails(ticket.status);
           return (
-            <Card key={ticket.id} style={styles.ticketCard}>
-              <View style={styles.ticketHeader}>
-                <Text style={[styles.ticketTitle, { color: colors.text }]}>{ticket.title}</Text>
-                <View style={[styles.statusBadge, { backgroundColor: statusDetail.bgColor }]}>
-                  {statusDetail.icon}
-                  <Text style={[styles.statusText, { color: statusDetail.color }]}>
-                    {statusDetail.label}
-                  </Text>
+            <Pressable key={ticket.id} onPress={() => setSelectedTicket(ticket)}>
+              <Card style={[styles.ticketCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
+                <View style={styles.ticketHeader}>
+                  <Text style={[styles.ticketTitle, { color: colors.text }]}>{ticket.title}</Text>
+                  <View style={[styles.statusBadge, { backgroundColor: statusDetail.bgColor }]}>
+                    {statusDetail.icon}
+                    <Text style={[styles.statusText, { color: statusDetail.color }]}>
+                      {statusDetail.label}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-              <Text style={[styles.ticketDesc, { color: colors.textMuted }]}>
-                {ticket.description}
-              </Text>
-            </Card>
+                <Text style={[styles.ticketDesc, { color: colors.textMuted }]}>
+                  {ticket.description}
+                </Text>
+              </Card>
+            </Pressable>
           );
         })
       ) : (
-        <Card style={styles.emptyCard}>
+        <Card style={[styles.emptyCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <Text style={[styles.emptyText, { color: colors.textMuted }]}>
             У вас немає активних заявок.
           </Text>
         </Card>
       )}
+
+      <Modal
+        visible={selectedTicket !== null}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setSelectedTicket(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card, borderColor: colors.warning, borderWidth: 1.5 }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>{selectedTicket?.title}</Text>
+            
+            <ScrollView style={styles.modalScroll}>
+              <Text style={[styles.modalDescLabel, { color: colors.textMuted }]}>Опис проблеми:</Text>
+              <Text style={[styles.modalDescText, { color: colors.text }]}>{selectedTicket?.description}</Text>
+              
+              <Text style={[styles.modalTimelineLabel, { color: colors.textMuted }]}>Статус виконання:</Text>
+              <View style={styles.timelineContainer}>
+                {/* Step 1: Created */}
+                <View style={styles.timelineRow}>
+                  <View style={styles.timelineDotContainer}>
+                    <View style={[styles.timelineDot, { backgroundColor: colors.primary }]} />
+                    <View style={[styles.timelineLine, { backgroundColor: selectedTicket?.status === 'in_progress' || selectedTicket?.status === 'В роботі' || selectedTicket?.status === 'done' || selectedTicket?.status === 'Виконано' || selectedTicket?.status === 'виконано' ? colors.primary : colors.cardBorder }]} />
+                  </View>
+                  <View style={styles.timelineTextContainer}>
+                    <Text style={[styles.timelineStepTitle, { color: colors.text }]}>📅 Створено</Text>
+                    <Text style={[styles.timelineStepDesc, { color: colors.textMuted }]}>Заявку прийнято диспетчером</Text>
+                  </View>
+                </View>
+
+                {/* Step 2: In Progress */}
+                <View style={styles.timelineRow}>
+                  <View style={styles.timelineDotContainer}>
+                    <View style={[styles.timelineDot, { backgroundColor: selectedTicket?.status === 'in_progress' || selectedTicket?.status === 'В роботі' || selectedTicket?.status === 'done' || selectedTicket?.status === 'Виконано' || selectedTicket?.status === 'виконано' ? colors.warning : colors.cardBorder }]} />
+                    <View style={[styles.timelineLine, { backgroundColor: selectedTicket?.status === 'done' || selectedTicket?.status === 'Виконано' || selectedTicket?.status === 'виконано' ? colors.warning : colors.cardBorder }]} />
+                  </View>
+                  <View style={styles.timelineTextContainer}>
+                    <Text style={[styles.timelineStepTitle, { color: colors.text }]}>⚙️ В роботі</Text>
+                    <Text style={[styles.timelineStepDesc, { color: colors.textMuted }]}>Виконавець працює над заявкою</Text>
+                  </View>
+                </View>
+
+                {/* Step 3: Completed or Rejected */}
+                {selectedTicket?.status === 'rejected' || selectedTicket?.status === 'Відхилено' || selectedTicket?.status === 'відхилено' ? (
+                  <View style={styles.timelineRow}>
+                    <View style={styles.timelineDotContainer}>
+                      <View style={[styles.timelineDot, { backgroundColor: colors.error || '#ef4444' }]} />
+                    </View>
+                    <View style={styles.timelineTextContainer}>
+                      <Text style={[styles.timelineStepTitle, { color: colors.error || '#ef4444' }]}>❌ Відхилено</Text>
+                      <Text style={[styles.timelineStepDesc, { color: colors.textMuted }]}>Заявку відхилено адміністрацією</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.timelineRow}>
+                    <View style={styles.timelineDotContainer}>
+                      <View style={[styles.timelineDot, { backgroundColor: selectedTicket?.status === 'done' || selectedTicket?.status === 'Виконано' || selectedTicket?.status === 'виконано' ? colors.success : colors.cardBorder }]} />
+                    </View>
+                    <View style={styles.timelineTextContainer}>
+                      <Text style={[styles.timelineStepTitle, { color: colors.text }]}>✅ Виконано</Text>
+                      <Text style={[styles.timelineStepDesc, { color: colors.textMuted }]}>Роботи успішно завершено</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+
+            <Button
+              title="Закрити"
+              onPress={() => setSelectedTicket(null)}
+              style={styles.modalCloseBtn}
+            />
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -290,5 +368,89 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 24,
+    padding: 20,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 16,
+  },
+  modalScroll: {
+    marginBottom: 20,
+  },
+  modalDescLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  modalDescText: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  modalTimelineLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+  },
+  timelineContainer: {
+    paddingLeft: 8,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  timelineDotContainer: {
+    alignItems: 'center',
+    marginRight: 16,
+    width: 20,
+  },
+  timelineDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    zIndex: 1,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    marginVertical: 2,
+  },
+  timelineTextContainer: {
+    flex: 1,
+    paddingTop: 0,
+  },
+  timelineStepTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  timelineStepDesc: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    marginTop: 10,
   },
 });

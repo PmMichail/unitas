@@ -80,4 +80,6 @@ declare module 'lucide-react-native' {
   export const Minus: Icon;
   export const Thermometer: Icon;
   export const Wifi: Icon;
+  export const Zap: Icon;
+  export const Droplet: Icon;
 }

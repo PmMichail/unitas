@@ -77,7 +77,7 @@ export default function OsbbSearchPage() {
           const list = Array.isArray(data) ? data : data.results || [];
           setResults(list);
           if (list.length === 0) {
-            setError("Поблизу не знайдено жодного ОСББ");
+            setError("Поблизов не знайдено жодного ОСББ");
           }
         } catch (err: any) {
           setError(err.response?.data?.detail || "Не вдалося отримати найближчі ОСББ");
@@ -88,7 +88,8 @@ export default function OsbbSearchPage() {
       (err) => {
         setError("Помилка отримання геолокації. Дозвольте доступ до геоданих.");
         setLoadingNearby(false);
-      }
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
   };
 

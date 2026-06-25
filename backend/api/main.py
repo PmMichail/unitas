@@ -359,6 +359,7 @@ class Profile(Base):
     member_module_activated_at = Column(DateTime, nullable=True) # Activation timestamp
     lat = Column(Float, nullable=True) # Geolocation latitude
     lon = Column(Float, nullable=True) # Geolocation longitude
+    header_image_url = Column(Text, nullable=True) # Cover/header banner image URL
     
     owner = relationship("User", back_populates="profiles")
     employees = relationship("Employee", back_populates="profile")
@@ -5939,7 +5940,7 @@ def get_profiles(telegram_id: str, background_tasks: BackgroundTasks, db: Sessio
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="Користувача не знайдено")
-    return user.profiles
+    return [p for p in user.profiles if p.parent_profile_id is None]
 
 @app.get("/api/profiles")
 def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -5947,7 +5948,7 @@ def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: 
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         return []
-    return user.profiles
+    return [p for p in user.profiles if p.parent_profile_id is None]
 
 @app.delete("/api/profiles/{profile_id}")
 def delete_profile_endpoint(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -5982,6 +5983,9 @@ def sync_child_profile(db: Session, parent: Profile):
         child.liqpay_private_key = parent.liqpay_private_key
         child.color_theme = parent.color_theme or "#3b82f6"
         child.slug = parent.slug
+        child.lat = parent.lat
+        child.lon = parent.lon
+        child.header_image_url = parent.header_image_url
         db.flush()
 
 @app.put("/api/profiles/{profile_id}")
@@ -6796,7 +6800,7 @@ def get_consolidated_dashboard(telegram_id: str, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="Користувача не знайдено")
         
-    profiles = user.profiles
+    profiles = [p for p in user.profiles if p.parent_profile_id is None]
     if not profiles:
         return {"profiles": [], "total_income": 0.0, "total_tax_due": 0.0, "total_tax_paid": 0.0, "total_difference": 0.0, "cross_flows": [], "total_tax_savings": 0.0}
         
@@ -9632,6 +9636,20 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "is_submitted": is_submitted,
             "current_submitted_value": current_submitted_value
         })
+    charges = db.query(BillingCharge).filter(BillingCharge.member_id == member.id).all()
+    total_debt = abs(member.balance) if (member.balance or 0.0) < 0 else 0.0
+    if total_debt == 0.0:
+        dues_debt = 0.0
+    elif not charges:
+        dues_debt = total_debt
+    else:
+        total_charges_sum = sum(c.amount for c in charges)
+        regular_charges_sum = sum(c.amount for c in charges if c.charge_type == "regular")
+        if total_charges_sum > 0:
+            dues_debt = total_debt * (regular_charges_sum / total_charges_sum)
+        else:
+            dues_debt = total_debt
+
     return {
         "profile": {
             "id": profile.id,
@@ -9643,7 +9661,8 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "tax_id": getattr(profile, "tax_id", None),
             "bank_name": getattr(profile, "bank_name", None),
             "has_monobank": bool(getattr(profile, "mono_api_token", None)),
-            "has_liqpay": bool(getattr(profile, "liqpay_public_key", None)) and bool(getattr(profile, "liqpay_private_key", None))
+            "has_liqpay": bool(getattr(profile, "liqpay_public_key", None)) and bool(getattr(profile, "liqpay_private_key", None)),
+            "header_image_url": getattr(profile, "header_image_url", None)
         } if profile else None,
         "member": {
             "id": member.id,
@@ -9654,7 +9673,8 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "property_type": member.property_type,
             "area": member.area,
             "flat_area": member.flat_area or member.area,
-            "role": getattr(member, "role", "owner")
+            "role": getattr(member, "role", "owner"),
+            "dues_debt": round(dues_debt, 2)
         },
         "meters": meter_data
     }
@@ -9783,6 +9803,26 @@ def get_member_billing_history(auth: dict = Depends(verify_member_token), db: Se
     history.sort(key=lambda x: x["date"] or "", reverse=True)
     return history
 
+def calculate_meter_monthly_consumption(db: Session, meter_id: int, initial_reading: float = 0.0) -> float:
+    readings = db.query(MeterReading).filter(MeterReading.meter_id == meter_id).order_by(MeterReading.reading_date.desc(), MeterReading.id.desc()).all()
+    if not readings:
+        return 0.0
+    latest_reading = readings[0]
+    if len(readings) >= 2:
+        second_latest = readings[1]
+        consumption = latest_reading.reading_value - second_latest.reading_value
+    else:
+        consumption = latest_reading.reading_value - initial_reading
+    return max(0.0, consumption)
+
+def get_descendant_meters(db: Session, parent_id: int) -> list:
+    descendants = []
+    children = db.query(Meter).filter(Meter.parent_id == parent_id).all()
+    for child in children:
+        descendants.append(child)
+        descendants.extend(get_descendant_meters(db, child.id))
+    return descendants
+
 @app.get("/api/member/transparency")
 def get_member_transparency(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
     members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == auth["profile_id"]).all()
@@ -9790,17 +9830,52 @@ def get_member_transparency(auth: dict = Depends(verify_member_token), db: Sessi
     for m in members:
         if (m.balance or 0) < 0:
             debts.append({"identifier": m.identifier, "debt": abs(round(m.balance or 0, 2))})
-    own_meter_ids = [m.id for m in db.query(Meter).filter(Meter.member_id == auth["member_id"]).all()]
-    own_consumption = 0.0
-    if own_meter_ids:
-        readings = db.query(MeterReading).filter(MeterReading.meter_id.in_(own_meter_ids)).all()
-        own_consumption = sum((r.reading_value or 0) for r in readings[-1:])
-    all_meter_ids = [m.id for m in db.query(Meter).filter(Meter.profile_id == auth["profile_id"]).all()]
-    average_consumption = 0.0
-    if all_meter_ids:
-        latest = db.query(MeterReading).filter(MeterReading.meter_id.in_(all_meter_ids)).all()
-        average_consumption = (sum((r.reading_value or 0) for r in latest) / len(latest)) if latest else 0.0
-    return {"debts": debts, "own_consumption": round(own_consumption, 2), "average_consumption": round(average_consumption, 2)}
+            
+    own_meters = db.query(Meter).filter(Meter.member_id == auth["member_id"]).all()
+    own_consumption_by_type = {}
+    total_own_consumption = 0.0
+    for meter in own_meters:
+        cons = calculate_meter_monthly_consumption(db, meter.id, meter.initial_reading or 0.0)
+        own_consumption_by_type[meter.type] = own_consumption_by_type.get(meter.type, 0.0) + cons
+        total_own_consumption += cons
+
+    main_meters = db.query(Meter).filter(Meter.profile_id == auth["profile_id"], Meter.parent_id == None, Meter.member_id == None).all()
+    main_meters_data = []
+    total_main_consumption = 0.0
+    for mm in main_meters:
+        mm_cons = calculate_meter_monthly_consumption(db, mm.id, mm.initial_reading or 0.0)
+        total_main_consumption += mm_cons
+        
+        descendants = get_descendant_meters(db, mm.id)
+        children_data = []
+        for cm in descendants:
+            cm_cons = calculate_meter_monthly_consumption(db, cm.id, cm.initial_reading or 0.0)
+            cm_member = db.query(UnitOrMember).filter(UnitOrMember.id == cm.member_id).first() if cm.member_id else None
+            children_data.append({
+                "id": cm.id,
+                "name": cm.name,
+                "type": cm.type,
+                "member_name": cm_member.owner_name if cm_member else "Сублічильник",
+                "member_identifier": cm_member.identifier if cm_member else cm.name,
+                "consumption": round(cm_cons, 2)
+            })
+        
+        main_meters_data.append({
+            "id": mm.id,
+            "name": mm.name,
+            "type": mm.type,
+            "consumption": round(mm_cons, 2),
+            "child_meters": children_data
+        })
+        
+    average_consumption = total_main_consumption / len(main_meters) if main_meters else 0.0
+    return {
+        "debts": debts, 
+        "own_consumption": round(total_own_consumption, 2), 
+        "average_consumption": round(average_consumption, 2),
+        "own_consumption_by_type": {k: round(v, 2) for k, v in own_consumption_by_type.items()},
+        "main_meters": main_meters_data
+    }
 
 @app.get("/api/member/surveys")
 def get_member_surveys(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
@@ -13933,6 +14008,46 @@ async def upload_profile_document(
     db.refresh(doc)
     return {"status": "success", "id": doc.id, "filename": doc.filename}
 
+@app.post("/api/profiles/{profile_id}/upload-header")
+async def upload_profile_header(
+    profile_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    content = await file.read()
+    
+    db.query(ProfileDocument).filter(
+        ProfileDocument.profile_id == profile_id,
+        ProfileDocument.document_type == "header_image"
+    ).delete()
+    
+    doc = ProfileDocument(
+        profile_id=profile_id,
+        filename=file.filename,
+        content_type=file.content_type,
+        file_content=content,
+        is_public_to_residents=True,
+        document_type="header_image",
+        description="Header cover image for resident cabinet"
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    
+    header_url = f"/api/profiles/documents/{doc.id}/download"
+    profile.header_image_url = header_url
+    
+    child = db.query(Profile).filter(Profile.parent_profile_id == profile.id).first()
+    if child:
+        child.header_image_url = header_url
+        
+    db.commit()
+    return {"status": "success", "header_image_url": header_url}
+
 @app.get("/api/profiles/{profile_id}/documents")
 def list_profile_documents(
     profile_id: int,
@@ -14155,7 +14270,25 @@ def list_profile_service_orders(profile_id: int, user_id: Optional[int] = None, 
         raise HTTPException(status_code=404, detail="Profile not found")
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    orders = db.query(ServiceOrder).filter(ServiceOrder.profile_id == profile_id).all()
+    
+    # We query orders/tickets for both parent and child profiles
+    profile_ids = [profile_id]
+    if profile.parent_profile_id:
+        profile_ids.append(profile.parent_profile_id)
+    child = db.query(Profile).filter(Profile.parent_profile_id == profile_id).first()
+    if child:
+        profile_ids.append(child.id)
+
+    orders = db.query(ServiceOrder).filter(ServiceOrder.profile_id.in_(profile_ids)).all()
+    tickets = db.query(Ticket).filter(Ticket.profile_id.in_(profile_ids)).all()
+    
+    ticket_status_map = {
+        "new": "pending",
+        "in_progress": "in_progress",
+        "done": "completed",
+        "rejected": "cancelled"
+    }
+
     result = []
     for o in orders:
         member = db.query(UnitOrMember).filter(UnitOrMember.id == o.member_id).first()
@@ -14171,6 +14304,24 @@ def list_profile_service_orders(profile_id: int, user_id: Optional[int] = None, 
             "contractor_name": o.contractor_name,
             "created_at": o.created_at.isoformat() if o.created_at else None
         })
+
+    for t in tickets:
+        member = db.query(UnitOrMember).filter(UnitOrMember.id == t.member_id).first()
+        mapped_status = ticket_status_map.get(t.status, "pending")
+        result.append({
+            "id": t.id + 1000000,
+            "member_id": t.member_id,
+            "member_identifier": member.identifier if member else "Невідомий",
+            "service_type": f"Заявка: {t.title}",
+            "description": t.description,
+            "preferred_time": "Заявка",
+            "status": mapped_status,
+            "price": 0.0,
+            "contractor_name": "Кабінет мешканця",
+            "created_at": t.created_at.isoformat() if t.created_at else None
+        })
+
+    result.sort(key=lambda x: x["created_at"] or "", reverse=True)
     return result
 
 @app.post("/api/profiles/{profile_id}/services/orders/{order_id}/update")
@@ -14180,12 +14331,83 @@ def update_profile_service_order(profile_id: int, order_id: int, req: ServiceOrd
         raise HTTPException(status_code=404, detail="Profile not found")
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.profile_id == profile_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Service order not found")
-    order.status = req.status
-    order.price = req.price
-    order.contractor_name = req.contractor_name
+        
+    profile_ids = [profile_id]
+    if profile.parent_profile_id:
+        profile_ids.append(profile.parent_profile_id)
+    child = db.query(Profile).filter(Profile.parent_profile_id == profile_id).first()
+    if child:
+        profile_ids.append(child.id)
+
+    if order_id >= 1000000:
+        ticket_id = order_id - 1000000
+        ticket = db.query(Ticket).filter(Ticket.id == ticket_id, Ticket.profile_id.in_(profile_ids)).first()
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+            
+        reverse_map = {
+            "pending": "new",
+            "in_progress": "in_progress",
+            "completed": "done",
+            "cancelled": "rejected"
+        }
+        old_status = ticket.status
+        ticket.status = reverse_map.get(req.status, "new")
+        db.commit()
+        
+        if old_status != ticket.status:
+            member = db.query(UnitOrMember).filter(UnitOrMember.id == ticket.member_id).first()
+            if member:
+                status_translations = {
+                    "new": "Нова",
+                    "in_progress": "В роботі",
+                    "done": "Виконано",
+                    "rejected": "Відхилено"
+                }
+                status_txt = status_translations.get(ticket.status, ticket.status)
+                notify_resident(
+                    db,
+                    member,
+                    "Оновлення статусу заявки",
+                    f"Статус вашої заявки '{ticket.title}' було оновлено на: {status_txt}."
+                )
+        return {"status": "success"}
+    else:
+        order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.profile_id.in_(profile_ids)).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Service order not found")
+        order.status = req.status
+        order.price = req.price
+        order.contractor_name = req.contractor_name
+        db.commit()
+        return {"status": "success"}
+
+@app.delete("/api/profiles/{profile_id}/services/orders/{order_id}")
+def delete_profile_service_order(profile_id: int, order_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    profile_ids = [profile_id]
+    if profile.parent_profile_id:
+        profile_ids.append(profile.parent_profile_id)
+    child = db.query(Profile).filter(Profile.parent_profile_id == profile_id).first()
+    if child:
+        profile_ids.append(child.id)
+
+    if order_id >= 1000000:
+        ticket_id = order_id - 1000000
+        ticket = db.query(Ticket).filter(Ticket.id == ticket_id, Ticket.profile_id.in_(profile_ids)).first()
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        db.delete(ticket)
+    else:
+        order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.profile_id.in_(profile_ids)).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Service order not found")
+        db.delete(order)
     db.commit()
     return {"status": "success"}
 
@@ -15677,7 +15899,9 @@ def get_tax_liabilities(
     if not profile_id and telegram_id:
         user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
         if user and user.profiles:
-            profile_id = user.profiles[0].id
+            parent_profiles = [p for p in user.profiles if p.parent_profile_id is None]
+            if parent_profiles:
+                profile_id = parent_profiles[0].id
             
     if not profile_id:
         return []
@@ -19248,6 +19472,15 @@ def migrate_database():
                 print(f"Error adding is_member_module_active: {e}")
                 db.rollback()
 
+        if 'header_image_url' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN header_image_url TEXT"))
+                db.commit()
+                print("Added header_image_url column to profiles table")
+            except Exception as e:
+                print(f"Error adding header_image_url: {e}")
+                db.rollback()
+                
         if 'member_module_activated_at' not in profiles_columns:
             try:
                 db.execute(text("ALTER TABLE profiles ADD COLUMN member_module_activated_at TIMESTAMP"))
@@ -19506,6 +19739,7 @@ def purchase_resident_cabinet_module(
     liqpay_public_key: Optional[str] = Form(None),
     liqpay_private_key: Optional[str] = Form(None),
     color_theme: str = Form("#3b82f6"),
+    header_image_url: Optional[str] = Form(None),
     user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
@@ -19553,6 +19787,9 @@ def purchase_resident_cabinet_module(
     if liqpay_private_key is not None:
         profile.liqpay_private_key = encrypt_token(liqpay_private_key.strip()) if liqpay_private_key.strip() else None
     profile.color_theme = color_theme.strip() or "#3b82f6"
+    if header_image_url is not None:
+        profile.header_image_url = header_image_url.strip() or None
+
     if not profile.member_module_activated_at:
         profile.member_module_activated_at = datetime.utcnow()
         
@@ -19566,6 +19803,7 @@ def purchase_resident_cabinet_module(
         osbb_enterprise.liqpay_public_key = profile.liqpay_public_key
         osbb_enterprise.liqpay_private_key = profile.liqpay_private_key
         osbb_enterprise.color_theme = profile.color_theme
+        osbb_enterprise.header_image_url = profile.header_image_url
         osbb_enterprise.has_resident_cabinet = True
         osbb_enterprise.is_member_module_active = True
         osbb_enterprise.slug = None # Keep slug None on child to prevent UNIQUE constraint violation
@@ -19581,6 +19819,7 @@ def purchase_resident_cabinet_module(
             liqpay_public_key=profile.liqpay_public_key,
             liqpay_private_key=profile.liqpay_private_key,
             color_theme=profile.color_theme,
+            header_image_url=profile.header_image_url,
             has_resident_cabinet=True,
             is_member_module_active=True,
             parent_profile_id=profile.id
@@ -19659,6 +19898,7 @@ def get_resident_cabinet_status(
         "is_active": is_active,
         "slug": profile.slug,
         "color_theme": profile.color_theme,
+        "header_image_url": profile.header_image_url,
         "has_monobank": bool(profile.mono_api_token),
         "has_liqpay": bool(profile.liqpay_public_key) and bool(profile.liqpay_private_key),
         "subscription": {

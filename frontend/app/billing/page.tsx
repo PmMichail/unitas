@@ -214,6 +214,7 @@ export default function BillingPage() {
   const [rcLiqpayPublicKey, setRcLiqpayPublicKey] = useState("");
   const [rcLiqpayPrivateKey, setRcLiqpayPrivateKey] = useState("");
   const [rcColorTheme, setRcColorTheme] = useState("#3b82f6");
+  const [rcHeaderImageUrl, setRcHeaderImageUrl] = useState("");
   const [rcPurchasing, setRcPurchasing] = useState(false);
   const [rcLoading, setRcLoading] = useState(false);
 
@@ -436,6 +437,7 @@ export default function BillingPage() {
       if (status.is_active) {
         setRcSlug(status.slug || "");
         setRcColorTheme(status.color_theme || "#3b82f6");
+        setRcHeaderImageUrl(status.header_image_url || "");
       }
     } catch (err: any) {
       console.error("Error fetching resident cabinet status", err);
@@ -450,6 +452,7 @@ export default function BillingPage() {
     setRcSlug(selectedProfile.name?.toLowerCase().replace(/[^a-z0-9-]/g, "-") || "");
     setRcColorTheme("#3b82f6");
     setRcMonoApiToken("");
+    setRcHeaderImageUrl("");
     setRcModalStep("configure");
     setResidentCabinetModalOpen(true);
   };
@@ -480,6 +483,7 @@ export default function BillingPage() {
           liqpay_public_key: rcLiqpayPublicKey || undefined,
           liqpay_private_key: rcLiqpayPrivateKey || undefined,
           color_theme: rcColorTheme,
+          header_image_url: rcHeaderImageUrl || undefined,
         });
         showToast("Налаштування кабінету мешканця успішно збережено!", "success");
         setResidentCabinetModalOpen(false);
@@ -855,6 +859,20 @@ export default function BillingPage() {
     }
   };
 
+  const handleDeleteTicket = async () => {
+    if (!selectedProfile || !selectedTicketForEdit) return;
+    if (!window.confirm("Ви впевнені, що хочете видалити цю заявку?")) return;
+    try {
+      await api.deleteProfileServiceOrder(selectedProfile.id, selectedTicketForEdit.id);
+      showToast("Заявку видалено!", "success");
+      setTicketModalOpen(false);
+      fetchRCOrders();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося видалити заявку", "error");
+    }
+  };
+
   const fetchRCDocuments = async () => {
     if (!selectedProfile) return;
     setIsDocsLoading(true);
@@ -948,6 +966,7 @@ export default function BillingPage() {
         liqpay_public_key: rcLiqpayPublicKey || undefined,
         liqpay_private_key: rcLiqpayPrivateKey || undefined,
         color_theme: rcColorTheme,
+        header_image_url: rcHeaderImageUrl || undefined,
       });
       showToast("Налаштування кабінету мешканця успішно збережено!", "success");
       loadResidentCabinetStatus();
@@ -956,6 +975,19 @@ export default function BillingPage() {
       showToast(err.response?.data?.detail || "Помилка при збереженні налаштувань", "error");
     } finally {
       setRcLoading(false);
+    }
+  };
+
+  const handleUploadHeaderImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProfile) return;
+    try {
+      const response = await api.uploadHeaderImage(selectedProfile.id, file);
+      setRcHeaderImageUrl(response.header_image_url);
+      showToast("Зображення завантажено!", "success");
+    } catch (err: any) {
+      console.error(err);
+      showToast("Не вдалося завантажити зображення", "error");
     }
   };
 
@@ -2443,6 +2475,47 @@ export default function BillingPage() {
                                   required
                                 />
                               </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-500">Зображення під шапку кабінету (URL)</label>
+                              <div className="flex flex-col gap-2">
+                                {rcHeaderImageUrl && (
+                                  <div className="relative w-full h-24 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
+                                    <img
+                                      src={rcHeaderImageUrl.startsWith("/") ? `${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}${rcHeaderImageUrl}` : rcHeaderImageUrl}
+                                      alt="Header preview"
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setRcHeaderImageUrl("")}
+                                      className="absolute top-2 right-2 bg-red-600/80 hover:bg-red-500 text-white p-1.5 rounded-full"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={rcHeaderImageUrl}
+                                    onChange={(e) => setRcHeaderImageUrl(e.target.value)}
+                                    placeholder="Вкажіть URL або завантажте файл..."
+                                    className="flex-1 px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                  <label className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center shrink-0">
+                                    <span>Завантажити</span>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={handleUploadHeaderImage}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                </div>
+                              </div>
+                              <p className="text-[10px] text-slate-400">Завантажте власне фото або вкажіть посилання на фонове зображення</p>
                             </div>
                           </div>
 
@@ -4065,6 +4138,13 @@ export default function BillingPage() {
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800/40">
                 <button
                   type="button"
+                  onClick={handleDeleteTicket}
+                  className="mr-auto px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold"
+                >
+                  Видалити заявку
+                </button>
+                <button
+                  type="button"
                   onClick={() => setTicketModalOpen(false)}
                   className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-800"
                 >
@@ -5215,6 +5295,47 @@ export default function BillingPage() {
                     <p className="text-[10px] text-slate-400">Основний колір для особистого кабінету мешканців.</p>
                   </div>
 
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase">Зображення під шапку кабінету (URL)</label>
+                    <div className="flex flex-col gap-2">
+                      {rcHeaderImageUrl && (
+                        <div className="relative w-full h-24 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
+                          <img
+                            src={rcHeaderImageUrl.startsWith("/") ? `${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}${rcHeaderImageUrl}` : rcHeaderImageUrl}
+                            alt="Header preview"
+                            className="w-full h-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setRcHeaderImageUrl("")}
+                            className="absolute top-2 right-2 bg-red-650/80 hover:bg-red-650 text-white p-1.5 rounded-full"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={rcHeaderImageUrl}
+                          onChange={(e) => setRcHeaderImageUrl(e.target.value)}
+                          placeholder="Вкажіть URL або завантажте файл..."
+                          className="flex-1 px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <label className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center shrink-0">
+                          <span>Завантажити</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleUploadHeaderImage}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Завантажте власне фото або вкажіть посилання на фонове зображення</p>
+                  </div>
+
                   <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
                     <button
                       type="button"
@@ -5268,6 +5389,12 @@ export default function BillingPage() {
                             <span className="text-xs font-semibold text-slate-900 dark:text-white">{rcColorTheme}</span>
                           </div>
                         </div>
+                        {rcHeaderImageUrl && (
+                          <div className="flex justify-between items-center mt-1">
+                            <span className="text-xs text-slate-500">Баннер:</span>
+                            <span className="text-xs font-semibold text-slate-900 dark:text-white truncate max-w-[180px]" title={rcHeaderImageUrl}>{rcHeaderImageUrl}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
