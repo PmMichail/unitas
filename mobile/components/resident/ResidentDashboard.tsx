@@ -164,7 +164,7 @@ export default function ResidentDashboard() {
     }
     const descriptionText = payPurpose === 'utility'
       ? `Оплата за електроенергію, о/р ${data.member.account_number || data.member.identifier}`
-      : `Оплата внесків на утримання будинку, о/р ${data.member.account_number || data.member.identifier}`;
+      : `Оплата внесків, о/р ${data.member.account_number || data.member.identifier}`;
 
     try {
       setLoading(true);
@@ -193,7 +193,7 @@ export default function ResidentDashboard() {
     }
     const descriptionText = payPurpose === 'utility'
       ? `Оплата за електроенергію, о/р ${data.member.account_number || data.member.identifier}`
-      : `Оплата внесків на утримання будинку, о/р ${data.member.account_number || data.member.identifier}`;
+      : `Оплата внесків, о/р ${data.member.account_number || data.member.identifier}`;
     const url = `${API_BASE_URL}/api/member/billing/liqpay/pay-redirect?amount=${amount}&charge_type=${payPurpose}&description=${encodeURIComponent(descriptionText)}&token=${memberToken}`;
     Linking.openURL(url);
   };
@@ -618,7 +618,7 @@ export default function ResidentDashboard() {
                   onPress={() => setPayPurpose('regular')}
                 >
                   <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'regular' ? '#ffffff' : colors.text }}>
-                    Внески ОСББ
+                    Членські внески
                   </Text>
                 </Pressable>
                 <Pressable

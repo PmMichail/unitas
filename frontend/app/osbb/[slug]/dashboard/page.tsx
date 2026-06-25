@@ -312,7 +312,7 @@ export default function ResidentDashboardPage() {
     }
     const descriptionText = payPurpose === "utility"
       ? `Оплата за електроенергію, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`
-      : `Оплата внесків на утримання будинку, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
+      : `Оплата внесків, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
     try {
       const res = await api.createMemberMonoInvoice(token, {
         amount,
@@ -340,7 +340,7 @@ export default function ResidentDashboardPage() {
     }
     const descriptionText = payPurpose === "utility"
       ? `Оплата за електроенергію, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`
-      : `Оплата внесків на утримання будинку, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
+      : `Оплата внесків, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
     try {
       const res = await api.createMemberLiqpayCheckout(token, {
         amount,
@@ -471,7 +471,7 @@ export default function ResidentDashboardPage() {
                       onChange={(e) => setPayPurpose(e.target.value)}
                       className="text-xs font-bold rounded-xl border border-slate-250 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 px-3 py-2 outline-none text-slate-700 dark:text-slate-300"
                     >
-                      <option value="regular">Внески ОСББ</option>
+                      <option value="regular">Членські внески</option>
                       <option value="utility">Електроенергія</option>
                     </select>
                     <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 p-1">
