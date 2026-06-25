@@ -59,6 +59,7 @@ export default function ResidentDashboard() {
   const [submittingMeterId, setSubmittingMeterId] = useState<number | null>(null);
   
   const [payAmount, setPayAmount] = useState('');
+  const [payPurpose, setPayPurpose] = useState<'regular' | 'utility'>('regular');
   const [billingHistory, setBillingHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -161,13 +162,16 @@ export default function ResidentDashboard() {
       Alert.alert('Помилка', 'Введіть коректну суму для оплати.');
       return;
     }
+    const descriptionText = payPurpose === 'utility'
+      ? `Оплата за електроенергію, о/р ${data.member.account_number || data.member.identifier}`
+      : `Оплата внесків на утримання будинку, о/р ${data.member.account_number || data.member.identifier}`;
 
     try {
       setLoading(true);
       const res = await api.createMemberMonoInvoice(memberToken!, {
         amount: amount,
-        charge_type: 'regular',
-        description: `Оплата внесків ОСББ за рахунком ${data.member.account_number || data.member.identifier}`,
+        charge_type: payPurpose,
+        description: descriptionText,
       });
       if (res.pageUrl) {
         Linking.openURL(res.pageUrl);
@@ -187,7 +191,10 @@ export default function ResidentDashboard() {
       Alert.alert('Помилка', 'Введіть коректну суму для оплати.');
       return;
     }
-    const url = `${API_BASE_URL}/api/member/billing/liqpay/pay-redirect?amount=${amount}&token=${memberToken}`;
+    const descriptionText = payPurpose === 'utility'
+      ? `Оплата за електроенергію, о/р ${data.member.account_number || data.member.identifier}`
+      : `Оплата внесків на утримання будинку, о/р ${data.member.account_number || data.member.identifier}`;
+    const url = `${API_BASE_URL}/api/member/billing/liqpay/pay-redirect?amount=${amount}&charge_type=${payPurpose}&description=${encodeURIComponent(descriptionText)}&token=${memberToken}`;
     Linking.openURL(url);
   };
 
@@ -597,6 +604,39 @@ export default function ResidentDashboard() {
               <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
                 Швидка онлайн-оплата
               </Text>
+              
+              {/* Payment purpose selector */}
+              <View style={{ flexDirection: 'row', backgroundColor: colors.inputBg, borderRadius: 10, padding: 3, borderWidth: 1, borderColor: colors.cardBorder, marginBottom: 4 }}>
+                <Pressable
+                  style={{
+                    flex: 1,
+                    paddingVertical: 8,
+                    alignItems: 'center',
+                    borderRadius: 8,
+                    backgroundColor: payPurpose === 'regular' ? colors.primary : 'transparent',
+                  }}
+                  onPress={() => setPayPurpose('regular')}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'regular' ? '#ffffff' : colors.text }}>
+                    Внески ОСББ
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={{
+                    flex: 1,
+                    paddingVertical: 8,
+                    alignItems: 'center',
+                    borderRadius: 8,
+                    backgroundColor: payPurpose === 'utility' ? colors.primary : 'transparent',
+                  }}
+                  onPress={() => setPayPurpose('utility')}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: payPurpose === 'utility' ? '#ffffff' : colors.text }}>
+                    Електроенергія
+                  </Text>
+                </Pressable>
+              </View>
+
               <View style={{ flexDirection: 'row', alignItems: 'center', borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, backgroundColor: colors.inputBg, paddingHorizontal: 12, height: 44 }}>
                 <TextInput
                   style={{

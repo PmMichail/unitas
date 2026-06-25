@@ -50,6 +50,7 @@ export default function ResidentDashboardPage() {
   
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState("");
+  const [payPurpose, setPayPurpose] = useState("regular");
 
   const copyToClipboard = (text: string, fieldName: string) => {
     navigator.clipboard.writeText(text);
@@ -309,11 +310,14 @@ export default function ResidentDashboardPage() {
       setError("Введіть коректну суму для оплати");
       return;
     }
+    const descriptionText = payPurpose === "utility"
+      ? `Оплата за електроенергію, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`
+      : `Оплата внесків на утримання будинку, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
     try {
       const res = await api.createMemberMonoInvoice(token, {
         amount,
-        charge_type: "regular",
-        description: `Оплата за особовим рахунком ${dashboard?.member?.account_number || dashboard?.member?.identifier}`,
+        charge_type: payPurpose,
+        description: descriptionText,
       });
       if (res.pageUrl) {
         window.open(res.pageUrl, "_blank");
@@ -334,11 +338,14 @@ export default function ResidentDashboardPage() {
       setError("Введіть коректну суму для оплати");
       return;
     }
+    const descriptionText = payPurpose === "utility"
+      ? `Оплата за електроенергію, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`
+      : `Оплата внесків на утримання будинку, о/р ${dashboard?.member?.account_number || dashboard?.member?.identifier}`;
     try {
       const res = await api.createMemberLiqpayCheckout(token, {
         amount,
-        charge_type: "regular",
-        description: `Оплата за особовим рахунком ${dashboard?.member?.account_number || dashboard?.member?.identifier}`,
+        charge_type: payPurpose,
+        description: descriptionText,
       });
       if (res.liqpay_data && res.liqpay_signature) {
         const form = document.createElement("form");
@@ -459,6 +466,14 @@ export default function ResidentDashboardPage() {
                 <div className="flex flex-col gap-2">
                   <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Швидка онлайн-оплата</div>
                   <div className="flex flex-wrap items-center gap-3">
+                    <select
+                      value={payPurpose}
+                      onChange={(e) => setPayPurpose(e.target.value)}
+                      className="text-xs font-bold rounded-xl border border-slate-250 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 px-3 py-2 outline-none text-slate-700 dark:text-slate-300"
+                    >
+                      <option value="regular">Внески ОСББ</option>
+                      <option value="utility">Електроенергія</option>
+                    </select>
                     <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-950/45 p-1">
                       <input
                         type="number"
