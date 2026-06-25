@@ -8952,7 +8952,8 @@ def get_member_billing_liqpay_redirect(
         
     encoded_data = base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
     sign_str = liqpay_priv + encoded_data + liqpay_priv
-    signature = hashlib.sha1(sign_str.encode('utf-8')).hexdigest()
+    sha1_hash = hashlib.sha1(sign_str.encode('utf-8')).digest()
+    signature = base64.b64encode(sha1_hash).decode('utf-8')
     
     from fastapi.responses import HTMLResponse
     html_content = f"""

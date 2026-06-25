@@ -591,51 +591,58 @@ export default function ResidentDashboard() {
           {balance < 0 ? 'У вас є заборгованість' : 'Передплата / Борг відсутній'}
         </Text>
 
-        <View style={styles.actionButtons}>
+        <View style={[styles.actionButtons, { flexDirection: 'column', gap: 12 }]}>
           {(data?.profile?.has_monobank || data?.profile?.has_liqpay) && (
-            <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 6, marginVertical: 8, width: '100%' }}>
-              <TextInput
-                style={{
-                  flex: 1.2,
-                  borderColor: colors.cardBorder,
-                  borderWidth: 1,
-                  borderRadius: 8,
-                  paddingHorizontal: 8,
-                  color: colors.text,
-                  backgroundColor: colors.inputBg,
-                  fontSize: 14,
-                  fontWeight: 'bold',
-                  textAlign: 'center',
-                }}
-                placeholder="Сума"
-                placeholderTextColor={colors.textMuted + '80'}
-                value={payAmount}
-                onChangeText={setPayAmount}
-                keyboardType="numeric"
-              />
-              {data?.profile?.has_monobank && (
-                <Button
-                  title="Mono Pay"
-                  onPress={handlePayMono}
-                  style={{ flex: 2 }}
+            <View style={{ width: '100%', gap: 8 }}>
+              <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
+                Швидка онлайн-оплата
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, backgroundColor: colors.inputBg, paddingHorizontal: 12, height: 44 }}>
+                <TextInput
+                  style={{
+                    flex: 1,
+                    color: colors.text,
+                    fontSize: 14,
+                    fontWeight: 'bold',
+                  }}
+                  placeholder="Введіть суму"
+                  placeholderTextColor={colors.textMuted + '80'}
+                  value={payAmount}
+                  onChangeText={setPayAmount}
+                  keyboardType="numeric"
                 />
-              )}
-              {data?.profile?.has_liqpay && (
-                <Button
-                  title="LiqPay"
-                  onPress={handlePayLiqpay}
-                  variant="secondary"
-                  style={{ flex: 2 }}
-                />
-              )}
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.textMuted }}>грн</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                {data?.profile?.has_monobank && (
+                  <Button
+                    title="Mono Pay"
+                    onPress={handlePayMono}
+                    style={{ flex: 1 }}
+                  />
+                )}
+                {data?.profile?.has_liqpay && (
+                  <Button
+                    title="LiqPay"
+                    onPress={handlePayLiqpay}
+                    variant="secondary"
+                    style={{ flex: 1 }}
+                  />
+                )}
+              </View>
             </View>
           )}
-          <Button
-            title="Отримати квитанцію"
-            onPress={handleDownloadReceipt}
-            variant="outline"
-            style={styles.receiptBtn}
-          />
+          <View style={{ width: '100%', gap: 8, marginTop: 4 }}>
+            <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.textMuted, textTransform: 'uppercase', marginBottom: 2 }}>
+              Рахунок на оплату
+            </Text>
+            <Button
+              title="Отримати квитанцію (PDF)"
+              onPress={handleDownloadReceipt}
+              variant="outline"
+              style={{ width: '100%' }}
+            />
+          </View>
         </View>
       </Card>
 
@@ -1556,7 +1563,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   submitButton: {
-    width: 50,
+    paddingHorizontal: 16,
     height: 40,
     borderRadius: 10,
     justifyContent: 'center',
