@@ -166,10 +166,10 @@ export default function OsbbMemberLoginPage() {
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="+380991234567" />
               </div>
 
-              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Електронна пошта (Email)</label>
+              <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Електронна пошта (Email) (необов'язково)</label>
               <div className="relative mb-4">
                 <UserRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required={mode === "register"} className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="your@email.com" />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full rounded-2xl border border-white/10 bg-slate-950/40 py-3 pl-12 pr-4 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 text-white placeholder-slate-600 transition" placeholder="your@email.com" />
               </div>
 
               <label className="mb-2 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Вулиця</label>

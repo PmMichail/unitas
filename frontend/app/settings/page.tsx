@@ -15,27 +15,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Info,
-  Building2,
-  RefreshCw,
-  Link,
-  Unlink,
-  Clock,
   CreditCard
 } from "lucide-react";
-
-interface Bank {
-  id: string;
-  name: string;
-}
-
-interface BankConnection {
-  id: number;
-  bank_name: string;
-  bank_display_name: string;
-  account_number: string;
-  last_sync: string | null;
-  created_at: string;
-}
 
 export default function Settings() {
   const { telegramId, setTelegramId, selectedProfile } = useApp();
@@ -45,11 +26,6 @@ export default function Settings() {
   const [emailSuccess, setEmailSuccess] = useState(false);
   const [theme, setThemeState] = useState<"dark" | "light">("dark");
   
-  const [banks, setBanks] = useState<Bank[]>([]);
-  const [connections, setConnections] = useState<BankConnection[]>([]);
-  const [banksLoading, setBanksLoading] = useState(true);
-  const [syncing, setSyncing] = useState<string | null>(null);
-
   const [configs, setConfigs] = useState<Record<string, string>>({
     min_salary: "8647.0",
     fop_limit_group_1: "1444049.0",
@@ -90,108 +66,7 @@ export default function Settings() {
         }
       })
       .catch((err) => console.error("Помилка завантаження налаштувань:", err));
-      
-    // Load banks
-    loadBanks();
-    loadConnections();
   }, [selectedProfile]);
-
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
-
-  const loadBanks = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/banks`);
-      const data = await response.json();
-      setBanks(data.banks || []);
-    } catch (error) {
-      console.error("Error loading banks:", error);
-    }
-  };
-
-  const loadConnections = async () => {
-    if (!selectedProfile) return;
-    
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/banks/connections?profile_id=${selectedProfile.id}`
-      );
-      const data = await response.json();
-      setConnections(data.connections || []);
-    } catch (error) {
-      console.error("Error loading connections:", error);
-    } finally {
-      setBanksLoading(false);
-    }
-  };
-
-  const connectBank = async (bankId: string) => {
-    if (!selectedProfile) return;
-    
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/banks/${bankId}/auth-url?profile_id=${selectedProfile.id}`
-      );
-      const data = await response.json();
-      
-      window.location.href = data.auth_url;
-    } catch (error) {
-      console.error("Error connecting bank:", error);
-      alert("Помилка підключення банку");
-    }
-  };
-
-  const syncBank = async (bankName: string) => {
-    if (!selectedProfile) return;
-    
-    setSyncing(bankName);
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/banks/${bankName}/sync?profile_id=${selectedProfile.id}`,
-        { method: "POST" }
-      );
-      const data = await response.json();
-      
-      alert(`Синхронізовано ${data.synced} транзакцій`);
-      loadConnections();
-    } catch (error) {
-      console.error("Error syncing bank:", error);
-      alert("Помилка синхронізації");
-    } finally {
-      setSyncing(null);
-    }
-  };
-
-  const disconnectBank = async (bankName: string) => {
-    if (!selectedProfile) return;
-    
-    if (!confirm("Ви впевнені, що хочете відключити цей банк?")) return;
-    
-    try {
-      await fetch(
-        `${API_BASE_URL}/api/banks/${bankName}/disconnect?profile_id=${selectedProfile.id}`,
-        { method: "DELETE" }
-      );
-      loadConnections();
-    } catch (error) {
-      console.error("Error disconnecting bank:", error);
-      alert("Помилка відключення");
-    }
-  };
-
-  const getBankConnection = (bankId: string) => {
-    return connections.find(c => c.bank_name === bankId);
-  };
-
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "Ніколи";
-    return new Date(dateString).toLocaleString("uk-UA");
-  };
-
-  const maskAccount = (accountNumber: string) => {
-    if (!accountNumber) return "••••••••••••••••";
-    if (accountNumber.length <= 4) return accountNumber;
-    return accountNumber.slice(0, 4) + "•••••••••••••" + accountNumber.slice(-4);
-  };
 
   const handleSaveConfigs = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -336,115 +211,6 @@ export default function Settings() {
                 Зберегти Email
               </button>
             </form>
-          </div>
-
-          {/* Bank Integration */}
-          <div className="p-6 rounded-2xl glass-panel space-y-4">
-            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <Building2 className="w-4 h-4 text-indigo-500" />
-              Інтеграція з банками
-            </h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Підключіть ваші банки для автоматичного отримання виписок та розрахунку податків.
-            </p>
-
-            {banksLoading ? (
-              <div className="flex items-center justify-center py-4">
-                <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
-              </div>
-            ) : (
-              <div className="space-y-3 pt-2">
-                {banks.map((bank) => {
-                  const connection = getBankConnection(bank.id);
-                  const isConnected = !!connection;
-                  
-                  return (
-                    <div
-                      key={bank.id}
-                      className="p-4 rounded-xl border-2 transition-all"
-                      style={{
-                        borderColor: isConnected ? "rgba(99, 102, 241, 0.3)" : "rgba(148, 163, 184, 0.2)"
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                            <Building2 className="w-4 h-4 text-white" />
-                          </div>
-                          <div>
-                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                              {bank.name}
-                            </span>
-                            {isConnected ? (
-                              <span className="text-[9px] font-bold text-emerald-500 flex items-center gap-0.5">
-                                <CheckCircle className="w-2.5 h-2.5" />
-                                Підключено
-                              </span>
-                            ) : (
-                              <span className="text-[9px] text-slate-400">
-                                Не підключено
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {isConnected && connection && (
-                        <div className="space-y-1.5 mb-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-                          <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
-                            <CreditCard className="w-3 h-3" />
-                            <span className="font-mono">{maskAccount(connection.account_number)}</span>
-                          </div>
-                          
-                          <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
-                            <Clock className="w-3 h-3" />
-                            <span>Синхронізація: {formatDate(connection.last_sync)}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex gap-2">
-                        {isConnected ? (
-                          <>
-                            <button
-                              onClick={() => syncBank(bank.id)}
-                              disabled={syncing === bank.id}
-                              className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[9px] transition-all flex items-center justify-center gap-1 disabled:opacity-50"
-                            >
-                              {syncing === bank.id ? (
-                                <>
-                                  <RefreshCw className="w-3 h-3 animate-spin" />
-                                  Синхронізація...
-                                </>
-                              ) : (
-                                <>
-                                  <RefreshCw className="w-3 h-3" />
-                                  Оновити
-                                </>
-                              )}
-                            </button>
-                            <button
-                              onClick={() => disconnectBank(bank.id)}
-                              className="py-2 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[9px] transition-all"
-                            >
-                              <Unlink className="w-3 h-3" />
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            onClick={() => connectBank(bank.id)}
-                            className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[9px] transition-all flex items-center justify-center gap-1"
-                          >
-                            <Link className="w-3 h-3" />
-                            Підключити
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
 

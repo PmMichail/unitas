@@ -28,6 +28,7 @@ import {
   Layers,
   Cpu,
   ArrowRight,
+  ArrowUpRight,
   ChevronRight,
   Copy,
   ChevronDown,
@@ -98,6 +99,12 @@ export default function BillingPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [moderationMembers, setModerationMembers] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  // Splitting / Distribution State
+  const [splittingTx, setSplittingTx] = useState<any>(null);
+  const [splitRows, setSplitRows] = useState<{ member_id: number; amount: string }[]>([{ member_id: 0, amount: "" }]);
+  const [submittingSplit, setSubmittingSplit] = useState(false);
+  const [splitError, setSplitError] = useState<string | null>(null);
   const [meters, setMeters] = useState<Meter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +157,8 @@ export default function BillingPage() {
   const [memberShare, setMemberShare] = useState("");
   const [street, setStreet] = useState("");
   const [number, setNumber] = useState("");
+  const [isBoardMember, setIsBoardMember] = useState(false);
+  const [isBoardChairman, setIsBoardChairman] = useState(false);
 
   // Charge Modal & Accrual Config
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
@@ -345,6 +354,69 @@ export default function BillingPage() {
       setError("Не вдалося завантажити дані. Будь ласка, перевірте з'єднання.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openSplitModal = (tx: any) => {
+    setSplittingTx(tx);
+    setSplitRows([{ member_id: 0, amount: "" }]);
+    setSplitError(null);
+  };
+
+  const handleAddSplitRow = () => {
+    setSplitRows([...splitRows, { member_id: 0, amount: "" }]);
+  };
+
+  const handleRemoveSplitRow = (index: number) => {
+    setSplitRows(splitRows.filter((_, i) => i !== index));
+  };
+
+  const handleSplitRowChange = (index: number, field: "member_id" | "amount", value: any) => {
+    const updated = [...splitRows];
+    if (field === "member_id") {
+      updated[index].member_id = parseInt(value) || 0;
+    } else {
+      updated[index].amount = value;
+    }
+    setSplitRows(updated);
+    setSplitError(null);
+  };
+
+  const handleSaveSplit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!splittingTx) return;
+
+    // Validation
+    const validSplits = splitRows.filter(r => r.member_id > 0 && parseFloat(r.amount) > 0);
+    if (validSplits.length === 0) {
+      setSplitError("Будь ласка, вкажіть хоча б одного мешканця та суму більше 0");
+      return;
+    }
+
+    const totalSplit = validSplits.reduce((sum, r) => sum + parseFloat(r.amount), 0);
+    if (totalSplit > splittingTx.amount + 0.01) {
+      setSplitError(`Сума розподілу (${totalSplit} грн) не може бути більшою за суму транзакції (${splittingTx.amount} грн)`);
+      return;
+    }
+
+    setSubmittingSplit(true);
+    setSplitError(null);
+    try {
+      await api.splitTransaction(
+        splittingTx.id,
+        validSplits.map(r => ({
+          member_id: r.member_id,
+          amount: parseFloat(r.amount)
+        }))
+      );
+      setSplittingTx(null);
+      showToast("Транзакцію успішно розподілено!");
+      loadData();
+    } catch (err: any) {
+      console.error(err);
+      setSplitError(err.response?.data?.detail || "Не вдалося розподілити транзакцію");
+    } finally {
+      setSubmittingSplit(false);
     }
   };
 
@@ -1031,6 +1103,8 @@ export default function BillingPage() {
     setMemberShare("");
     setStreet("");
     setNumber("");
+    setIsBoardMember(false);
+    setIsBoardChairman(false);
     setMemberModalOpen(true);
   };
 
@@ -1050,6 +1124,8 @@ export default function BillingPage() {
     setMemberShare(member.share || "");
     setStreet(member.street || "");
     setNumber(member.number || "");
+    setIsBoardMember(member.is_board_member || false);
+    setIsBoardChairman(member.is_board_chairman || false);
     setMemberModalOpen(true);
   };
 
@@ -1076,7 +1152,9 @@ export default function BillingPage() {
         role: memberRole,
         share: memberShare || undefined,
         street: street || undefined,
-        number: number || undefined
+        number: number || undefined,
+        is_board_member: isBoardMember,
+        is_board_chairman: isBoardChairman
       };
 
       if (editingMember) {
@@ -3731,9 +3809,15 @@ export default function BillingPage() {
                                   </select>
                                   <button
                                     onClick={() => handleManualReconcile(t.id)}
-                                    className="px-2.5 py-1 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-550"
+                                    className="px-2.5 py-1 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-550 transition-all"
                                   >
                                     Провести
+                                  </button>
+                                  <button
+                                    onClick={() => openSplitModal(t)}
+                                    className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-550 transition-all flex items-center gap-0.5"
+                                  >
+                                    <ArrowUpRight className="w-3.5 h-3.5" /> Розподілити
                                   </button>
                                 </div>
                               )}
@@ -4401,6 +4485,34 @@ export default function BillingPage() {
                   </div>
                 )}
               </div>
+
+              <div className="flex flex-col gap-2.5 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
+                <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={isBoardMember}
+                    onChange={(e) => {
+                      setIsBoardMember(e.target.checked);
+                      if (!e.target.checked) setIsBoardChairman(false);
+                    }}
+                    className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
+                  />
+                  <span>Член правління ОСББ</span>
+                </label>
+                
+                {isBoardMember && (
+                  <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-750 dark:text-slate-300 ml-6">
+                    <input
+                      type="checkbox"
+                      checked={isBoardChairman}
+                      onChange={(e) => setIsBoardChairman(e.target.checked)}
+                      className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
+                    />
+                    <span>Голова правління ОСББ</span>
+                  </label>
+                )}
+              </div>
+
               <span className="text-[10px] text-slate-400 block leading-tight">Вкажіть суму зі знаком мінус "-", якщо є стартовий борг</span>
 
               <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
@@ -5899,6 +6011,134 @@ export default function BillingPage() {
                 className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white text-sm font-semibold rounded-xl transition-all"
               >
                 Закрити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Split transaction modal */}
+      {splittingTx && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-start shrink-0">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Розподілити платіж</h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Розподіліть суму консолідованого платежу LiqPay/Mono Pay між мешканцями.
+                </p>
+              </div>
+              <button
+                onClick={() => setSplittingTx(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm font-semibold"
+              >
+                Закрити
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-850 shrink-0 space-y-1 text-xs">
+              <div><span className="text-slate-400 font-bold">Опис:</span> <span className="font-semibold text-slate-800 dark:text-slate-200">{splittingTx.purpose}</span></div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-200 dark:border-slate-800">
+                <span className="text-slate-400 font-bold">Загальна сума:</span>
+                <span className="text-sm font-extrabold text-indigo-500">{splittingTx.amount.toLocaleString("uk-UA")} грн</span>
+              </div>
+            </div>
+
+            {/* Split rows container */}
+            <form onSubmit={handleSaveSplit} className="flex-1 overflow-y-auto space-y-4 pr-1 min-h-[150px]">
+              <div className="space-y-3">
+                <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold block">
+                  Розподіл суми
+                </label>
+
+                {splitRows.map((row, idx) => (
+                  <div key={idx} className="flex gap-3 items-center">
+                    <div className="flex-1">
+                      <select
+                        value={row.member_id}
+                        onChange={(e) => handleSplitRowChange(idx, "member_id", e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                        required
+                      >
+                        <option value={0}>Оберіть мешканця / об'єкт...</option>
+                        {members.map(m => (
+                          <option key={m.id} value={m.id}>
+                            {m.property_type || "кв."} {m.identifier} — {m.owner_name || "Невідомо"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="w-36">
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="Сума"
+                        value={row.amount}
+                        onChange={(e) => handleSplitRowChange(idx, "amount", e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold"
+                        required
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSplitRow(idx)}
+                      disabled={splitRows.length === 1}
+                      className="p-2 text-slate-400 hover:text-red-500 disabled:opacity-30 shrink-0"
+                      title="Видалити рядок"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddSplitRow}
+                className="w-full py-2 border border-dashed border-indigo-500/30 rounded-xl text-indigo-600 dark:text-indigo-400 text-xs font-bold hover:bg-indigo-500/5 transition-all"
+              >
+                + Додати мешканця
+              </button>
+            </form>
+
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4 shrink-0">
+              {/* Calculate remainder */}
+              {(() => {
+                const totalSplit = splitRows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+                const remainder = splittingTx.amount - totalSplit;
+                const isOver = remainder < -0.01;
+
+                return (
+                  <div className="flex justify-between items-center text-xs">
+                    <div>
+                      <span className="text-slate-400">Розподілено: </span>
+                      <span className="font-bold text-slate-700 dark:text-slate-300">{totalSplit.toFixed(2)} грн</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">Залишок: </span>
+                      <span className={`font-black ${isOver ? "text-rose-500" : "text-emerald-500"}`}>
+                        {remainder.toFixed(2)} / {splittingTx.amount.toFixed(2)} грн
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {splitError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs font-bold text-red-500 flex items-start gap-1.5">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{splitError}</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSaveSplit}
+                disabled={submittingSplit}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-lg disabled:opacity-50"
+              >
+                {submittingSplit ? "Збереження..." : "Підтвердити розподіл"}
               </button>
             </div>
           </div>

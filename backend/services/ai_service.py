@@ -242,6 +242,50 @@ class AIService:
             "is_salary": is_salary
         }
     
+    async def generate_board_minutes(self, issue_title: str, issue_description: str, votes_summary: List[dict], profile_name: str) -> str:
+        if not self.use_gemini and not self.use_openai:
+            return f"ПРОТОКОЛ ЗАСІДАННЯ ПРАВЛІННЯ ОСББ '{profile_name}'\n\nТема: {issue_title}\nОпис: {issue_description}\n\nРезультати голосування:\n" + "\n".join([f"- {v['name']}: {v['vote']} ({v['comment'] or 'без коментарів'})" for v in votes_summary])
+
+        prompt = f"""
+        Ти — досвідчений юрист та секретар ОСББ. Тобі потрібно скласти офіційний Протокол засідання правління ОСББ/організації на основі результатів обговорення та голосування.
+        
+        Назва організації: ОСББ "{profile_name}"
+        Тема засідання: {issue_title}
+        Опис питання/Порядок денний: {issue_description}
+        Дата засідання: {datetime.now().strftime('%d.%m.%Y')}
+        
+        Результати голосування членів правління:
+        {json.dumps(votes_summary, ensure_ascii=False, indent=2)}
+        
+        Сформуй офіційний, структурований текст протоколу українською мовою. Протокол має містити:
+        1. Шапку протоколу (назва, дата, місце засідання).
+        2. Список присутніх членів правління.
+        3. Порядок денний (обговорення питання: {issue_title}).
+        4. Слухали (короткий виклад обговорення на основі опису та коментарів до голосів).
+        5. Ухвалили (рішення, яке було прийнято на основі результатів голосування: якщо більшість 'За', то рішення прийнято, інакше відхилено).
+        6. Підсумки голосування ('За', 'Проти', 'Утрималися').
+        7. Місце для підписів голови та членів правління.
+        
+        Пиши у сухому юридичному офіційно-діловому стилі.
+        """
+        
+        if self.use_gemini:
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.5,
+                        top_p=0.9,
+                        top_k=40,
+                        max_output_tokens=4096,
+                    )
+                )
+                return response.text
+            except Exception as e:
+                print(f"Error calling Gemini in generate_board_minutes: {e}")
+                
+        return f"ПРОТОКОЛ ЗАСІДАННЯ ПРАВЛІННЯ ОСББ '{profile_name}'\n\nТема: {issue_title}\nОпис: {issue_description}\n\nРезультати голосування:\n" + "\n".join([f"- {v['name']}: {v['vote']} ({v['comment'] or 'без коментарів'})" for v in votes_summary])
+
     def _fallback_chat(self, question: str, profile: Dict, history: Optional[List[Dict]] = None) -> str:
         """Чат без ШІ"""
         question_lower = question.lower()

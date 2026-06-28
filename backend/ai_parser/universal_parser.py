@@ -859,6 +859,24 @@ class UniversalParser:
                     i += 1
 
             if transactions:
+                # Check for garbled text
+                is_garbled = False
+                for tx in transactions[:10]:
+                    purpose = tx.get("purpose", "")
+                    contragent = tx.get("contragent", "")
+                    if any(c in purpose or c in contragent for c in ["Ͳ", "Ҳ", "Ѳ", "ª", "ò", "²", "³", "µ", "¶"]):
+                        is_garbled = True
+                        break
+                    if ", , :" in purpose:
+                        is_garbled = True
+                        break
+                
+                if is_garbled and os.getenv("GEMINI_API_KEY"):
+                    print("[Parser Warning] Garbled characters detected in PDF. Trying Gemini fallback...")
+                    gemini_txs = self._parse_pdf_with_gemini(file_path)
+                    if gemini_txs:
+                        return gemini_txs
+                
                 return transactions
 
             return self._parse_with_ai(file_path, 'Не вдалося витягти транзакції регулярними виразами з PDF')
@@ -1210,6 +1228,14 @@ class UniversalParser:
         (який містить базову евристику для вилучення даних з тексту).
         """
         print(f"[AI Parser Triggered] Причина: {reason}. Файл: {file_path}")
+        
+        # Try Gemini PDF parsing first if key is present
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf" and os.getenv("GEMINI_API_KEY"):
+            print("[AI Parser] Gemini API key found, attempting to parse PDF with Gemini...")
+            gemini_txs = self._parse_pdf_with_gemini(file_path)
+            if gemini_txs:
+                return gemini_txs
         
         # Читаємо текст із файлу
         text_content = ""
@@ -1893,6 +1919,83 @@ class UniversalParser:
                 return first_part.upper()
 
         return "Невідомий Контрагент"
+
+    def _parse_pdf_with_gemini(self, file_path):
+        """Парсинг PDF виписок за допомогою моделі Gemini-2.5-flash (через Google GenAI API)"""
+        import time
+        import json
+        try:
+            import google.generativeai as genai
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                print("[Gemini PDF Parser] API key not found in environment.")
+                return None
+            
+            genai.configure(api_key=api_key)
+            print(f"[Gemini PDF Parser] Uploading file: {file_path}")
+            uploaded_file = genai.upload_file(path=file_path, mime_type="application/pdf")
+            
+            # Wait for processing
+            time.sleep(2)
+            
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            prompt = """
+            Parse this bank statement.
+            Return a JSON object with the following fields:
+            - statement_tax_id: the client's tax ID / ЄДРПОУ / РНОКПП (usually 8 or 10 digits found in header, e.g., 2800003498)
+            - transactions: a list of objects, each representing a transaction with the fields:
+                - date (string in YYYY-MM-DD format)
+                - amount (float, negative for expenses/outflows, positive for incomes/inflows)
+                - purpose (string, description of payment)
+                - contragent (string, counterparty name)
+                - type (string, either 'income' or 'expense')
+                - bank_name (string, always 'ПриватБанк')
+                - taxable (boolean, true by default, false if it's transfer of own funds or refund)
+                - transaction_type (string, 'income' or 'expense')
+                - edrpou (string, tax ID / EDRPOU / RNOKPP if found in counterparty details, otherwise null)
+                - iban (string, IBAN if found in counterparty details, otherwise null)
+            
+            Do not wrap in ```json or any other markdown text, return raw JSON string.
+            """
+            
+            print("[Gemini PDF Parser] Sending request to Gemini model...")
+            response = model.generate_content([uploaded_file, prompt])
+            
+            # Clean up the file
+            try:
+                genai.delete_file(uploaded_file.name)
+            except Exception:
+                pass
+                
+            text = response.text.strip()
+            if text.startswith("```"):
+                lines = text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines).strip()
+                
+            parsed_data = json.loads(text)
+            if isinstance(parsed_data, dict):
+                self.statement_tax_id = parsed_data.get("statement_tax_id")
+                parsed_txs = parsed_data.get("transactions", [])
+                if isinstance(parsed_txs, list):
+                    normalized = []
+                    for tx in parsed_txs:
+                        normalized.append(self._create_transaction_dict(
+                            date=tx.get("date", datetime.now().strftime("%Y-%m-%d")),
+                            amount=float(tx.get("amount", 0)),
+                            purpose=tx.get("purpose", ""),
+                            contragent=tx.get("contragent", ""),
+                            bank_name=tx.get("bank_name", "ПриватБанк")
+                        ))
+                    print(f"[Gemini PDF Parser] Successfully parsed {len(normalized)} transactions.")
+                    return normalized
+        except Exception as e:
+            print(f"[Gemini PDF Parser Error] Failed to parse: {e}")
+            
+        return None
 
 
 

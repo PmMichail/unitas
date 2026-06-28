@@ -855,6 +855,35 @@ export const api = {
     const response = await client.get(`/api/osbb/nearby`, { params: { lat, lon, radius } });
     return response.data;
   },
+
+  getBoardIssues: async (token: string) => {
+    const response = await client.get(`/api/board/issues`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  createBoardIssue: async (token: string, data: { title: string; description?: string }) => {
+    const response = await client.post(`/api/board/issues`, data, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  startBoardVoting: async (token: string, issueId: number) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote-start`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  voteBoardIssue: async (token: string, issueId: number, data: { vote_value: string; comment?: string }) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote`, data, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  endBoardVoting: async (token: string, issueId: number) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote-end`, null, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  signBoardProtocol: async (token: string, issueId: number, data: { password?: string; certificate_id?: number }) => {
+    const response = await client.post(`/api/board/issues/${issueId}/sign`, data, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+  getCertificates: async (profileId?: number) => {
+    const response = await client.get(`/api/certificates`, { params: { profile_id: profileId } });
+    return response.data;
+  },
 };
 
 

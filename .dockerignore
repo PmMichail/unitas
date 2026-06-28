@@ -13,6 +13,7 @@ backend/temp_uploads/
 backend/venv/
 .DS_Store
 mobile/
+frontend/
 scratch/
 unitas.zip
 

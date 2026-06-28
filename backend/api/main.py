@@ -12,7 +12,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, D
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 from io import BytesIO
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 from cryptography.fernet import Fernet
 
 load_dotenv()
@@ -417,6 +420,8 @@ class UnitOrMember(Base):
     share = Column(String(50), nullable=True) # частка власності (e.g. 1/2)
     street = Column(String(150), nullable=True) # Назва вулиці
     number = Column(String(50), nullable=True) # Номер будинку/ділянки
+    is_board_member = Column(Boolean, default=False)
+    is_board_chairman = Column(Boolean, default=False)
 
     profile = relationship("Profile", back_populates="units_or_members")
 
@@ -593,17 +598,26 @@ class BankStatement(Base):
 class ParsedPayment(Base):
     __tablename__ = "parsed_payments"
     id = Column(Integer, primary_key=True, index=True)
-    statement_id = Column(Integer, ForeignKey("bank_statements.id"))
+    statement_id = Column(Integer, ForeignKey("bank_statements.id"), nullable=True)
+    bank_connection_id = Column(Integer, ForeignKey("bank_connections.id"), nullable=True)
     date = Column(Date)
     amount = Column(Float)
     direction = Column(String) # in (надходження), out (витрата)
     purpose = Column(Text)
     contragent = Column(String, nullable=True)
+    balance_after = Column(Float, nullable=True)
     type = Column(String) # income, tax_payment, expense, salary_payment
     tax_type = Column(String, nullable=True) # unified_tax, esv, pit, military_tax, profit_tax, None
     profile_id = Column(Integer, ForeignKey("profiles.id"), nullable=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     member_id = Column(Integer, ForeignKey("units_or_members.id"), nullable=True)
+    external_id = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    match_status = Column(String, default="pending")
+    matched_rule = Column(String, nullable=True)
+    is_auto_synced = Column(Boolean, default=False)
+    sync_batch_id = Column(String, nullable=True)
+    raw_data = Column(Text, nullable=True)
     taxable = Column(Boolean, default=True)
     transaction_type = Column(String, default="income") # 'income', 'expense', 'own_funds', 'refund', 'loan'
     
@@ -680,15 +694,38 @@ class BankConnection(Base):
     __tablename__ = "bank_connections"
     id = Column(Integer, primary_key=True, index=True)
     profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
-    bank_name = Column(String)  # privat, monobank, abank, ukrgas, pumb
+    bank_name = Column(String)
+    bank_code = Column(String, nullable=True)
+    auth_data = Column(Text, nullable=True)
     access_token = Column(Text)
     refresh_token = Column(Text, nullable=True)
     account_id = Column(String)
     account_number = Column(String)
+    status = Column(String, default="active")
     is_active = Column(Boolean, default=True)
     last_sync = Column(DateTime, nullable=True)
+    last_sync_date = Column(DateTime, nullable=True)
+    sync_period_days = Column(Integer, default=1)
+    last_sync_status = Column(String, default="pending")
+    last_sync_message = Column(Text, nullable=True)
+    auto_sync_enabled = Column(Boolean, default=True)
+    sync_time = Column(String, default="06:00")
+    notify_email = Column(Boolean, default=True)
+    notify_push = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+class SyncLog(Base):
+    __tablename__ = "sync_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    bank_connection_id = Column(Integer, ForeignKey("bank_connections.id", ondelete="CASCADE"))
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True)
+    sync_date = Column(DateTime, default=datetime.now)
+    status = Column(String, default="success")
+    transactions_count = Column(Integer, default=0)
+    matched_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    sync_batch_id = Column(String, nullable=True)
 
 class ReportSubmission(Base):
     __tablename__ = "report_submissions"
@@ -909,6 +946,30 @@ class ProfileDocument(Base):
     document_type = Column(String, default="other") # 'minutes', 'budget', 'report', 'extract', 'other'
     description = Column(String, nullable=True)
 
+class BoardIssue(Base):
+    __tablename__ = "board_issues"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String, default="discussion") # discussion, voting, completed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    ai_protocol = Column(Text, nullable=True)
+    is_signed = Column(Boolean, default=False)
+    signed_by = Column(Integer, ForeignKey("units_or_members.id", ondelete="SET NULL"), nullable=True)
+    signature_text = Column(Text, nullable=True)
+    document_id = Column(Integer, ForeignKey("profile_documents.id", ondelete="SET NULL"), nullable=True)
+
+class BoardVote(Base):
+    __tablename__ = "board_votes"
+    id = Column(Integer, primary_key=True, index=True)
+    issue_id = Column(Integer, ForeignKey("board_issues.id", ondelete="CASCADE"))
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"))
+    vote_value = Column(String, nullable=False) # yes, no, abstain
+    voted_at = Column(DateTime, default=datetime.utcnow)
+    comment = Column(Text, nullable=True)
+
 class ResidentNotificationSetting(Base):
     __tablename__ = "resident_notification_settings"
     id = Column(Integer, primary_key=True, index=True)
@@ -1085,6 +1146,27 @@ migrations = [
     "ALTER TABLE profiles ADD COLUMN organization_subtype TEXT DEFAULT NULL",
     "ALTER TABLE profiles ADD COLUMN non_profit_code TEXT DEFAULT NULL",
     "ALTER TABLE parsed_payments ADD COLUMN member_id INTEGER DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN bank_connection_id INTEGER DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN balance_after FLOAT DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN external_id TEXT DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN bank_name TEXT DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN match_status TEXT DEFAULT 'pending'",
+    "ALTER TABLE parsed_payments ADD COLUMN matched_rule TEXT DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN is_auto_synced BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE parsed_payments ADD COLUMN sync_batch_id TEXT DEFAULT NULL",
+    "ALTER TABLE parsed_payments ADD COLUMN raw_data TEXT DEFAULT NULL",
+    "ALTER TABLE bank_connections ADD COLUMN bank_code TEXT DEFAULT NULL",
+    "ALTER TABLE bank_connections ADD COLUMN auth_data TEXT DEFAULT NULL",
+    "ALTER TABLE bank_connections ADD COLUMN status TEXT DEFAULT 'active'",
+    "ALTER TABLE bank_connections ADD COLUMN last_sync_date TIMESTAMP DEFAULT NULL",
+    "ALTER TABLE bank_connections ADD COLUMN sync_period_days INTEGER DEFAULT 1",
+    "ALTER TABLE bank_connections ADD COLUMN last_sync_status TEXT DEFAULT 'pending'",
+    "ALTER TABLE bank_connections ADD COLUMN last_sync_message TEXT DEFAULT NULL",
+    "ALTER TABLE bank_connections ADD COLUMN auto_sync_enabled BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE bank_connections ADD COLUMN sync_time TEXT DEFAULT '06:00'",
+    "ALTER TABLE bank_connections ADD COLUMN notify_email BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE bank_connections ADD COLUMN notify_push BOOLEAN DEFAULT FALSE",
+    "CREATE TABLE IF NOT EXISTS sync_logs (id INTEGER PRIMARY KEY, bank_connection_id INTEGER, profile_id INTEGER, sync_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, status TEXT DEFAULT 'success', transactions_count INTEGER DEFAULT 0, matched_count INTEGER DEFAULT 0, error_message TEXT DEFAULT NULL, sync_batch_id TEXT DEFAULT NULL, FOREIGN KEY(bank_connection_id) REFERENCES bank_connections(id) ON DELETE CASCADE, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
     "ALTER TABLE profile_documents ADD COLUMN is_public_to_residents BOOLEAN DEFAULT FALSE",
     "ALTER TABLE profile_documents ADD COLUMN document_type TEXT DEFAULT 'other'",
     "ALTER TABLE profile_documents ADD COLUMN description TEXT DEFAULT NULL",
@@ -1098,7 +1180,11 @@ migrations = [
     "CREATE TABLE IF NOT EXISTS recreation_bookings (id INTEGER PRIMARY KEY, zone_id INTEGER, member_id INTEGER, booking_date DATE NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL, status TEXT DEFAULT 'pending', total_price FLOAT DEFAULT 0.0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(zone_id) REFERENCES recreation_zones(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS service_orders (id INTEGER PRIMARY KEY, profile_id INTEGER, member_id INTEGER, service_type TEXT NOT NULL, description TEXT NOT NULL, preferred_time TEXT, status TEXT DEFAULT 'new', price FLOAT DEFAULT 0.0, contractor_name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS smart_heating_devices (id INTEGER PRIMARY KEY, member_id INTEGER UNIQUE, room_name TEXT DEFAULT 'Вітальня', current_temperature FLOAT DEFAULT 21.5, target_temperature FLOAT DEFAULT 22.0, mode TEXT DEFAULT 'eco', status TEXT DEFAULT 'idle', last_sync_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
-    "CREATE TABLE IF NOT EXISTS osbb_contacts (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, role TEXT NOT NULL, phone TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
+    "CREATE TABLE IF NOT EXISTS osbb_contacts (id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT NOT NULL, role TEXT NOT NULL, phone TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "ALTER TABLE units_or_members ADD COLUMN is_board_member BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE units_or_members ADD COLUMN is_board_chairman BOOLEAN DEFAULT FALSE",
+    "CREATE TABLE IF NOT EXISTS board_issues (id INTEGER PRIMARY KEY, profile_id INTEGER, title TEXT NOT NULL, description TEXT, status TEXT DEFAULT 'discussion', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, ai_protocol TEXT, is_signed BOOLEAN DEFAULT FALSE, signed_by INTEGER, signature_text TEXT, document_id INTEGER, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS board_votes (id INTEGER PRIMARY KEY, issue_id INTEGER, member_id INTEGER, vote_value TEXT NOT NULL, voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, comment TEXT, FOREIGN KEY(issue_id) REFERENCES board_issues(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)"
 ]
 
 import re
@@ -4603,6 +4689,8 @@ def create_profile_member(
     role: Optional[str] = Form("owner"),
     street: Optional[str] = Form(None),
     number: Optional[str] = Form(None),
+    is_board_member: Optional[bool] = Form(False),
+    is_board_chairman: Optional[bool] = Form(False),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4630,7 +4718,9 @@ def create_profile_member(
         parent_id=parent_id if parent_id != -1 and parent_id != 0 else None,
         role=role or "owner",
         street=street,
-        number=number
+        number=number,
+        is_board_member=is_board_member or False,
+        is_board_chairman=is_board_chairman or False
     )
     db.add(member)
     db.commit()
@@ -4656,6 +4746,8 @@ def update_profile_member(
     role: Optional[str] = Form(None),
     street: Optional[str] = Form(None),
     number: Optional[str] = Form(None),
+    is_board_member: Optional[bool] = Form(None),
+    is_board_chairman: Optional[bool] = Form(None),
     db: Session = Depends(get_db)
 ):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -4705,6 +4797,10 @@ def update_profile_member(
         member.street = street
     if number is not None:
         member.number = number
+    if is_board_member is not None:
+        member.is_board_member = is_board_member
+    if is_board_chairman is not None:
+        member.is_board_chairman = is_board_chairman
         
     db.commit()
     db.refresh(member)
@@ -8421,7 +8517,7 @@ def member_register(
     password: str = Form(...),
     full_name: str = Form(...),
     phone: str = Form(...),
-    email: str = Form(...),
+    email: Optional[str] = Form(None),
     role: Optional[str] = Form("tenant"),
     push_token: Optional[str] = Form(None),
     platform: Optional[str] = Form(None),
@@ -8474,7 +8570,7 @@ def member_register(
         
     # Check if this phone number is already registered to another property in the DB
     clean_phone = phone.strip()
-    clean_email = email.strip().lower()
+    clean_email = email.strip().lower() if email else ""
     if clean_phone:
         existing_phone = db.query(UnitOrMember).filter(
             UnitOrMember.phone == clean_phone,
@@ -8491,7 +8587,7 @@ def member_register(
         member.password_hash = hashed
         member.owner_name = full_name.strip()
         member.phone = clean_phone
-        member.email = clean_email
+        member.email = clean_email or None
         member.status = "pending"
         member.role = "owner"  # Primary must be owner
         member.account_number = f"{slug.upper()}-{matched_identifier}"  # Generate unique account number
@@ -8499,10 +8595,13 @@ def member_register(
         target_member = member
     else:
         # Primary is already registered. Check if there's an existing child record for this phone/email under this parent
+        child_filter = (UnitOrMember.phone == clean_phone)
+        if clean_email:
+            child_filter = child_filter | (UnitOrMember.email == clean_email)
         child = db.query(UnitOrMember).filter(
             UnitOrMember.profile_id == profile.id,
             UnitOrMember.parent_id == member.id,
-            ((UnitOrMember.phone == clean_phone) | (UnitOrMember.email == clean_email))
+            child_filter
         ).first()
         
         if child:
@@ -8511,7 +8610,7 @@ def member_register(
             child.password_hash = hashed
             child.owner_name = full_name.strip()
             child.phone = clean_phone
-            child.email = clean_email
+            child.email = clean_email or None
             child.status = "pending"
             child.role = role_param
             child.account_number = f"{slug.upper()}-{matched_identifier}-{child.id}"
@@ -8688,6 +8787,8 @@ def member_login(
             "owner_name": member.owner_name,
             "balance": member.balance,
             "role": getattr(member, "role", "owner"),
+            "is_board_member": bool(getattr(member, "is_board_member", False)),
+            "is_board_chairman": bool(getattr(member, "is_board_chairman", False)),
             "profile": {
                 "id": profile.id,
                 "name": profile.name,
@@ -9676,6 +9777,8 @@ def get_member_dashboard(auth: dict = Depends(verify_member_token), db: Session 
             "area": member.area,
             "flat_area": member.flat_area or member.area,
             "role": getattr(member, "role", "owner"),
+            "is_board_member": bool(getattr(member, "is_board_member", False)),
+            "is_board_chairman": bool(getattr(member, "is_board_chairman", False)),
             "dues_debt": round(dues_debt, 2)
         },
         "meters": meter_data
@@ -15040,31 +15143,61 @@ async def upload_certificate(
             pkcs12 = crypto.load_pkcs12(file_content, password.encode())
             cert = pkcs12.get_certificate()
             private_key = pkcs12.get_privatekey()
-        except Exception:
-            # Fallback for Ukrainian KEP key formats (.dat, .zs2, etc.) or mock/simulation purposes
-            try:
-                # Generate key pair
-                key = crypto.PKey()
-                key.generate_key(crypto.TYPE_RSA, 2048)
-                
-                # Generate self-signed cert
-                cert = crypto.X509()
-                cert.get_subject().CN = profile.name or "КЕП Власник"
-                cert.get_subject().O = "ФОП" if profile.type == "fop" else "ТОВ"
-                
-                # Set Issuer details
-                cert.get_issuer().CN = "АЦСК ІДД ДПС (Симуляція)"
-                cert.get_issuer().O = "Державна податкова служба України"
-                
-                cert.set_serial_number(1000)
-                cert.gmtime_adj_notBefore(0)
-                cert.gmtime_adj_notAfter(365*24*60*60) # 1 year validity
-                cert.set_pubkey(key)
-                cert.sign(key, 'sha256')
-                
-                private_key = key
-            except Exception as gen_err:
-                raise HTTPException(status_code=400, detail="Невірний пароль або пошкоджений файл КЕП.")
+        except Exception as parse_err:
+            logger.warning(f"[CERT UPLOAD] Failed to parse PKCS12 with OpenSSL: {parse_err}")
+            filename = (cert_file.filename or "").lower()
+            
+            # Try JKS (Java KeyStore) for PrivatBank keys using pyjks
+            if filename.endswith(".jks"):
+                try:
+                    from jks import KeyStore
+                    import io
+                    
+                    ks = KeyStore.loads(file_content, password)
+                    if not ks.private_keys:
+                        raise HTTPException(status_code=400, detail="JKS файл не містить приватних ключів.")
+                    
+                    # Get first private key
+                    alias, sk = list(ks.private_keys.items())[0]
+                    logger.info(f"[CERT UPLOAD] JKS: Found private key alias={alias}, algorithm={sk.algorithm}")
+                    
+                    # Convert to PEM format
+                    if sk.algorithm == "rsa":
+                        from OpenSSL import crypto
+                        private_key_pem = sk.decrypt(password)
+                        private_key = crypto.load_privatekey(crypto.FILETYPE_PEM, private_key_pem)
+                        
+                        # Get certificate
+                        if sk.cert_chain:
+                            cert_pem = sk.cert_chain[0][1]
+                            cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_pem)
+                        else:
+                            raise HTTPException(status_code=400, detail="JKS файл не містить сертифікатів.")
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"JKS файл використовує алгоритм {sk.algorithm}, який не підтримується. Потрібен RSA."
+                        )
+                    
+                    logger.info(f"[CERT UPLOAD] JKS: Successfully loaded certificate and private key")
+                except ImportError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Бібліотека pyjks не встановлена. Виконайте: pip install pyjks"
+                    )
+                except Exception as jks_err:
+                    logger.error(f"[CERT UPLOAD] JKS parsing failed: {jks_err}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Не вдалося прочитати JKS файл: {str(jks_err)}"
+                    )
+            
+            if filename.endswith((".dat", ".zs2")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Цей формат КЕП використовує українські DSTU/GOST алгоритми і не може бути прочитаний стандартним OpenSSL. Потрібна інтеграція з IIT EUSignCP або DSTU/GOST бібліотекою. Сертифікат не збережено."
+                )
+            raise HTTPException(status_code=400, detail="Невірний пароль або пошкоджений файл КЕП.")
         
         # Extract details
         subject = cert.get_subject()
@@ -15140,6 +15273,23 @@ async def upload_certificate(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Помилка обробки сертифіката: {str(e)}")
+
+@app.delete("/api/certificates/{cert_id}")
+def delete_certificate(cert_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
+    if not cert:
+        raise HTTPException(status_code=404, detail="Сертифікат не знайдено")
+    
+    # Authorization check
+    profile = db.query(Profile).filter(Profile.id == cert.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: certificate does not belong to this user")
+    
+    db.delete(cert)
+    db.commit()
+    return {"message": "Сертифікат успішно видалено"}
 
 @app.get("/api/certificates/{profile_id}")
 def get_certificates_by_profile(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -18130,18 +18280,388 @@ def increment_visit_counter(db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success", "visit_count": int(config.value)}
 
+def _safe_json_loads(value: Optional[str]) -> dict:
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+def encrypt_auth_data(data: dict) -> str:
+    return encrypt_token(json.dumps(data or {}, ensure_ascii=False))
+
+
+def decrypt_auth_data(encrypted_value: Optional[str]) -> dict:
+    raw = decrypt_token(encrypted_value or "")
+    return _safe_json_loads(raw)
+
+
+def parse_bank_date(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text_value = str(value or "").strip()
+    for fmt in ["%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%y", "%d/%m/%y"]:
+        try:
+            return datetime.strptime(text_value.split(" ")[0], fmt).date()
+        except Exception:
+            pass
+    parsed = parse_date_opt(text_value)
+    return parsed or date.today()
+
+
+def parse_bank_amount(value) -> float:
+    text_value = str(value or "0").strip().replace("\u00a0", " ").replace(" ", "")
+    if "," in text_value and "." in text_value:
+        text_value = text_value.replace(".", "").replace(",", ".")
+    else:
+        text_value = text_value.replace(",", ".")
+    try:
+        return float(text_value)
+    except Exception:
+        return 0.0
+
+
+def read_statement_dataframe(file_bytes: bytes, filename: str):
+    import pandas as pd
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext == ".csv":
+        for encoding in ["utf-8-sig", "utf-8", "cp1251"]:
+            try:
+                return pd.read_csv(BytesIO(file_bytes), encoding=encoding, sep=None, engine="python")
+            except Exception:
+                continue
+        raise HTTPException(status_code=400, detail="Не вдалося прочитати CSV файл")
+    if ext in [".xlsx", ".xls"]:
+        return pd.read_excel(BytesIO(file_bytes))
+    if ext == ".dbf":
+        try:
+            from dbfread import DBF
+        except Exception:
+            raise HTTPException(status_code=400, detail="DBF імпорт недоступний: встановіть залежність dbfread")
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dbf") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        try:
+            records = list(DBF(tmp_path, encoding="cp1251", ignore_missing_memofile=True))
+            return pd.DataFrame(records)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+    raise HTTPException(status_code=400, detail="Підтримуються тільки CSV, XLSX, XLS та DBF")
+
+
+def preview_statement_columns(file_bytes: bytes, filename: str) -> dict:
+    df = read_statement_dataframe(file_bytes, filename)
+    df = df.fillna("")
+    rows = df.head(5).to_dict(orient="records")
+    return {"columns": [str(c) for c in df.columns], "preview": rows, "rows_count": int(len(df))}
+
+
+def find_matching_member(profile_id: int, description: str, counterparty: str, db: Session):
+    search_text = f"{description or ''} {counterparty or ''}".lower()
+    if not search_text.strip():
+        return None
+    members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id).all()
+    for member in members:
+        identifier = str(getattr(member, "identifier", "") or "").strip().lower()
+        owner_name = str(getattr(member, "owner_name", "") or "").strip().lower()
+        if identifier and identifier in search_text:
+            return member
+        if owner_name and owner_name in search_text:
+            return member
+    return None
+
+
+class BankSetupRequest(BaseModel):
+    profile_id: int
+    bank_code: str
+    auth_data: dict = {}
+    account_id: Optional[str] = None
+    account_number: Optional[str] = None
+
+
+class MonobankSetupRequest(BaseModel):
+    profile_id: int
+    token: str
+    account_id: Optional[str] = None
+    account_number: Optional[str] = None
+
+
+class BankSyncSettingsRequest(BaseModel):
+    connection_id: int
+    auto_sync_enabled: bool = True
+    sync_period_days: int = 1
+    sync_time: str = "06:00"
+    notify_email: bool = True
+    notify_push: bool = False
+
+
 @app.get("/api/banks")
 async def list_banks():
     """Get list of available banks"""
+    bank_items = [
+        {"id": "privat", "name": "ПриватБанк", "mode": "api"},
+        {"id": "monobank", "name": "Monobank", "mode": "api"},
+        {"id": "oshad", "name": "Ощадбанк", "mode": "manual"},
+        {"id": "abank", "name": "А-Банк", "mode": "api"},
+        {"id": "other", "name": "Інший банк", "mode": "manual"},
+    ]
+    return {"banks": bank_items}
+
+@app.post("/api/banks/setup")
+async def setup_bank_connection(req: BankSetupRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+
+    bank_code = req.bank_code.strip().lower()
+    bank_name_map = {
+        "privat": "ПриватБанк",
+        "monobank": "Monobank",
+        "oshad": "Ощадбанк",
+        "abank": "А-Банк",
+        "other": "Інший банк",
+    }
+    auth_data = dict(req.auth_data or {})
+    raw_token = auth_data.get("token") or auth_data.get("access_token") or ""
+    existing = db.query(BankConnection).filter(
+        BankConnection.profile_id == req.profile_id,
+        BankConnection.bank_name == bank_code
+    ).first()
+    if existing:
+        existing.bank_code = bank_code
+        existing.auth_data = encrypt_auth_data(auth_data)
+        existing.access_token = encrypt_token(raw_token) if raw_token else existing.access_token
+        existing.account_id = req.account_id or existing.account_id
+        existing.account_number = req.account_number or existing.account_number
+        existing.status = "active"
+        existing.is_active = True
+        existing.updated_at = datetime.now()
+        connection = existing
+    else:
+        connection = BankConnection(
+            profile_id=req.profile_id,
+            bank_name=bank_code,
+            bank_code=bank_code,
+            auth_data=encrypt_auth_data(auth_data),
+            access_token=encrypt_token(raw_token) if raw_token else "",
+            account_id=req.account_id or "manual",
+            account_number=req.account_number or "",
+            status="active",
+            is_active=True
+        )
+        db.add(connection)
+    db.commit()
+    db.refresh(connection)
     return {
-        "banks": [
+        "status": "success",
+        "connection": {
+            "id": connection.id,
+            "bank_code": bank_code,
+            "bank_display_name": bank_name_map.get(bank_code, bank_code),
+            "account_number": connection.account_number,
+            "last_sync": connection.last_sync.isoformat() if connection.last_sync else None
+        }
+    }
+
+@app.post("/api/monobank/setup")
+async def setup_monobank(req: MonobankSetupRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    return await setup_bank_connection(
+        BankSetupRequest(
+            profile_id=req.profile_id,
+            bank_code="monobank",
+            auth_data={"token": req.token},
+            account_id=req.account_id,
+            account_number=req.account_number
+        ),
+        user_id=user_id,
+        db=db
+    )
+
+@app.post("/api/privetbank/setup")
+@app.post("/api/privatbank/setup")
+async def setup_privatbank(req: BankSetupRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    req.bank_code = "privat"
+    return await setup_bank_connection(req, user_id=user_id, db=db)
+
+@app.post("/api/banks/statements/preview")
+async def preview_bank_statement(
+    profile_id: int = Form(...),
+    bank_code: str = Form("other"),
+    file: UploadFile = File(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    content = await file.read()
+    result = preview_statement_columns(content, file.filename or "statement")
+    result["bank_code"] = bank_code
+    result["filename"] = file.filename
+    return result
+
+@app.post("/api/banks/statements/import")
+async def import_bank_statement_mapped(
+    profile_id: int = Form(...),
+    bank_code: str = Form("other"),
+    mapping_json: str = Form(...),
+    file: UploadFile = File(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+
+    mapping = _safe_json_loads(mapping_json)
+    if not mapping.get("date") or not mapping.get("amount"):
+        raise HTTPException(status_code=400, detail="Для імпорту потрібно вказати колонки дати та суми")
+
+    file_bytes = await file.read()
+    file_hash = hashlib.md5(file_bytes).hexdigest()
+    existing_statement = db.query(BankStatement).filter(BankStatement.file_hash == file_hash).first()
+    if existing_statement:
+        return {"status": "exists", "message": "Цю виписку вже імпортовано", "statement_id": existing_statement.id, "imported_count": 0}
+
+    bank_display = {"privat": "ПриватБанк", "monobank": "Monobank", "oshad": "Ощадбанк", "abank": "А-Банк", "other": "Інший банк"}.get(bank_code, bank_code)
+    statement = BankStatement(
+        company_id=profile_id,
+        profile_id=profile_id,
+        file_name=file.filename or "statement",
+        file_hash=file_hash,
+        bank_name=bank_display,
+        uploaded_at=date.today(),
+        status="parsed"
+    )
+    db.add(statement)
+    db.flush()
+
+    connection = db.query(BankConnection).filter(
+        BankConnection.profile_id == profile_id,
+        BankConnection.bank_name == bank_code,
+        BankConnection.is_active == True
+    ).first()
+
+    df = read_statement_dataframe(file_bytes, file.filename or "statement").fillna("")
+    imported_count = 0
+    matched_count = 0
+    for _, row in df.iterrows():
+        row_dict = {str(k): (v.item() if hasattr(v, "item") else v) for k, v in row.to_dict().items()}
+        date_val = parse_bank_date(row_dict.get(mapping.get("date")))
+        amount_val = parse_bank_amount(row_dict.get(mapping.get("amount")))
+        if amount_val == 0:
+            continue
+        description = str(row_dict.get(mapping.get("description"), "") or "")
+        counterparty = str(row_dict.get(mapping.get("counterparty"), "") or "")
+        balance_after = parse_bank_amount(row_dict.get(mapping.get("balance_after"))) if mapping.get("balance_after") else None
+        member = find_matching_member(profile_id, description, counterparty, db)
+        direction = "in" if amount_val >= 0 else "out"
+        payment = ParsedPayment(
+            statement_id=statement.id,
+            bank_connection_id=connection.id if connection else None,
+            profile_id=profile_id,
+            date=date_val,
+            amount=abs(amount_val),
+            direction=direction,
+            purpose=description,
+            contragent=counterparty,
+            balance_after=balance_after,
+            type="income" if direction == "in" else "expense",
+            transaction_type="income" if direction == "in" else "expense",
+            member_id=member.id if member else None,
+            match_status="matched" if member else "pending",
+            bank_name=bank_code,
+            external_id=f"{file_hash}_{imported_count}",
+            raw_data=json.dumps(row_dict, ensure_ascii=False, default=str)
+        )
+        db.add(payment)
+        imported_count += 1
+        if member:
+            matched_count += 1
+
+    statement.status = "parsed" if imported_count else "failed"
+    db.commit()
+    return {
+        "status": "success",
+        "statement_id": statement.id,
+        "imported_count": imported_count,
+        "matched_count": matched_count,
+        "bank_name": bank_display,
+        "message": f"Імпортовано {imported_count} транзакцій, зіставлено {matched_count}"
+    }
+
+@app.get("/api/banks/statements")
+async def get_bank_statements_journal(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    statements = db.query(BankStatement).filter(BankStatement.profile_id == profile_id).order_by(BankStatement.uploaded_at.desc(), BankStatement.id.desc()).all()
+    return {
+        "statements": [
             {
-                "id": bank_id,
-                "name": bank["name"]
+                "id": s.id,
+                "file_name": s.file_name,
+                "bank_name": s.bank_name,
+                "uploaded_at": s.uploaded_at.isoformat() if s.uploaded_at else None,
+                "status": s.status,
+                "transactions_count": len(s.payments or [])
             }
-            for bank_id, bank in BANKS.items()
+            for s in statements
         ]
     }
+
+@app.delete("/api/banks/statements/{statement_id}")
+async def delete_bank_statement(statement_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    statement = db.query(BankStatement).filter(BankStatement.id == statement_id).first()
+    if not statement:
+        raise HTTPException(status_code=404, detail="Виписку не знайдено")
+    
+    # Optional authorization check
+    if user_id is not None:
+        profile = db.query(Profile).filter(Profile.id == statement.profile_id).first()
+        if profile and profile.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Доступ заборонено")
+            
+    # 1. Fetch all associated parsed payments
+    payments = db.query(ParsedPayment).filter(ParsedPayment.statement_id == statement_id).all()
+    
+    # 2. Revert member balances for matched payments
+    for payment in payments:
+        if payment.member_id is not None:
+            member = db.query(UnitOrMember).filter(UnitOrMember.id == payment.member_id).first()
+            if member:
+                member.balance -= payment.amount
+                db.add(member)
+                
+    # 3. Delete the parsed payments
+    db.query(ParsedPayment).filter(ParsedPayment.statement_id == statement_id).delete(synchronize_session=False)
+    
+    # 4. Delete the bank statement record itself
+    db.delete(statement)
+    db.commit()
+    
+    return {"message": "Виписку та її транзакції успішно видалено"}
+
+@app.get("/api/privetbank/statement")
+@app.get("/api/privatbank/statement")
+async def get_privatbank_statement(profile_id: int, start_date: Optional[str] = None, end_date: Optional[str] = None, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    return await sync_bank("privat", profile_id=profile_id, user_id=user_id, db=db)
 
 @app.get("/api/banks/{bank_name}/auth-url")
 async def get_bank_auth_url(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -18195,8 +18715,8 @@ async def bank_oauth_callback(bank_name: str, code: str, state: str, db: Session
         ).first()
         
         if existing:
-            existing.access_token = tokens['access_token']
-            existing.refresh_token = tokens.get('refresh_token')
+            existing.access_token = encrypt_token(tokens['access_token'])
+            existing.refresh_token = encrypt_token(tokens.get('refresh_token') or '')
             existing.account_id = accounts[0]['id']
             existing.account_number = accounts[0]['number']
             existing.is_active = True
@@ -18205,8 +18725,8 @@ async def bank_oauth_callback(bank_name: str, code: str, state: str, db: Session
             connection = BankConnection(
                 profile_id=profile_id,
                 bank_name=bank_name,
-                access_token=tokens['access_token'],
-                refresh_token=tokens.get('refresh_token'),
+                access_token=encrypt_token(tokens['access_token']),
+                refresh_token=encrypt_token(tokens.get('refresh_token') or ''),
                 account_id=accounts[0]['id'],
                 account_number=accounts[0]['number'],
                 is_active=True
@@ -18247,7 +18767,16 @@ async def get_bank_connections(profile_id: int, user_id: Optional[int] = None, d
                 "bank_name": conn.bank_name,
                 "bank_display_name": BANKS.get(conn.bank_name, {}).get("name", conn.bank_name),
                 "account_number": conn.account_number,
+                "status": conn.status,
+                "auto_sync_enabled": conn.auto_sync_enabled,
+                "sync_period_days": conn.sync_period_days,
+                "sync_time": conn.sync_time,
+                "notify_email": conn.notify_email,
+                "notify_push": conn.notify_push,
                 "last_sync": conn.last_sync.isoformat() if conn.last_sync else None,
+                "last_sync_date": conn.last_sync_date.isoformat() if conn.last_sync_date else None,
+                "last_sync_status": conn.last_sync_status,
+                "last_sync_message": conn.last_sync_message,
                 "created_at": conn.created_at.isoformat()
             }
             for conn in connections
@@ -18256,69 +18785,110 @@ async def get_bank_connections(profile_id: int, user_id: Optional[int] = None, d
 
 @app.post("/api/banks/{bank_name}/sync")
 async def sync_bank(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """Force sync bank transactions"""
-    if bank_name not in BANKS:
-        raise HTTPException(status_code=400, detail=f"Unknown bank: {bank_name}")
-    
-    # Authorization check
+    if bank_name not in ["monobank", "privat", "abank"]:
+        raise HTTPException(status_code=400, detail="Автоматична синхронізація підтримується тільки для Monobank, ПриватБанку та А-Банку")
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
-    
-    # Get connection
     conn = db.query(BankConnection).filter(
         BankConnection.profile_id == profile_id,
         BankConnection.bank_name == bank_name,
         BankConnection.is_active == True
     ).first()
-    
     if not conn:
         raise HTTPException(status_code=404, detail="Bank not connected")
-    
     try:
-        # Get transactions
-        from_date = conn.last_sync if conn.last_sync else datetime.now() - timedelta(days=30)
-        transactions = await bank_oauth_service.get_bank_transactions(
-            bank_name,
-            conn.access_token,
-            conn.account_id,
-            from_date=from_date
-        )
-        
-        # Save transactions as ParsedPayment
-        for tx in transactions:
-            # Check if transaction already exists
-            existing = db.query(ParsedPayment).filter(
-                ParsedPayment.external_id == tx['id'],
-                ParsedPayment.bank_name == bank_name
-            ).first()
-            
-            if not existing:
-                parsed_payment = ParsedPayment(
-                    profile_id=profile_id,
-                    date=datetime.fromisoformat(tx['date']).date(),
-                    amount=abs(tx['amount']),
-                    purpose=tx.get('purpose', ''),
-                    type='income' if tx['amount'] > 0 else 'expense',
-                    external_id=tx['id'],
-                    bank_name=bank_name
-                )
-                db.add(parsed_payment)
-        
-        # Update last sync
-        conn.last_sync = datetime.now()
-        db.commit()
-        
-        return {
-            "synced": len(transactions),
-            "last_sync": datetime.now().isoformat()
-        }
-    
+        from services.bank_sync_service import bank_sync_service
+        return await bank_sync_service.sync_single_bank_by_id(conn.id)
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
+
+@app.post("/api/banks/sync-all")
+async def sync_all_bank_connections():
+    from services.bank_sync_service import bank_sync_service
+    return await bank_sync_service.sync_all_banks()
+
+@app.get("/api/banks/sync/status")
+async def get_bank_sync_status(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if user_id is not None and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    connections = db.query(BankConnection).filter(BankConnection.profile_id == profile_id, BankConnection.is_active == True).all()
+    unmatched = db.query(ParsedPayment).filter(
+        ParsedPayment.profile_id == profile_id,
+        ParsedPayment.is_auto_synced == True,
+        ParsedPayment.match_status == "pending"
+    ).order_by(ParsedPayment.date.desc()).limit(10).all()
+    logs = db.query(SyncLog).filter(SyncLog.profile_id == profile_id).order_by(SyncLog.sync_date.desc()).limit(10).all()
+    return {
+        "connections": [
+            {
+                "id": c.id,
+                "bank_name": c.bank_name,
+                "bank_display_name": BANKS.get(c.bank_name, {}).get("name", c.bank_name),
+                "auto_sync_enabled": c.auto_sync_enabled,
+                "sync_period_days": c.sync_period_days,
+                "sync_time": c.sync_time,
+                "notify_email": c.notify_email,
+                "notify_push": c.notify_push,
+                "last_sync_date": c.last_sync_date.isoformat() if c.last_sync_date else None,
+                "last_sync_status": c.last_sync_status,
+                "last_sync_message": c.last_sync_message,
+            }
+            for c in connections
+        ],
+        "unmatched_transactions": [
+            {
+                "id": tx.id,
+                "date": tx.date.isoformat() if tx.date else None,
+                "amount": tx.amount,
+                "purpose": tx.purpose,
+                "contragent": tx.contragent,
+                "bank_name": tx.bank_name
+            }
+            for tx in unmatched
+        ],
+        "sync_logs": [
+            {
+                "id": log.id,
+                "connection_id": log.bank_connection_id,
+                "sync_date": log.sync_date.isoformat() if log.sync_date else None,
+                "status": log.status,
+                "transactions_count": log.transactions_count,
+                "matched_count": log.matched_count,
+                "error_message": log.error_message,
+                "sync_batch_id": log.sync_batch_id
+            }
+            for log in logs
+        ]
+    }
+
+@app.get("/api/banks/debug/privatbank")
+async def get_privatbank_debug_log():
+    """Get last PrivatBank API debug log for diagnostics"""
+    from services.bank_oauth import privatbank_debug_log
+    return {"debug_log": privatbank_debug_log}
+
+@app.post("/api/banks/sync/settings")
+async def update_bank_sync_settings(req: BankSyncSettingsRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    conn = db.query(BankConnection).filter(BankConnection.id == req.connection_id).first()
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    profile = db.query(Profile).filter(Profile.id == conn.profile_id).first()
+    if user_id is not None and profile and profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    conn.auto_sync_enabled = req.auto_sync_enabled
+    conn.sync_period_days = max(1, min(30, int(req.sync_period_days or 1)))
+    conn.sync_time = req.sync_time or "06:00"
+    conn.notify_email = req.notify_email
+    conn.notify_push = req.notify_push
+    conn.updated_at = datetime.now()
+    db.commit()
+    return {"status": "success"}
 
 @app.delete("/api/banks/{bank_name}/disconnect")
 async def disconnect_bank(bank_name: str, profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -18483,16 +19053,46 @@ async def upload_dps_statement(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Помилка обробки виписки ДПС: {str(e)}")
 
+@app.post("/api/dps/fetch")
+async def fetch_dps_data(req: CheckDebtRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Proxy endpoint for /api/dps/fetch-detailed"""
+    return await fetch_detailed_dps_data(req, user_id, db)
+
+@app.post("/api/dps/fetch-real")
+async def fetch_real_dps_data(req: CheckDebtRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Proxy endpoint for /api/dps/fetch-detailed"""
+    return await fetch_detailed_dps_data(req, user_id, db)
+
 @app.post("/api/dps/fetch-detailed")
 async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    logger.info(f"[DPS FETCH] Request for profile_id={req.profile_id}")
+    
     profile = db.query(Profile).filter(Profile.id == req.profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
     
+    logger.info(f"[DPS FETCH] Profile found: id={profile.id}, name={profile.name}, tax_id={profile.tax_id}")
+    
     # Authorization check
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
     setting = db.query(TaxApiSetting).filter(TaxApiSetting.profile_id == req.profile_id).first()
+    has_token = setting and setting.api_token
+    logger.info(f"[DPS FETCH] Tax API setting: has_setting={setting is not None}, has_token={has_token}")
+    
+    # Check for KEP
+    from api.main import Certificate
+    cert = db.query(Certificate).filter(
+        Certificate.profile_id == req.profile_id,
+        Certificate.is_active == True,
+        Certificate.private_key_encrypted != None
+    ).first()
+    has_kep = cert is not None
+    logger.info(f"[DPS FETCH] KEP certificate: has_kep={has_kep}")
+    
+    if not has_kep and not has_token:
+        logger.error(f"[DPS FETCH] No KEP and no token for profile_id={req.profile_id}")
     
     try:
         from services.tax_api_service import TaxAPIService
@@ -18508,18 +19108,21 @@ async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] 
         )
         table = parse_settlement_table(detailed_data)
         if table:
+            logger.info(f"[DPS FETCH] Successfully retrieved data: {len(table)} rows")
             return format_dps_settlement_response(table, "ДПС API (детальна таблиця)")
     except Exception as e:
-        logger.warning(f"DPS API automatic query failed: {e}")
+        logger.warning(f"[DPS FETCH] DPS API automatic query failed: {e}")
     
     # Fallback to manual upload
     manual_table = get_latest_manual_dps_table(req.profile_id, db)
     if manual_table:
+        logger.info(f"[DPS FETCH] Using manual upload fallback: {len(manual_table)} rows")
         response = format_dps_settlement_response(manual_table, "Остання завантажена вручну виписка ДПС")
         response["warning"] = "Автоматичний запит до ДПС не спрацював. Показано останню завантажену вручну виписку."
         return response
     
     # No data available
+    logger.error(f"[DPS FETCH] No data available for profile_id={req.profile_id}")
     return {
         "error": "Немає даних. Завантажте виписку ДПС вручну або додайте КЕП-ключ для автоматичного запиту.",
         "settlements": [],
@@ -20118,6 +20721,265 @@ def create_subscription(req: CreateSubscriptionPlanRequest, user_id: Optional[in
         "member_profile_id": profile.id,
         "member_login_url": f"{frontend_url}/osbb/{slug}"
     }
+
+@app.get("/api/banks/debug/abank")
+async def get_abank_debug_log():
+    from services.bank_oauth import _abank_debug_log
+    return {"debug_log": _abank_debug_log}
+
+
+# --- Board of Directors (Правління) Endpoints ---
+
+class CreateBoardIssueRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+class VoteBoardIssueRequest(BaseModel):
+    vote_value: str # 'yes', 'no', 'abstain'
+    comment: Optional[str] = None
+
+class SignBoardProtocolRequest(BaseModel):
+    password: Optional[str] = None
+    certificate_id: Optional[int] = None
+
+@app.get("/api/board/issues")
+def list_board_issues(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+        
+    issues = db.query(BoardIssue).filter(BoardIssue.profile_id == profile_id).order_by(BoardIssue.id.desc()).all()
+    
+    # Enrich with votes info
+    res = []
+    for issue in issues:
+        votes = db.query(BoardVote).filter(BoardVote.issue_id == issue.id).all()
+        # Count stats
+        yes_count = sum(1 for v in votes if v.vote_value == "yes")
+        no_count = sum(1 for v in votes if v.vote_value == "no")
+        abstain_count = sum(1 for v in votes if v.vote_value == "abstain")
+        
+        my_vote = db.query(BoardVote).filter(BoardVote.issue_id == issue.id, BoardVote.member_id == member.id).first()
+        my_vote_data = {
+            "vote_value": my_vote.vote_value,
+            "comment": my_vote.comment,
+            "voted_at": my_vote.voted_at.isoformat()
+        } if my_vote else None
+        
+        # Details of other votes for transparency
+        detailed_votes = []
+        for v in votes:
+            v_member = db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first()
+            detailed_votes.append({
+                "member_name": v_member.owner_name if v_member else "Невідомий член правління",
+                "vote_value": v.vote_value,
+                "comment": v.comment,
+                "voted_at": v.voted_at.isoformat()
+            })
+            
+        res.append({
+            "id": issue.id,
+            "title": issue.title,
+            "description": issue.description,
+            "status": issue.status,
+            "created_at": issue.created_at.isoformat(),
+            "updated_at": issue.updated_at.isoformat(),
+            "ai_protocol": issue.ai_protocol,
+            "is_signed": bool(issue.is_signed),
+            "signed_by": issue.signed_by,
+            "signature_text": issue.signature_text,
+            "document_id": issue.document_id,
+            "stats": {
+                "yes": yes_count,
+                "no": no_count,
+                "abstain": abstain_count,
+                "total": len(votes)
+            },
+            "my_vote": my_vote_data,
+            "detailed_votes": detailed_votes
+        })
+    return res
+
+@app.post("/api/board/issues")
+def create_board_issue(req: CreateBoardIssueRequest, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+    if not getattr(member, "is_board_chairman", False):
+        raise HTTPException(status_code=403, detail="Лише голова правління може створювати питання для обговорення")
+        
+    issue = BoardIssue(
+        profile_id=profile_id,
+        title=req.title.strip(),
+        description=req.description.strip() if req.description else "",
+        status="discussion"
+    )
+    db.add(issue)
+    db.commit()
+    db.refresh(issue)
+    return {"status": "success", "id": issue.id}
+
+@app.post("/api/board/issues/{issue_id}/vote-start")
+def start_board_voting(issue_id: int, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+    if not getattr(member, "is_board_chairman", False):
+        raise HTTPException(status_code=403, detail="Лише голова правління може запускати голосування")
+        
+    issue = db.query(BoardIssue).filter(BoardIssue.id == issue_id, BoardIssue.profile_id == profile_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Питання не знайдено")
+        
+    if issue.status != "discussion":
+        raise HTTPException(status_code=400, detail="Голосування можна запустити лише з етапу обговорення")
+        
+    issue.status = "voting"
+    issue.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success", "id": issue.id}
+
+@app.post("/api/board/issues/{issue_id}/vote")
+def vote_board_issue(issue_id: int, req: VoteBoardIssueRequest, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+        
+    issue = db.query(BoardIssue).filter(BoardIssue.id == issue_id, BoardIssue.profile_id == profile_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Питання не знайдено")
+        
+    if issue.status != "voting":
+        raise HTTPException(status_code=400, detail="Голосування неактивне для цього питання")
+        
+    if req.vote_value not in ("yes", "no", "abstain"):
+        raise HTTPException(status_code=400, detail="Некоректний голос")
+        
+    # Check if already voted
+    existing_vote = db.query(BoardVote).filter(BoardVote.issue_id == issue_id, BoardVote.member_id == member.id).first()
+    if existing_vote:
+        existing_vote.vote_value = req.vote_value
+        existing_vote.comment = req.comment.strip() if req.comment else None
+        existing_vote.voted_at = datetime.utcnow()
+    else:
+        vote = BoardVote(
+            issue_id=issue_id,
+            member_id=member.id,
+            vote_value=req.vote_value,
+            comment=req.comment.strip() if req.comment else None
+        )
+        db.add(vote)
+        
+    db.commit()
+    return {"status": "success"}
+
+@app.post("/api/board/issues/{issue_id}/vote-end")
+async def end_board_voting(issue_id: int, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+    if not getattr(member, "is_board_chairman", False):
+        raise HTTPException(status_code=403, detail="Лише голова правління може завершувати голосування")
+        
+    issue = db.query(BoardIssue).filter(BoardIssue.id == issue_id, BoardIssue.profile_id == profile_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Питання не знайдено")
+        
+    if issue.status != "voting":
+        raise HTTPException(status_code=400, detail="Тільки активне голосування можна завершити")
+        
+    # Collect votes details for AI prompt
+    votes = db.query(BoardVote).filter(BoardVote.issue_id == issue_id).all()
+    votes_summary = []
+    for v in votes:
+        v_member = db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first()
+        votes_summary.append({
+            "name": v_member.owner_name if v_member else "Член правління",
+            "vote": "За" if v.vote_value == "yes" else "Проти" if v.vote_value == "no" else "Утримався",
+            "comment": v.comment or ""
+        })
+        
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    profile_name = profile.name if profile else "ОСББ"
+    
+    # Generate protocol with AI
+    from services.ai_service import ai_service
+    protocol_text = await ai_service.generate_board_minutes(
+        issue_title=issue.title,
+        issue_description=issue.description or "",
+        votes_summary=votes_summary,
+        profile_name=profile_name
+    )
+    
+    issue.status = "completed"
+    issue.ai_protocol = protocol_text
+    issue.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"status": "success", "protocol": protocol_text}
+
+@app.post("/api/board/issues/{issue_id}/sign")
+def sign_board_protocol(issue_id: int, req: SignBoardProtocolRequest, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    
+    if not getattr(member, "is_board_member", False):
+        raise HTTPException(status_code=403, detail="Доступ дозволено тільки членам правління")
+    if not getattr(member, "is_board_chairman", False):
+        raise HTTPException(status_code=403, detail="Лише голова правління може підписувати протокол")
+        
+    issue = db.query(BoardIssue).filter(BoardIssue.id == issue_id, BoardIssue.profile_id == profile_id).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Питання не знайдено")
+        
+    if issue.status != "completed":
+        raise HTTPException(status_code=400, detail="Можна підписувати лише завершені питання з протоколом")
+        
+    if issue.is_signed:
+        raise HTTPException(status_code=400, detail="Протокол вже підписано")
+        
+    # Check signature details
+    sig_metadata = f"Підпис КЕП Голови правління: {member.owner_name}\nДата підпису: {datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}"
+    if req.certificate_id:
+        cert = db.query(Certificate).filter(Certificate.id == req.certificate_id, Certificate.profile_id == profile_id).first()
+        if cert:
+            sig_metadata += f"\nСертифікат: {cert.cert_owner_name}, Серійний №: {cert.cert_serial}"
+            
+    signed_protocol = (issue.ai_protocol or "") + f"\n\n=========================================\n{sig_metadata}\n========================================="
+    
+    # Save signature info on issue
+    issue.is_signed = True
+    issue.signed_by = member.id
+    issue.signature_text = sig_metadata
+    
+    # Save to ProfileDocument
+    doc = ProfileDocument(
+        profile_id=profile_id,
+        filename=f"Протокол_правління_{issue_id}.txt",
+        content_type="text/plain",
+        file_content=signed_protocol.encode('utf-8'),
+        is_public_to_residents=True,
+        document_type="minutes",
+        description=f"Протокол засідання правління на тему: {issue.title}. Підписано головою правління."
+    )
+    db.add(doc)
+    db.flush()
+    
+    issue.document_id = doc.id
+    db.commit()
+    
+    return {"status": "success", "document_id": doc.id}
+
 
 
 

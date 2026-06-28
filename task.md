@@ -81,3 +81,11 @@
 - [x] Deploy backend and frontend updates to Fly.io production
 - [x] Verify remote signature parameters and layout flow
 
+## Dashboard Modals Redesign
+- [ ] Refactor `globals.css` to clean up forced modal borders and text-white overrides
+- [ ] Implement premium, responsive, clean modal components in `frontend/app/dashboard/page.tsx`
+- [ ] Verify local Next.js build passes cleanly without compilation errors
+- [ ] Deploy updated frontend to Fly.io production
+- [ ] Verify the live site modal visual styling and theme switching
+
+

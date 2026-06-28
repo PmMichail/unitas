@@ -67,7 +67,7 @@ export default function ResidentDashboard() {
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Modal selector state
-  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | 'billing_history' | null>(null);
+  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | 'billing_history' | 'board' | null>(null);
 
   // 1. Documents Modal states
   const [documents, setDocuments] = useState<any[]>([]);
@@ -115,6 +115,18 @@ export default function ResidentDashboard() {
   // 6. Contacts Modal states
   const [contacts, setContacts] = useState<any[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
+
+  // 7. Board Workspace states
+  const [boardIssues, setBoardIssues] = useState<any[]>([]);
+  const [loadingBoard, setLoadingBoard] = useState(false);
+  const [isCreatingIssue, setIsCreatingIssue] = useState(false);
+  const [newIssueTitle, setNewIssueTitle] = useState('');
+  const [newIssueDesc, setNewIssueDesc] = useState('');
+  const [voteComments, setVoteComments] = useState<Record<number, string>>({});
+  const [isSigningIssueId, setIsSigningIssueId] = useState<number | null>(null);
+  const [signCertId, setSignCertId] = useState<number | null>(null);
+  const [signPassword, setSignPassword] = useState('');
+  const [certificates, setCertificates] = useState<any[]>([]);
 
   const loadDashboardData = async () => {
     if (!memberToken) return;
@@ -525,6 +537,131 @@ export default function ResidentDashboard() {
     }
   };
 
+  // --- 7. BOARD OF DIRECTORS WORKSPACE ACTIONS ---
+  const fetchBoardIssuesInternal = async () => {
+    try {
+      const list = await api.getBoardIssues(memberToken!);
+      setBoardIssues(list || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const openBoardWorkspace = async () => {
+    setActiveModal('board');
+    setLoadingBoard(true);
+    try {
+      await fetchBoardIssuesInternal();
+      if (data?.profile?.id) {
+        const certs = await api.getCertificates(data.profile.id);
+        setCertificates(certs || []);
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося завантажити робочий простір правління');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
+  const handleCreateIssue = async () => {
+    if (!newIssueTitle.trim()) {
+      Alert.alert('Помилка', 'Введіть тему питання');
+      return;
+    }
+    setLoadingBoard(true);
+    try {
+      await api.createBoardIssue(memberToken!, {
+        title: newIssueTitle.trim(),
+        description: newIssueDesc.trim() || undefined
+      });
+      setNewIssueTitle('');
+      setNewIssueDesc('');
+      setIsCreatingIssue(false);
+      await fetchBoardIssuesInternal();
+      Alert.alert('Успіх', 'Питання створено для обговорення');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося створити питання');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
+  const handleStartVoting = async (issueId: number) => {
+    setLoadingBoard(true);
+    try {
+      await api.startBoardVoting(memberToken!, issueId);
+      await fetchBoardIssuesInternal();
+      Alert.alert('Голосування', 'Голосування запущено для цього питання');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося запустити голосування');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
+  const handleVote = async (issueId: number, value: string) => {
+    const comment = voteComments[issueId] || '';
+    setLoadingBoard(true);
+    try {
+      await api.voteBoardIssue(memberToken!, issueId, {
+        vote_value: value,
+        comment: comment.trim() || undefined
+      });
+      await fetchBoardIssuesInternal();
+      Alert.alert('Голос', 'Ваш голос успішно враховано');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося проголосувати');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
+  const handleEndVoting = async (issueId: number) => {
+    setLoadingBoard(true);
+    try {
+      await api.endBoardVoting(memberToken!, issueId);
+      await fetchBoardIssuesInternal();
+      Alert.alert('Голосування', 'Голосування завершено, сформовано протокол ШІ');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося завершити голосування');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
+  const handleSignProtocol = async () => {
+    if (!isSigningIssueId) return;
+    setLoadingBoard(true);
+    try {
+      await api.signBoardProtocol(memberToken!, isSigningIssueId, {
+        password: signPassword || undefined,
+        certificate_id: signCertId || undefined
+      });
+      setIsSigningIssueId(null);
+      setSignCertId(null);
+      setSignPassword('');
+      await fetchBoardIssuesInternal();
+      
+      // Reload documents
+      if (memberToken) {
+        const docs = await api.getMemberDocuments(memberToken);
+        setDocuments(docs || []);
+      }
+      
+      Alert.alert('Підпис', 'Протокол успішно підписано та опубліковано у документах');
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Помилка', 'Не вдалося підписати протокол');
+    } finally {
+      setLoadingBoard(false);
+    }
+  };
+
   // Automated notification helpers (test button triggers)
   const handleTriggerTestReminder = async () => {
     try {
@@ -578,7 +715,7 @@ export default function ResidentDashboard() {
     >
       {/* Header Banner Image with organization overlay */}
       <ImageBackground 
-        source={profile?.header_image_url ? { uri: profile.header_image_url.startsWith('/') ? `${API_BASE_URL}${profile.header_image_url}` : profile.header_image_url } : require('../../assets/suburban_neighborhood.png')} 
+        source={profile?.header_image_url ? { uri: profile.header_image_url.startsWith('/') ? `${API_BASE_URL}${profile.header_image_url}` : profile.header_image_url } : require('../../assets/suburban_neighborhood.jpg')} 
         style={styles.headerBanner}
         imageStyle={styles.headerBannerImage}
       >
@@ -853,6 +990,22 @@ export default function ResidentDashboard() {
               <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Телефони правління</Text>
             </Pressable>
           </View>
+
+          {/* Row 4 (Board of Directors - Правління) */}
+          {data?.member?.is_board_member && (
+            <View style={styles.gridRow}>
+              <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.primary, borderWidth: 1.2 }]} onPress={openBoardWorkspace}>
+                <View style={[styles.iconCircle, { backgroundColor: 'rgba(99, 102, 241, 0.15)' }]}>
+                  <FolderOpen size={24} color={colors.primary} />
+                </View>
+                <Text style={[styles.gridTitle, { color: colors.text }]}>Правління</Text>
+                <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Голосування & протоколи</Text>
+              </Pressable>
+
+              {/* Empty placeholder item to keep grid alignment */}
+              <View style={[styles.gridItem, { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0 }]} />
+            </View>
+          )}
         </View>
 
         {/* Meter readings header */}
@@ -1486,6 +1639,258 @@ export default function ResidentDashboard() {
               <View style={styles.center}>
                 <Phone size={48} color={colors.textMuted} />
                 <Text style={[styles.emptyText, { color: colors.textMuted, marginTop: 12 }]}>Контактів не знайдено.</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 7. BOARD OF DIRECTORS MODAL OVERLAY */}
+      {/* ========================================================================= */}
+      <Modal visible={activeModal === 'board'} animationType="slide" transparent={true} onRequestClose={() => setActiveModal(null)}>
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalOverlayHeader, { backgroundColor: colors.background }]}>
+            <Text style={[styles.modalHeaderTitle, { color: colors.text }]}>🏛️ Робочий простір правління</Text>
+            <Pressable style={styles.closeBtn} onPress={() => setActiveModal(null)}>
+              <X size={24} color={colors.text} />
+            </Pressable>
+          </View>
+          
+          <View style={[styles.modalBody, { backgroundColor: colors.background, padding: 16 }]}>
+            {/* Create Issue Toggle & Form */}
+            {data?.member?.is_board_chairman && (
+              <View style={{ marginBottom: 16 }}>
+                {!isCreatingIssue ? (
+                  <Button
+                    title="➕ Створити питання"
+                    onPress={() => setIsCreatingIssue(true)}
+                    style={{ backgroundColor: colors.primary }}
+                  />
+                ) : (
+                  <Card style={{ padding: 16, borderColor: colors.primary, borderWidth: 1 }}>
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: colors.text, marginBottom: 8 }}>Нове питання на порядок денний</Text>
+                    <TextInput
+                      style={[styles.input, { color: colors.text, borderColor: colors.border, padding: 10, borderWidth: 1, borderRadius: 10, marginBottom: 8 }]}
+                      placeholder="Тема питання"
+                      placeholderTextColor={colors.textMuted}
+                      value={newIssueTitle}
+                      onChangeText={setNewIssueTitle}
+                    />
+                    <TextInput
+                      style={[styles.input, { color: colors.text, borderColor: colors.border, padding: 10, borderWidth: 1, borderRadius: 10, minHeight: 60, marginBottom: 12 }]}
+                      placeholder="Опис пропозиції..."
+                      placeholderTextColor={colors.textMuted}
+                      multiline
+                      value={newIssueDesc}
+                      onChangeText={setNewIssueDesc}
+                    />
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Button title="Зберегти" onPress={handleCreateIssue} style={{ flex: 1, backgroundColor: colors.primary }} />
+                      <Button title="Скасувати" onPress={() => { setIsCreatingIssue(false); setNewIssueTitle(''); setNewIssueDesc(''); }} style={{ flex: 1, backgroundColor: 'grey' }} />
+                    </View>
+                  </Card>
+                )}
+              </View>
+            )}
+
+            {loadingBoard ? (
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
+            ) : boardIssues.length > 0 ? (
+              <FlatList
+                data={boardIssues}
+                keyExtractor={(item) => item.id.toString()}
+                contentContainerStyle={{ paddingBottom: 24 }}
+                renderItem={({ item }) => {
+                  const hasVoted = !!item.my_vote;
+                  return (
+                    <Card style={{ padding: 16, marginBottom: 12, borderWidth: 1.2, borderColor: colors.border }}>
+                      {/* Status Badges */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <View style={{
+                          backgroundColor: item.status === 'discussion' ? 'rgba(59, 130, 246, 0.1)' : item.status === 'voting' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                          paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6
+                        }}>
+                          <Text style={{
+                            fontSize: 10, fontWeight: 'bold',
+                            color: item.status === 'discussion' ? '#3b82f6' : item.status === 'voting' ? '#f59e0b' : '#10b981'
+                          }}>
+                            {item.status === 'discussion' ? 'Обговорення' : item.status === 'voting' ? 'Голосування' : item.is_signed ? 'Підписано КЕП' : 'Завершено'}
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 10, color: colors.textMuted }}>
+                          {new Date(item.created_at).toLocaleDateString('uk-UA')}
+                        </Text>
+                      </View>
+
+                      {/* Title & Desc */}
+                      <Text style={{ fontSize: 15, fontWeight: 'bold', color: colors.text }}>{item.title}</Text>
+                      {item.description ? (
+                        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>{item.description}</Text>
+                      ) : null}
+
+                      {/* Voting Controls (Voting status) */}
+                      {item.status === 'voting' && (
+                        <View style={{ marginTop: 12, backgroundColor: 'rgba(245, 158, 11, 0.05)', padding: 12, borderRadius: 10 }}>
+                          <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#f59e0b', marginBottom: 6 }}>Ваше рішення по питанню:</Text>
+                          {hasVoted ? (
+                            <View style={{ backgroundColor: 'rgba(255,255,255,0.04)', padding: 10, borderRadius: 8 }}>
+                              <Text style={{ fontSize: 12, color: colors.text, fontWeight: 'bold' }}>
+                                Ваш голос: {item.my_vote.vote_value === 'yes' ? 'За ✅' : item.my_vote.vote_value === 'no' ? 'Проти ❌' : 'Утримався 👤'}
+                              </Text>
+                              {item.my_vote.comment ? (
+                                <Text style={{ fontSize: 11, color: colors.textMuted, fontStyle: 'italic', marginTop: 4 }}>
+                                  Коментар: "{item.my_vote.comment}"
+                                </Text>
+                              ) : null}
+                            </View>
+                          ) : (
+                            <View style={{ gap: 8 }}>
+                              <TextInput
+                                style={[styles.input, { color: colors.text, borderColor: colors.border, padding: 8, borderWidth: 1, borderRadius: 8, fontSize: 11 }]}
+                                placeholder="Ваш коментар (опціонально)..."
+                                placeholderTextColor={colors.textMuted}
+                                value={voteComments[item.id] || ''}
+                                onChangeText={(text) => setVoteComments({ ...voteComments, [item.id]: text })}
+                              />
+                              <View style={{ flexDirection: 'row', gap: 6 }}>
+                                <Pressable
+                                  style={{ flex: 1, backgroundColor: '#10b981', padding: 8, borderRadius: 8, alignItems: 'center' }}
+                                  onPress={() => handleVote(item.id, 'yes')}
+                                >
+                                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>ЗА</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={{ flex: 1, backgroundColor: '#ef4444', padding: 8, borderRadius: 8, alignItems: 'center' }}
+                                  onPress={() => handleVote(item.id, 'no')}
+                                >
+                                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>ПРОТИ</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={{ flex: 1, backgroundColor: '#6b7280', padding: 8, borderRadius: 8, alignItems: 'center' }}
+                                  onPress={() => handleVote(item.id, 'abstain')}
+                                >
+                                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>Утрим.</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          )}
+                        </View>
+                      )}
+
+                      {/* Vote statistics (if not in discussion status) */}
+                      {item.status !== 'discussion' && (
+                        <View style={{ marginTop: 10, padding: 8, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <Text style={{ fontSize: 10, color: colors.textMuted }}>Результати:</Text>
+                            <Text style={{ fontSize: 10, color: colors.textMuted }}>Всього: {item.stats.total}</Text>
+                          </View>
+                          <Text style={{ fontSize: 11, color: colors.text, fontWeight: 'bold' }}>
+                            За: <Text style={{ color: '#10b981' }}>{item.stats.yes}</Text> | Проти: <Text style={{ color: '#ef4444' }}>{item.stats.no}</Text> | Утрималися: <Text style={{ color: '#6b7280' }}>{item.stats.abstain}</Text>
+                          </Text>
+                          
+                          {/* Detailed comments list */}
+                          {item.detailed_votes && item.detailed_votes.length > 0 && (
+                            <View style={{ marginTop: 6, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)', paddingTop: 6 }}>
+                              {item.detailed_votes.map((dv: any, idx: number) => (
+                                <View key={idx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginVertical: 2 }}>
+                                  <Text style={{ fontSize: 10, color: colors.text }} numberOfLines={1}>
+                                    • {dv.member_name} {dv.comment ? `("${dv.comment}")` : ''}
+                                  </Text>
+                                  <Text style={{ fontSize: 9, fontWeight: 'bold', color: dv.vote_value === 'yes' ? '#10b981' : dv.vote_value === 'no' ? '#ef4444' : '#6b7280' }}>
+                                    {dv.vote_value === 'yes' ? 'ЗА' : dv.vote_value === 'no' ? 'ПРОТИ' : 'УТРИМ.'}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      )}
+
+                      {/* AI Minutes Protocol (Completed status) */}
+                      {item.status === 'completed' && item.ai_protocol && (
+                        <View style={{ marginTop: 12 }}>
+                          <Text style={{ fontSize: 11, fontWeight: 'bold', color: colors.primary, marginBottom: 4 }}>🤖 Протокол засідання (ШІ):</Text>
+                          <View style={{ height: 120, backgroundColor: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}>
+                            <ScrollView nestedScrollEnabled>
+                              <Text style={{ fontSize: 9, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', color: colors.text }}>{item.ai_protocol}</Text>
+                            </ScrollView>
+                          </View>
+                          {item.is_signed && (
+                            <View style={{ marginTop: 6, backgroundColor: 'rgba(16, 185, 129, 0.08)', padding: 8, borderRadius: 8 }}>
+                              <Text style={{ fontSize: 10, color: '#10b981', fontWeight: 'bold' }}>✍️ {item.signature_text}</Text>
+                            </View>
+                          )}
+                        </View>
+                      )}
+
+                      {/* Signing block (inline) */}
+                      {isSigningIssueId === item.id && (
+                        <View style={{ marginTop: 12, padding: 12, backgroundColor: 'rgba(99, 102, 241, 0.05)', borderRadius: 10, borderWidth: 1, borderColor: colors.primary }}>
+                          <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.text, marginBottom: 8 }}>✍️ Накласти цифровий підпис КЕП</Text>
+                          
+                          {certificates.length > 0 ? (
+                            <View style={{ gap: 6, marginBottom: 8 }}>
+                              <Text style={{ fontSize: 9, color: colors.textMuted, fontWeight: 'bold' }}>Оберіть КЕП Сертифікат:</Text>
+                              {certificates.map((cert) => (
+                                <Pressable
+                                  key={cert.id}
+                                  style={{
+                                    padding: 8, borderRadius: 8, borderWidth: 1.2,
+                                    borderColor: signCertId === cert.id ? colors.primary : colors.border,
+                                    backgroundColor: signCertId === cert.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent'
+                                  }}
+                                  onPress={() => setSignCertId(cert.id)}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.text }}>{cert.cert_owner_name}</Text>
+                                  <Text style={{ fontSize: 8, color: colors.textMuted }}>{cert.cert_issuer} (№ {cert.cert_serial.slice(0,8)}...)</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          ) : (
+                            <Text style={{ fontSize: 9, color: colors.textMuted, marginBottom: 8 }}>Буде застосовано ЕЦП Голови правління.</Text>
+                          )}
+
+                          {signCertId && (
+                            <TextInput
+                              secureTextEntry
+                              style={[styles.input, { color: colors.text, borderColor: colors.border, padding: 8, borderWidth: 1, borderRadius: 8, fontSize: 11, marginBottom: 8 }]}
+                              placeholder="Введіть пароль ключа..."
+                              placeholderTextColor={colors.textMuted}
+                              value={signPassword}
+                              onChangeText={setSignPassword}
+                            />
+                          )}
+
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            <Button title="Підтвердити" onPress={handleSignProtocol} style={{ flex: 1, backgroundColor: colors.primary }} textStyle={{ fontSize: 11 }} />
+                            <Button title="Скасувати" onPress={() => { setIsSigningIssueId(null); setSignCertId(null); setSignPassword(''); }} style={{ flex: 1, backgroundColor: 'grey' }} textStyle={{ fontSize: 11 }} />
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Chairman Buttons */}
+                      {data?.member?.is_board_chairman && (
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)', paddingTop: 10 }}>
+                          {item.status === 'discussion' && (
+                            <Button title="▶️ Запустити голосування" onPress={() => handleStartVoting(item.id)} style={{ flex: 1, backgroundColor: '#f59e0b' }} textStyle={{ fontSize: 11 }} />
+                          )}
+                          {item.status === 'voting' && (
+                            <Button title="⏹️ Завершити голосування" onPress={() => handleEndVoting(item.id)} style={{ flex: 1, backgroundColor: '#10b981' }} textStyle={{ fontSize: 11 }} />
+                          )}
+                          {item.status === 'completed' && !item.is_signed && !isSigningIssueId && (
+                            <Button title="✍️ Накласти КЕП" onPress={() => setIsSigningIssueId(item.id)} style={{ flex: 1, backgroundColor: colors.primary }} textStyle={{ fontSize: 11 }} />
+                          )}
+                        </View>
+                      )}
+                    </Card>
+                  );
+                }}
+              />
+            ) : (
+              <View style={styles.center}>
+                <FolderOpen size={48} color={colors.textMuted} />
+                <Text style={[styles.emptyText, { color: colors.textMuted, marginTop: 12 }]}>Немає створених питань правління.</Text>
               </View>
             )}
           </View>

@@ -59,7 +59,19 @@ export default function ResidentDashboardPage() {
   };
 
   // Navigation state
-  const [activeTab, setActiveTab] = useState<"dashboard" | "surveys" | "tickets" | "contacts" | "security" | "bookings" | "documents">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "surveys" | "tickets" | "contacts" | "security" | "bookings" | "documents" | "board">("dashboard");
+
+  // Board Form State
+  const [boardIssues, setBoardIssues] = useState<any[]>([]);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [newIssueTitle, setNewIssueTitle] = useState("");
+  const [newIssueDesc, setNewIssueDesc] = useState("");
+  const [isCreatingIssue, setIsCreatingIssue] = useState(false);
+  const [voteComments, setVoteComments] = useState<Record<number, string>>({});
+  const [isSigningIssueId, setIsSigningIssueId] = useState<number | null>(null);
+  const [signCertId, setSignCertId] = useState<number | null>(null);
+  const [signPassword, setSignPassword] = useState("");
+  const [certificates, setCertificates] = useState<any[]>([]);
 
   // Booking Form State
   const [selectedZone, setSelectedZone] = useState<any | null>(null);
@@ -220,6 +232,120 @@ export default function ResidentDashboardPage() {
       setError(err.response?.data?.detail || "Не вдалося скасувати бронювання");
     }
   };
+
+  const fetchBoardIssues = async () => {
+    if (!token) return;
+    setBoardLoading(true);
+    try {
+      const data = await api.getBoardIssues(token);
+      setBoardIssues(data || []);
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setBoardLoading(false);
+    }
+  };
+
+  const fetchCertificates = async () => {
+    if (!dashboard?.profile?.id) return;
+    try {
+      const res = await api.getCertificates(dashboard.profile.id);
+      setCertificates(res || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCreateIssue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newIssueTitle.trim()) return;
+    setMessage("");
+    setError("");
+    try {
+      await api.createBoardIssue(token, { title: newIssueTitle.trim(), description: newIssueDesc.trim() || undefined });
+      setNewIssueTitle("");
+      setNewIssueDesc("");
+      setIsCreatingIssue(false);
+      fetchBoardIssues();
+      setMessage("Питання успішно створено!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося створити питання");
+    }
+  };
+
+  const handleStartVoting = async (issueId: number) => {
+    setMessage("");
+    setError("");
+    try {
+      await api.startBoardVoting(token, issueId);
+      fetchBoardIssues();
+      setMessage("Голосування запущено!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося запустити голосування");
+    }
+  };
+
+  const handleVote = async (issueId: number, value: string) => {
+    const comment = voteComments[issueId] || "";
+    setMessage("");
+    setError("");
+    try {
+      await api.voteBoardIssue(token, issueId, { vote_value: value, comment: comment.trim() || undefined });
+      fetchBoardIssues();
+      setMessage("Ваш голос враховано!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося проголосувати");
+    }
+  };
+
+  const handleEndVoting = async (issueId: number) => {
+    setMessage("");
+    setError("");
+    try {
+      await api.endBoardVoting(token, issueId);
+      fetchBoardIssues();
+      setMessage("Голосування завершено та сформовано протокол!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося завершити голосування");
+    }
+  };
+
+  const handleSignProtocol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSigningIssueId) return;
+    setMessage("");
+    setError("");
+    try {
+      await api.signBoardProtocol(token, isSigningIssueId, {
+        password: signPassword || undefined,
+        certificate_id: signCertId || undefined
+      });
+      setIsSigningIssueId(null);
+      setSignCertId(null);
+      setSignPassword("");
+      fetchBoardIssues();
+      
+      // Reload documents list
+      const docs = await api.getMemberDocuments(token);
+      setDocuments(docs || []);
+      
+      setMessage("Протокол успішно підписано та опубліковано у Документах!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося підписати протокол");
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "board" && token) {
+      fetchBoardIssues();
+    }
+  }, [activeTab, token]);
+
+  useEffect(() => {
+    if (activeTab === "board" && dashboard?.profile?.id) {
+      fetchCertificates();
+    }
+  }, [activeTab, dashboard?.profile?.id]);
 
   useEffect(() => {
     const savedToken = localStorage.getItem("member_token") || "";
@@ -647,6 +773,18 @@ export default function ResidentDashboardPage() {
           >
             📂 Документи ({documents.length})
           </button>
+          {dashboard?.member?.is_board_member && (
+            <button
+              onClick={() => setActiveTab("board")}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                activeTab === "board"
+                  ? "bg-indigo-600 text-white shadow-md"
+                  : "text-slate-550 dark:text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:text-white"
+              }`}
+            >
+              🏛️ Правління ({boardIssues.length})
+            </button>
+          )}
         </div>
 
         {/* Tab Contents */}
@@ -1092,6 +1230,351 @@ export default function ResidentDashboardPage() {
                   <div className="text-sm text-slate-500 dark:text-slate-400 font-semibold py-8 text-center">Офіційні документи не додані.</div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Board Tab */}
+          {activeTab === "board" && (
+            <div className="space-y-6">
+              {/* Header card */}
+              <div className="rounded-3xl glass-panel p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 dark:text-white flex items-center gap-2">
+                    🏛️ Робочий простір правління ОСББ
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Обговорення питань, голосування та автоматичне формування протоколів засідань.
+                  </p>
+                </div>
+                {dashboard?.member?.is_board_chairman && !isCreatingIssue && (
+                  <button
+                    onClick={() => setIsCreatingIssue(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                  >
+                    <Plus size={16} /> Створити питання
+                  </button>
+                )}
+              </div>
+
+              {/* Create Issue Form */}
+              {isCreatingIssue && (
+                <div className="rounded-3xl glass-panel p-6 shadow-sm border border-indigo-500/10">
+                  <h3 className="text-base font-bold text-slate-800 dark:text-white mb-4">Нове питання на порядок денний</h3>
+                  <form onSubmit={handleCreateIssue} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Тема питання</label>
+                      <input
+                        type="text"
+                        required
+                        value={newIssueTitle}
+                        onChange={(e) => setNewIssueTitle(e.target.value)}
+                        placeholder="Наприклад: Про ремонт покрівлі другого під'їзду"
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Опис питання / Пропозиція</label>
+                      <textarea
+                        rows={4}
+                        value={newIssueDesc}
+                        onChange={(e) => setNewIssueDesc(e.target.value)}
+                        placeholder="Детально опишіть суть питання, пропозиції членів правління та очікувані результати..."
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="flex gap-3 pt-2">
+                      <button
+                        type="submit"
+                        className="flex-1 py-3 text-sm font-semibold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition"
+                      >
+                        Опублікувати питання
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCreatingIssue(false);
+                          setNewIssueTitle("");
+                          setNewIssueDesc("");
+                        }}
+                        className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 rounded-xl transition"
+                      >
+                        Скасувати
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Issues List */}
+              {boardLoading ? (
+                <div className="py-12 text-center text-slate-400">Завантаження питань...</div>
+              ) : boardIssues.length === 0 ? (
+                <div className="rounded-3xl glass-panel p-12 text-center text-slate-500 font-semibold border border-slate-100 dark:border-slate-800/40">
+                  Питання для обговорення правлінням ще не створені.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {boardIssues.map((issue) => (
+                    <div
+                      key={issue.id}
+                      className="rounded-3xl glass-panel p-6 shadow-sm border border-slate-200 dark:border-slate-850/60 bg-[#0f172a]/60 space-y-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span
+                          className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                            issue.status === "discussion"
+                              ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                              : issue.status === "voting"
+                              ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                              : issue.is_signed
+                              ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                              : "bg-green-500/10 text-green-500 border-green-500/20"
+                          }`}
+                        >
+                          {issue.status === "discussion"
+                            ? "Обговорення"
+                            : issue.status === "voting"
+                            ? "Голосування"
+                            : issue.is_signed
+                            ? "Підписано КЕП"
+                            : "Завершено (Очікує підпису)"}
+                        </span>
+                        <span className="text-[10px] font-black uppercase text-slate-400">
+                          Створено: {new Date(issue.created_at).toLocaleDateString("uk-UA")}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="text-lg font-extrabold text-slate-900 dark:text-white">{issue.title}</h3>
+                        {issue.description && (
+                          <p className="text-xs text-slate-650 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                            {issue.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Vote casting block (Voting phase) */}
+                      {issue.status === "voting" && (
+                        <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/10 space-y-4">
+                          <h4 className="text-xs font-black uppercase tracking-wider text-amber-500">
+                            🗳️ Ваше рішення по цьому питанню
+                          </h4>
+                          {issue.my_vote ? (
+                            <div className="text-xs text-slate-350 bg-slate-950/20 p-3.5 rounded-xl border border-slate-800/40">
+                              Ваш голос:{" "}
+                              <span className="font-bold text-white uppercase pl-1.5">
+                                {issue.my_vote.vote_value === "yes"
+                                  ? "За ✅"
+                                  : issue.my_vote.vote_value === "no"
+                                  ? "Проти ❌"
+                                  : "Утримався 👤"}
+                              </span>
+                              {issue.my_vote.comment && (
+                                <div className="mt-2 text-slate-400 italic">
+                                  Коментар: "{issue.my_vote.comment}"
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              <textarea
+                                rows={2}
+                                value={voteComments[issue.id] || ""}
+                                onChange={(e) =>
+                                  setVoteComments({ ...voteComments, [issue.id]: e.target.value })
+                                }
+                                placeholder="Ваш коментар чи зауваження (опціонально)..."
+                                className="w-full px-4 py-2.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                              />
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  onClick={() => handleVote(issue.id, "yes")}
+                                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-md shadow-emerald-600/10"
+                                >
+                                  Голосувати ЗА ✅
+                                </button>
+                                <button
+                                  onClick={() => handleVote(issue.id, "no")}
+                                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition shadow-md shadow-rose-600/10"
+                                >
+                                  Голосувати ПРОТИ ❌
+                                </button>
+                                <button
+                                  onClick={() => handleVote(issue.id, "abstain")}
+                                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-xl transition"
+                                >
+                                  Утримався 👤
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Vote statistics block */}
+                      {issue.status !== "discussion" && (
+                        <div className="p-4 rounded-2xl bg-slate-950/20 border border-slate-800/40 space-y-3">
+                          <div className="flex items-center justify-between text-xs font-bold">
+                            <span className="text-slate-450 dark:text-slate-400">Результати голосування правління:</span>
+                            <span className="text-slate-300">
+                              Всього голосів: {issue.stats.total}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                            <div className="p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
+                              <span className="text-emerald-500 font-bold block">{issue.stats.yes}</span>
+                              <span className="text-[10px] text-slate-500 font-medium">ЗА</span>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-rose-500/5 border border-rose-500/10">
+                              <span className="text-rose-500 font-bold block">{issue.stats.no}</span>
+                              <span className="text-[10px] text-slate-500 font-medium">ПРОТИ</span>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-slate-550/5 border border-slate-800/10">
+                              <span className="text-slate-400 font-bold block">{issue.stats.abstain}</span>
+                              <span className="text-[10px] text-slate-500 font-medium">УТРИМАЛИСЯ</span>
+                            </div>
+                          </div>
+
+                          {/* Detailed votes listing */}
+                          {issue.detailed_votes && issue.detailed_votes.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-slate-800/50 space-y-2">
+                              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+                                Детальні голоси членів правління:
+                              </span>
+                              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                                {issue.detailed_votes.map((dv: any, idx: number) => (
+                                  <div key={idx} className="flex justify-between items-start text-[11px] border-b border-slate-800/20 last:border-0 pb-1 last:pb-0">
+                                    <div className="text-slate-300 font-semibold">
+                                      {dv.member_name}
+                                      {dv.comment && <span className="text-[10px] text-slate-500 block font-normal italic">"{dv.comment}"</span>}
+                                    </div>
+                                    <span className={`font-bold uppercase text-[9px] ${
+                                      dv.vote_value === "yes" ? "text-emerald-500" :
+                                      dv.vote_value === "no" ? "text-rose-500" : "text-slate-400"
+                                    }`}>
+                                      {dv.vote_value === "yes" ? "За" : dv.vote_value === "no" ? "Проти" : "Утрим."}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* AI Minutes / Protocol text (Completed phase) */}
+                      {issue.status === "completed" && issue.ai_protocol && (
+                        <div className="space-y-2">
+                          <label className="block text-xs font-black uppercase tracking-wider text-indigo-400">
+                            🤖 Протокол засідання (Згенеровано ШІ)
+                          </label>
+                          <pre className="whitespace-pre-wrap font-mono text-[10px] bg-slate-950/40 p-4 rounded-2xl border border-slate-800/60 max-h-60 overflow-y-auto leading-relaxed text-slate-300">
+                            {issue.ai_protocol}
+                          </pre>
+                          {issue.is_signed && (
+                            <div className="p-3.5 rounded-2xl bg-emerald-500/5 border border-emerald-500/10 text-emerald-500 text-xs font-semibold flex items-center gap-2">
+                              <span>✍️ {issue.signature_text}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Signing Modal (inline if matches ID) */}
+                      {isSigningIssueId === issue.id && (
+                        <div className="p-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 space-y-4">
+                          <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                            ✍️ Накласти цифровий підпис КЕП
+                          </h4>
+                          <form onSubmit={handleSignProtocol} className="space-y-3">
+                            {certificates.length > 0 ? (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Оберіть КЕП Сертифікат</label>
+                                <select
+                                  value={signCertId || ""}
+                                  onChange={(e) => setSignCertId(Number(e.target.value) || null)}
+                                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                                >
+                                  <option value="">Без файлового КЕП (простий підпис)...</option>
+                                  {certificates.map((cert) => (
+                                    <option key={cert.id} value={cert.id}>
+                                      {cert.cert_owner_name} ({cert.cert_issuer}, № {cert.cert_serial.slice(0,8)}...)
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-slate-400">
+                                Немає завантажених КЕП сертифікатів. Буде застосовано електронний цифровий підпис Голови правління.
+                              </p>
+                            )}
+                            {signCertId && (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Пароль захисту ключа</label>
+                                <input
+                                  type="password"
+                                  value={signPassword}
+                                  onChange={(e) => setSignPassword(e.target.value)}
+                                  placeholder="Введіть пароль ключа..."
+                                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                                />
+                              </div>
+                            )}
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="submit"
+                                className="px-4 py-2 bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition"
+                              >
+                                Підписати
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsSigningIssueId(null);
+                                  setSignCertId(null);
+                                  setSignPassword("");
+                                }}
+                                className="px-4 py-2 border border-slate-805 text-slate-300 text-xs font-bold rounded-xl hover:bg-slate-800 transition"
+                              >
+                                Скасувати
+                              </button>
+                            </div>
+                          </form>
+                        </div>
+                      )}
+
+                      {/* Chairman workflow buttons */}
+                      {dashboard?.member?.is_board_chairman && (
+                        <div className="flex flex-wrap gap-2 border-t border-slate-800/40 pt-4 mt-2">
+                          {issue.status === "discussion" && (
+                            <button
+                              onClick={() => handleStartVoting(issue.id)}
+                              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition shadow-md shadow-amber-600/10"
+                            >
+                              Запустити голосування
+                            </button>
+                          )}
+                          {issue.status === "voting" && (
+                            <button
+                              onClick={() => handleEndVoting(issue.id)}
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-md shadow-emerald-600/10"
+                            >
+                              Завершити та сформувати протокол
+                            </button>
+                          )}
+                          {issue.status === "completed" && !issue.is_signed && !isSigningIssueId && (
+                            <button
+                              onClick={() => setIsSigningIssueId(issue.id)}
+                              className="px-4 py-2 bg-indigo-650 hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition shadow-md shadow-indigo-600/10"
+                            >
+                              Накласти КЕП та опублікувати
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

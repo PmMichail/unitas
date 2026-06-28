@@ -37,7 +37,8 @@ import {
   HelpCircle,
   Sparkles,
   Send,
-  Clock
+  Clock,
+  Landmark
 } from "lucide-react";
 
 function SubscriptionExpiredLockedView({ profileName }: { profileName: string }) {
@@ -275,6 +276,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Календар", href: "/calendar", icon: Calendar },
     { name: "Профілі", href: "/profiles", icon: Building2 },
     { name: "Транзакції", href: "/transactions", icon: Receipt },
+    { name: "Банки та виписки", href: "/settings/banks", icon: Landmark },
     { name: "Податки", href: "/taxes", icon: CreditCard },
     { name: "Податковий борг", href: "/tax-debt", icon: AlertCircle },
     { name: "Статус звітів", href: "/reports-status", icon: FileText },

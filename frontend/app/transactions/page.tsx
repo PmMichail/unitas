@@ -660,14 +660,7 @@ export default function Transactions() {
                           >
                             <Edit2 className="w-3.5 h-3.5" /> Змінити
                           </button>
-                          {isIncome && (
-                            <button
-                              onClick={() => openSplitModal(tx)}
-                              className="flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-450 hover:text-emerald-500 transition-all"
-                            >
-                              <ArrowUpRight className="w-3.5 h-3.5" /> Розподілити
-                            </button>
-                          )}
+                          {/* Removed Split button from main transactions page */}
                         </div>
                       </td>
                     </tr>

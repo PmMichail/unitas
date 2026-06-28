@@ -30,3 +30,5 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.1.2
 pyjwt==2.8.0
 redis==5.0.3
+dbfread==2.0.7
+pyjks>=20.0.0

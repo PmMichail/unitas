@@ -534,7 +534,7 @@ export default function LoginScreen() {
       Alert.alert('Помилка', 'Будь ласка, оберіть вашу адресу (номер будинку / ділянки)');
       return;
     }
-    if (!resPassword.trim() || !resFullName.trim() || !resPhone.trim() || !resEmail.trim()) {
+    if (!resPassword.trim() || !resFullName.trim() || !resPhone.trim()) {
       Alert.alert('Помилка', 'Будь ласка, заповніть всі обов\'язкові поля для первинної реєстрації мешканця.');
       return;
     }
@@ -549,7 +549,7 @@ export default function LoginScreen() {
         password: resPassword.trim(),
         full_name: resFullName.trim(),
         phone: resPhone.trim(),
-        email: resEmail.trim().toLowerCase(),
+        email: resEmail.trim() ? resEmail.trim().toLowerCase() : undefined,
       };
       
       const response = await residentRegister(payload);
@@ -1183,7 +1183,7 @@ export default function LoginScreen() {
                           keyboardType="phone-pad"
                         />
                         <Input
-                          label="Email"
+                          label="Email (необов'язково)"
                           placeholder="user@example.com"
                           value={resEmail}
                           onChangeText={setResEmail}

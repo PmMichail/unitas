@@ -222,3 +222,14 @@ Simulated paid Monobank webhook responses using FastAPI `TestClient`, verifying 
 ### 4. Compilation Verification
 - Ran Next.js typechecks (`npx tsc --noEmit` inside `frontend`) and React Native typechecks (`npx tsc --noEmit` inside `mobile`) to verify zero errors.
 
+---
+
+## 9. PrivatBank API CP1251 Encoding Fix
+
+### The Problem
+When FOP/OSBB accounts synced transactions via the PrivatBank API integration (Autoclient/ACP API), Cyrillic descriptions (e.g. `Ресторани, кафе, бари: Pausecaffe 3`) were parsed with stripped or garbled characters (e.g. `, , : Pausecaffe 3`). This was caused by the bank API returning cp1251-encoded (Windows-1251) responses. When the backend parsed it, `response.json()` failed due to invalid UTF-8 sequences. The backend fallback then decoded the raw bytes as UTF-8 with `errors='ignore'`, which stripped out all Cyrillic characters, leaving only ASCII characters and punctuation.
+
+### Changes Made
+- **Encoding Auto-detection**: Modified `backend/services/bank_oauth.py`'s response parsing block.
+- **CP1251 Decoding Fallback**: The parser now attempts strict `utf-8` decoding first. If a `UnicodeDecodeError` is raised, it attempts to decode the raw bytes using `cp1251` (Windows-1251), preserving Cyrillic strings before falling back to `errors='ignore'` as a final resort.
+- **Production Deployment**: Successfully redeployed both backend and frontend to Fly.io.

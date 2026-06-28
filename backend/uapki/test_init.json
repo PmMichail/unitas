@@ -1,0 +1,14 @@
+{
+  "method": "INIT",
+  "parameters": {
+    "cmProviders": {
+      "dir": "",
+      "allowedProviders": [
+        {
+          "lib": "cm-pkcs12"
+        }
+      ]
+    },
+    "offline": true
+  }
+}

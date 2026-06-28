@@ -1,0 +1,18 @@
+FROM uapki:latest
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    httpx
+
+# Copy simple test script
+COPY test_uapki_simple.py /app/test_uapki_simple.py
+
+WORKDIR /app
+
+CMD ["python3", "test_uapki_simple.py"]

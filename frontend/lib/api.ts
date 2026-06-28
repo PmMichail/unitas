@@ -300,6 +300,8 @@ export const api = {
     role?: string;
     street?: string;
     number?: string;
+    is_board_member?: boolean;
+    is_board_chairman?: boolean;
   }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/profiles/${profileId}/members`, formData);
@@ -333,6 +335,8 @@ export const api = {
     role?: string;
     street?: string;
     number?: string;
+    is_board_member?: boolean;
+    is_board_chairman?: boolean;
   }) => {
     const formData = toFormData(data);
     const response = await client.put(`/api/profiles/${profileId}/members/${memberId}`, formData);
@@ -654,6 +658,82 @@ export const api = {
         "Content-Type": "multipart/form-data",
       },
     });
+    return response.data;
+  },
+
+  getBanks: async () => {
+    const response = await client.get("/api/banks");
+    return response.data;
+  },
+
+  getBankConnections: async (profileId: number) => {
+    const response = await client.get("/api/banks/connections", { params: { profile_id: profileId } });
+    return response.data;
+  },
+
+  setupBankConnection: async (data: {
+    profile_id: number;
+    bank_code: string;
+    auth_data?: Record<string, any>;
+    account_id?: string;
+    account_number?: string;
+  }) => {
+    const response = await client.post("/api/banks/setup", data);
+    return response.data;
+  },
+
+  previewBankStatement: async (profileId: number, bankCode: string, file: File) => {
+    const formData = new FormData();
+    formData.append("profile_id", String(profileId));
+    formData.append("bank_code", bankCode);
+    formData.append("file", file);
+    const response = await client.post("/api/banks/statements/preview", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  },
+
+  importBankStatement: async (profileId: number, bankCode: string, file: File, mapping: Record<string, string>) => {
+    const formData = new FormData();
+    formData.append("profile_id", String(profileId));
+    formData.append("bank_code", bankCode);
+    formData.append("mapping_json", JSON.stringify(mapping));
+    formData.append("file", file);
+    const response = await client.post("/api/banks/statements/import", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  },
+
+  getBankStatementsJournal: async (profileId: number) => {
+    const response = await client.get("/api/banks/statements", { params: { profile_id: profileId } });
+    return response.data;
+  },
+
+  deleteBankStatement: async (statementId: number) => {
+    const response = await client.delete(`/api/banks/statements/${statementId}`);
+    return response.data;
+  },
+
+  syncBank: async (profileId: number, bankCode: string) => {
+    const response = await client.post(`/api/banks/${bankCode}/sync`, null, { params: { profile_id: profileId } });
+    return response.data;
+  },
+
+  getBankSyncStatus: async (profileId: number) => {
+    const response = await client.get("/api/banks/sync/status", { params: { profile_id: profileId } });
+    return response.data;
+  },
+
+  updateBankSyncSettings: async (data: {
+    connection_id: number;
+    auto_sync_enabled: boolean;
+    sync_period_days: number;
+    sync_time: string;
+    notify_email: boolean;
+    notify_push: boolean;
+  }) => {
+    const response = await client.post("/api/banks/sync/settings", data);
     return response.data;
   },
 
@@ -1599,6 +1679,42 @@ export const legislationApi = {
   },
   getCurrentSubscription: async (profileId: number) => {
     const response = await client.get(`/api/subscriptions/current/${profileId}`);
+    return response.data;
+  },
+  getBoardIssues: async (token: string) => {
+    const response = await client.get("/api/board/issues", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  createBoardIssue: async (token: string, data: { title: string; description?: string }) => {
+    const response = await client.post("/api/board/issues", data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  startBoardVoting: async (token: string, issueId: number) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote-start`, null, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  voteBoardIssue: async (token: string, issueId: number, data: { vote_value: string; comment?: string }) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote`, data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  endBoardVoting: async (token: string, issueId: number) => {
+    const response = await client.post(`/api/board/issues/${issueId}/vote-end`, null, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  signBoardProtocol: async (token: string, issueId: number, data: { password?: string; certificate_id?: number }) => {
+    const response = await client.post(`/api/board/issues/${issueId}/sign`, data, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
     return response.data;
   }
 };
