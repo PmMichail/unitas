@@ -60,6 +60,8 @@ interface Member {
   share?: string;
   street?: string;
   number?: string;
+  is_board_member?: boolean;
+  is_board_chairman?: boolean;
 }
 
 interface Transaction {

@@ -48,6 +48,12 @@ def call_uapki_wrapper(json_file, jks_file):
                     if signatures:
                         signature = signatures[0].get("bytes")
                         logger.info(f"Signature extracted, length: {len(signature)}")
+                        
+                        # Зберігаємо підпис у файл для аналізу ASN.1
+                        with open("/tmp/current_signature.b64", "w") as f:
+                            f.write(signature)
+                        logger.info(f"[TEST] Signature saved to /tmp/current_signature.b64")
+                        
                         return signature
                 except Exception as e:
                     logger.error(f"Failed to parse SIGN response: {e}")
@@ -168,10 +174,11 @@ def update_sign_json(username):
         # Знайти SIGN task і оновити дані для підпису
         for task in data.get("tasks", []):
             if task.get("method") == "SIGN":
-                # Підписуємо повний username
-                username_b64 = base64.b64encode(username.encode("utf-8")).decode("utf-8")
-                task["parameters"]["dataTbs"][0]["bytes"] = username_b64
-                logger.info(f"[TEST] Updated sign data to full username: {username_b64}")
+                # Підписуємо тільки ЄДРПОУ (перші 10 символів username)
+                edrpou = username.split("-")[0]
+                edrpou_b64 = base64.b64encode(edrpou.encode("utf-8")).decode("utf-8")
+                task["parameters"]["dataTbs"][0]["bytes"] = edrpou_b64
+                logger.info(f"[TEST] Updated sign data to EDRPOU only: {edrpou_b64}")
                 break
 
         with open("/app/test_sign.json", "w") as f:
