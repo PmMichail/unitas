@@ -1150,7 +1150,7 @@ export default function BillingPage() {
         phone: phone || undefined,
         balance: balance || 0,
         property_type: propertyType,
-        parent_id: parentId !== -1 ? parentId : undefined,
+        parent_id: parentId,
         role: memberRole,
         share: memberShare || undefined,
         street: street || undefined,
@@ -3421,7 +3421,6 @@ export default function BillingPage() {
                     <th className="px-6 py-4">Об'єкт / Тип</th>
                     <th className="px-6 py-4">Власник</th>
                     <th className="px-6 py-4">Роль</th>
-                    <th className="px-6 py-4">Зв'язок (Батьківський)</th>
                     <th className="px-6 py-4">Контакти</th>
                     <th className="px-6 py-4">Параметри внеску</th>
                     <th className="px-6 py-4">Поточний баланс</th>
@@ -3492,15 +3491,6 @@ export default function BillingPage() {
                               <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                                 Власник
                               </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-xs text-slate-400">
-                            {parentMember ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
-                                Прив'язка до: {parentMember.property_type || "кв."} {parentMember.identifier}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic">Немає</span>
                             )}
                           </td>
                           <td className="px-6 py-4 text-xs text-slate-500 space-y-1">

@@ -4672,6 +4672,26 @@ def get_profile_members(profile_id: int, user_id: Optional[int] = None, db: Sess
     members = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id).all()
     return members
 
+def recalculate_member_shares(profile_id: int, identifier: str, db: Session):
+    if not identifier:
+        return
+    # Find all owners for this identifier in this profile (both parent and child objects)
+    owners = db.query(UnitOrMember).filter(
+        UnitOrMember.profile_id == profile_id,
+        UnitOrMember.identifier == identifier.strip(),
+        UnitOrMember.role == "owner"
+    ).all()
+    
+    n = len(owners)
+    if n == 0:
+        return
+    elif n == 1:
+        owners[0].share = "100%"
+    else:
+        for owner in owners:
+            owner.share = f"1/{n}"
+    db.commit()
+
 @app.post("/api/profiles/{profile_id}/members")
 def create_profile_member(
     profile_id: int,
@@ -4699,14 +4719,20 @@ def create_profile_member(
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Доступ заборонено")
     
-    # Check duplicate identifier
-    dup = db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id, UnitOrMember.identifier == identifier).first()
-    if dup:
-        raise HTTPException(status_code=400, detail="Об'єкт з таким номером вже існує")
+    # Check duplicate identifier only for primary objects
+    is_primary = (parent_id is None or parent_id == -1 or parent_id == 0)
+    if is_primary:
+        dup = db.query(UnitOrMember).filter(
+            UnitOrMember.profile_id == profile_id,
+            UnitOrMember.identifier == identifier.strip(),
+            (UnitOrMember.parent_id == None) | (UnitOrMember.parent_id == -1) | (UnitOrMember.parent_id == 0)
+        ).first()
+        if dup:
+            raise HTTPException(status_code=400, detail="Об'єкт з таким номером вже існує")
         
     member = UnitOrMember(
         profile_id=profile_id,
-        identifier=identifier,
+        identifier=identifier.strip(),
         owner_name=owner_name,
         area=area or 0.0,
         rate_per_sqm=rate_per_sqm or 0.0,
@@ -4724,6 +4750,10 @@ def create_profile_member(
     )
     db.add(member)
     db.commit()
+    db.refresh(member)
+    
+    # Recalculate shares
+    recalculate_member_shares(profile_id, member.identifier, db)
     db.refresh(member)
     return member
 
@@ -4760,16 +4790,23 @@ def update_profile_member(
     if not member:
         raise HTTPException(status_code=404, detail="Мешканця/об'єкт не знайдено")
         
+    old_identifier = member.identifier
+    old_role = member.role
+    
     if identifier is not None:
-        # Check duplicate
-        dup = db.query(UnitOrMember).filter(
-            UnitOrMember.profile_id == profile_id, 
-            UnitOrMember.identifier == identifier,
-            UnitOrMember.id != member_id
-        ).first()
-        if dup:
-            raise HTTPException(status_code=400, detail="Об'єкт з таким номером вже існує")
-        member.identifier = identifier
+        # Check duplicate only for primary objects
+        check_parent = parent_id if parent_id is not None else member.parent_id
+        is_primary = (check_parent is None or check_parent == -1 or check_parent == 0)
+        if is_primary:
+            dup = db.query(UnitOrMember).filter(
+                UnitOrMember.profile_id == profile_id, 
+                UnitOrMember.identifier == identifier.strip(),
+                UnitOrMember.id != member_id,
+                (UnitOrMember.parent_id == None) | (UnitOrMember.parent_id == -1) | (UnitOrMember.parent_id == 0)
+            ).first()
+            if dup:
+                raise HTTPException(status_code=400, detail="Об'єкт з таким номером вже існує")
+        member.identifier = identifier.strip()
         
     if owner_name is not None:
         member.owner_name = owner_name
@@ -4803,6 +4840,12 @@ def update_profile_member(
         member.is_board_chairman = is_board_chairman
         
     db.commit()
+    
+    # Recalculate shares for old and new identifier/role
+    recalculate_member_shares(profile_id, old_identifier, db)
+    if member.identifier != old_identifier or member.role != old_role:
+        recalculate_member_shares(profile_id, member.identifier, db)
+        
     db.refresh(member)
     return member
 
@@ -4818,8 +4861,14 @@ def delete_profile_member(profile_id: int, member_id: int, user_id: Optional[int
     if not member:
         raise HTTPException(status_code=404, detail="Мешканця/об'єкт не знайдено")
         
+    old_identifier = member.identifier
+    
     db.delete(member)
     db.commit()
+    
+    # Recalculate shares for this identifier
+    recalculate_member_shares(profile_id, old_identifier, db)
+    
     return {"message": "Об'єкт успішно видалено"}
 
 @app.post("/api/profiles/{profile_id}/members/bulk")
