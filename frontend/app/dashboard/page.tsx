@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { api, legislationApi, agentApi } from "@/lib/api";
+import { api, legislationApi, agentApi, API_BASE_URL } from "@/lib/api";
 import { useApp } from "@/context/AppContext";
 import {
   TrendingUp,
@@ -81,6 +81,26 @@ export default function Dashboard() {
   const [editingReport, setEditingReport] = useState<any>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [activeModal, setActiveModal] = useState<"income" | "tax_due" | "tax_paid" | "debt" | null>(null);
+
+  // Board Workspace States
+  const [boardIssues, setBoardIssues] = useState<any[]>([]);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [isCreatingIssue, setIsCreatingIssue] = useState(false);
+  const [newIssueTitle, setNewIssueTitle] = useState("");
+  const [newIssueDesc, setNewIssueDesc] = useState("");
+  const [certificates, setCertificates] = useState<any[]>([]);
+  const [signingIssueId, setSigningIssueId] = useState<number | null>(null);
+  const [signingPassword, setSigningPassword] = useState("");
+  const [selectedCertId, setSelectedCertId] = useState<number | null>(null);
+  const [isSigning, setIsSigning] = useState(false);
+
+  // Announcements States
+  const [announcements, setAnnouncements] = useState<any[]>([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(false);
+  const [isCreatingAnnouncement, setIsCreatingAnnouncement] = useState(false);
+  const [newAnnTitle, setNewAnnTitle] = useState("");
+  const [newAnnContent, setNewAnnContent] = useState("");
+  const [newAnnPinned, setNewAnnPinned] = useState(false);
 
   const simplifiedSystems = ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"];
   const isSimplified = simplifiedSystems.includes((dashboardData?.tax_system || selectedProfile?.tax_system || "").toLowerCase());
@@ -171,12 +191,146 @@ export default function Dashboard() {
     }
   }, [selectedProfile?.id]);
 
-  // Sync chat history to localStorage
-  useEffect(() => {
-    if (companyId && chatMessages.length > 0) {
-      localStorage.setItem(`chat_history_${companyId}`, JSON.stringify(chatMessages));
+  // Board Workspace Actions
+  const fetchBoardIssues = async () => {
+    setBoardLoading(true);
+    try {
+      const data = await api.getBoardIssues(undefined, companyId);
+      if (Array.isArray(data)) {
+        setBoardIssues(data);
+      }
+    } catch (err) {
+      console.error("Error fetching board issues:", err);
+    } finally {
+      setBoardLoading(false);
     }
-  }, [chatMessages, companyId]);
+  };
+
+  const fetchCertificates = async () => {
+    try {
+      const data = await api.getCertificates(companyId);
+      if (Array.isArray(data)) {
+        setCertificates(data);
+        if (data.length > 0) {
+          setSelectedCertId(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching certificates:", err);
+    }
+  };
+
+  const fetchAnnouncements = async () => {
+    setAnnouncementsLoading(true);
+    try {
+      const data = await api.getAnnouncements(companyId);
+      if (Array.isArray(data)) {
+        setAnnouncements(data);
+      }
+    } catch (err) {
+      console.error("Error fetching announcements:", err);
+    } finally {
+      setAnnouncementsLoading(false);
+    }
+  };
+
+  const handleCreateIssue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newIssueTitle.trim()) return;
+    try {
+      await api.createBoardIssue(undefined, {
+        title: newIssueTitle,
+        description: newIssueDesc
+      }, companyId);
+      setNewIssueTitle("");
+      setNewIssueDesc("");
+      setIsCreatingIssue(false);
+      fetchBoardIssues();
+    } catch (err) {
+      console.error("Error creating issue:", err);
+    }
+  };
+
+  const handleStartVoting = async (issueId: number) => {
+    try {
+      await api.startBoardVoting(undefined, issueId);
+      fetchBoardIssues();
+    } catch (err) {
+      console.error("Error starting voting:", err);
+    }
+  };
+
+  const handleEndVoting = async (issueId: number) => {
+    try {
+      await api.endBoardVoting(undefined, issueId);
+      fetchBoardIssues();
+    } catch (err) {
+      console.error("Error ending voting:", err);
+    }
+  };
+
+  const handleSignProtocol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signingIssueId) return;
+    setIsSigning(true);
+    try {
+      await api.signBoardProtocol(undefined, signingIssueId, {
+        password: signingPassword,
+        certificate_id: selectedCertId || undefined
+      });
+      setSigningPassword("");
+      setSigningIssueId(null);
+      fetchBoardIssues();
+      alert("Протокол успішно підписано КЕП та опубліковано для мешканців!");
+    } catch (err: any) {
+      console.error("Error signing protocol:", err);
+      alert(err.response?.data?.detail || "Помилка при підписі протоколу");
+    } finally {
+      setIsSigning(false);
+    }
+  };
+
+  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAnnTitle.trim() || !newAnnContent.trim()) return;
+    try {
+      await api.createAnnouncement(companyId, {
+        title: newAnnTitle,
+        content: newAnnContent,
+        is_pinned: newAnnPinned
+      });
+      setNewAnnTitle("");
+      setNewAnnContent("");
+      setNewAnnPinned(false);
+      setIsCreatingAnnouncement(false);
+      fetchAnnouncements();
+    } catch (err) {
+      console.error("Error creating announcement:", err);
+    }
+  };
+
+  const handleDeleteAnnouncement = async (id: number) => {
+    if (confirm("Ви впевнені, що хочете видалити це оголошення?")) {
+      try {
+        await api.deleteAnnouncement(companyId, id);
+        fetchAnnouncements();
+      } catch (err) {
+        console.error("Error deleting announcement:", err);
+      }
+    }
+  };
+
+  // Load board issues and announcements when active tab changes
+  useEffect(() => {
+    if (companyId) {
+      if (activeTab === "board") {
+        fetchBoardIssues();
+        fetchCertificates();
+      } else if (activeTab === "announcements") {
+        fetchAnnouncements();
+      }
+    }
+  }, [activeTab, companyId]);
 
   // Fetch dashboard data
   const fetchDashboardData = async () => {
@@ -1446,6 +1600,375 @@ export default function Dashboard() {
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Board Workspace View */}
+            {activeTab === "board" && (
+              <div className="mt-8 space-y-6">
+                <div className="rounded-3xl glass-panel p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                      🏛️ Робочий простір правління ОСББ
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Обговорення питань, голосування та автоматичне формування протоколів засідань.
+                    </p>
+                  </div>
+                  {!isCreatingIssue && (
+                    <button
+                      onClick={() => setIsCreatingIssue(true)}
+                      className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                    >
+                      <Plus size={16} /> Створити питання
+                    </button>
+                  )}
+                </div>
+
+                {/* Create Issue Form */}
+                {isCreatingIssue && (
+                  <div className="rounded-3xl glass-panel p-6 shadow-sm border border-indigo-500/10 bg-slate-950/40">
+                    <h3 className="text-base font-bold text-white mb-4">Нове питання на порядок денний</h3>
+                    <form onSubmit={handleCreateIssue} className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Тема питання</label>
+                        <input
+                          type="text"
+                          required
+                          value={newIssueTitle}
+                          onChange={(e) => setNewIssueTitle(e.target.value)}
+                          placeholder="Наприклад: Про ремонт покрівлі другого під'їзду"
+                          className="w-full px-4 py-2.5 text-sm bg-slate-900 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Опис питання / Пропозиція</label>
+                        <textarea
+                          rows={4}
+                          value={newIssueDesc}
+                          onChange={(e) => setNewIssueDesc(e.target.value)}
+                          placeholder="Детально опишіть суть питання, пропозиції членів правління та очікувані результати..."
+                          className="w-full px-4 py-2.5 text-sm bg-slate-900 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="submit"
+                          className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition"
+                        >
+                          Опублікувати питання
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingIssue(false);
+                            setNewIssueTitle("");
+                            setNewIssueDesc("");
+                          }}
+                          className="flex-1 py-3 text-sm font-semibold border border-slate-800 hover:bg-slate-900 rounded-xl text-slate-400 transition"
+                        >
+                          Скасувати
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* Issues List */}
+                {boardLoading ? (
+                  <div className="py-12 text-center text-slate-400">Завантаження питань...</div>
+                ) : boardIssues.length === 0 ? (
+                  <div className="rounded-3xl glass-panel p-12 text-center text-slate-500 font-semibold border border-slate-800/40 bg-slate-950/20">
+                    Питання для обговорення правлінням ще не створені.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {boardIssues.map((issue) => (
+                      <div
+                        key={issue.id}
+                        className="rounded-3xl glass-panel p-6 shadow-sm border border-slate-855 bg-[#0f172a]/60 space-y-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <span
+                            className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                              issue.status === "discussion"
+                                ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                                : issue.status === "voting"
+                                ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                                : issue.is_signed
+                                ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                                : "bg-slate-500/10 text-slate-400 border-slate-800"
+                            }`}
+                          >
+                            {issue.status === "discussion" && "💬 Обговорення"}
+                            {issue.status === "voting" && "🗳️ Голосування"}
+                            {issue.status === "completed" && (issue.is_signed ? "✅ Підписано КЕП" : "📄 Очікує підпису")}
+                          </span>
+                          <span className="text-xs text-slate-500">{new Date(issue.created_at).toLocaleDateString("uk-UA")}</span>
+                        </div>
+
+                        <div>
+                          <h3 className="text-base font-bold text-white">{issue.title}</h3>
+                          {issue.description && (
+                            <p className="text-sm text-slate-400 mt-1 whitespace-pre-line">{issue.description}</p>
+                          )}
+                        </div>
+
+                        {/* Votes Stats */}
+                        {issue.status !== "discussion" && (
+                          <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-850 flex flex-wrap items-center justify-between gap-4">
+                            <div className="flex gap-4">
+                              <span className="text-xs text-emerald-400 font-bold">👍 ЗА: {issue.stats?.yes || 0}</span>
+                              <span className="text-xs text-rose-450 font-bold">👎 ПРОТИ: {issue.stats?.no || 0}</span>
+                              <span className="text-xs text-slate-400 font-bold">😐 УТРИМАЛИСЬ: {issue.stats?.abstain || 0}</span>
+                            </div>
+                            <span className="text-xs text-indigo-400 font-medium">Всього голосів: {issue.stats?.total || 0}</span>
+                          </div>
+                        )}
+
+                        {/* AI generated Protocol Minutes */}
+                        {issue.ai_protocol && (
+                          <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/10 space-y-2">
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">📄 Сформований ШІ-протокол</h4>
+                              {issue.document_id && (
+                                <a
+                                  href={`${API_BASE_URL}/api/documents/download/${issue.document_id}`}
+                                  target="_blank"
+                                  className="text-xs text-indigo-455 hover:text-indigo-300 font-semibold flex items-center gap-1"
+                                >
+                                  Завантажити <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </div>
+                            <pre className="text-xs text-slate-350 overflow-x-auto whitespace-pre-wrap max-h-48 custom-scrollbar border-t border-indigo-500/5 pt-2">
+                              {issue.ai_protocol}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Admin Action Buttons */}
+                        <div className="flex gap-3 pt-2">
+                          {issue.status === "discussion" && (
+                            <button
+                              onClick={() => handleStartVoting(issue.id)}
+                              className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                            >
+                              Запустити голосування
+                            </button>
+                          )}
+                          {issue.status === "voting" && (
+                            <button
+                              onClick={() => handleEndVoting(issue.id)}
+                              className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                            >
+                              Завершити голосування та створити протокол AI
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Sign Protocol Block */}
+                        {issue.status === "completed" && !issue.is_signed && (
+                          <div className="pt-2 border-t border-slate-800/40">
+                            {signingIssueId === issue.id ? (
+                              <form onSubmit={handleSignProtocol} className="space-y-3 p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/10">
+                                <h4 className="text-xs font-bold text-indigo-400 uppercase">Підписання протоколу КЕП</h4>
+                                <div>
+                                  <label className="block text-[10px] text-slate-400 mb-1">Оберіть сертифікат</label>
+                                  <select
+                                    value={selectedCertId || ""}
+                                    onChange={(e) => setSelectedCertId(Number(e.target.value))}
+                                    className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-300"
+                                  >
+                                    {certificates.map((c) => (
+                                      <option key={c.id} value={c.id}>{c.cert_owner_name} ({c.cert_serial})</option>
+                                    ))}
+                                    {certificates.length === 0 && (
+                                      <option value="">Немає сертифікатів КЕП</option>
+                                    )}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] text-slate-400 mb-1">Пароль захисту КЕП</label>
+                                  <input
+                                    type="password"
+                                    required
+                                    value={signingPassword}
+                                    onChange={(e) => setSigningPassword(e.target.value)}
+                                    placeholder="Введіть пароль ключа..."
+                                    className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-300 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                                  />
+                                </div>
+                                <div className="flex gap-2 pt-1">
+                                  <button
+                                    type="submit"
+                                    disabled={isSigning}
+                                    className="flex-1 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition"
+                                  >
+                                    {isSigning ? "Підписання..." : "Підписати протокол"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSigningIssueId(null)}
+                                    className="px-3 py-2 text-xs font-semibold border border-slate-800 hover:bg-slate-900 rounded-lg text-slate-400 transition"
+                                  >
+                                    Скасувати
+                                  </button>
+                                </div>
+                              </form>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setSigningIssueId(issue.id);
+                                  if (certificates.length > 0 && !selectedCertId) {
+                                    setSelectedCertId(certificates[0].id);
+                                  }
+                                }}
+                                className="w-full py-2 rounded-xl bg-indigo-650/40 hover:bg-indigo-600 border border-indigo-500/20 text-indigo-250 hover:text-white text-xs font-bold transition flex items-center justify-center gap-1.5"
+                              >
+                                <ShieldAlert size={14} /> Підписати протокол КЕП
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Announcements View */}
+            {activeTab === "announcements" && (
+              <div className="mt-8 space-y-6">
+                <div className="rounded-3xl glass-panel p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                      📢 Оголошення ОСББ
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Створюйте оголошення, які будуть показані усім мешканцам на головній сторінці кабінету та в додатку.
+                    </p>
+                  </div>
+                  {!isCreatingAnnouncement && (
+                    <button
+                      onClick={() => setIsCreatingAnnouncement(true)}
+                      className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                    >
+                      <Plus size={16} /> Нове оголошення
+                    </button>
+                  )}
+                </div>
+
+                {/* Create Announcement Form */}
+                {isCreatingAnnouncement && (
+                  <div className="rounded-3xl glass-panel p-6 shadow-sm border border-indigo-500/10 bg-slate-950/40">
+                    <h3 className="text-base font-bold text-white mb-4">Створення нового оголошення</h3>
+                    <form onSubmit={handleCreateAnnouncement} className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Заголовок</label>
+                        <input
+                          type="text"
+                          required
+                          value={newAnnTitle}
+                          onChange={(e) => setNewAnnTitle(e.target.value)}
+                          placeholder="Наприклад: Планове відключення води"
+                          className="w-full px-4 py-2.5 text-sm bg-slate-900 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">Текст оголошення</label>
+                        <textarea
+                          rows={4}
+                          required
+                          value={newAnnContent}
+                          onChange={(e) => setNewAnnContent(e.target.value)}
+                          placeholder="Текст повідомлення для мешканців..."
+                          className="w-full px-4 py-2.5 text-sm bg-slate-900 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="is_pinned"
+                          checked={newAnnPinned}
+                          onChange={(e) => setNewAnnPinned(e.target.checked)}
+                          className="rounded border-slate-800 bg-slate-900 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <label htmlFor="is_pinned" className="text-xs font-semibold text-slate-300 cursor-pointer">
+                          Закріпити вгорі списку
+                        </label>
+                      </div>
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="submit"
+                          className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition"
+                        >
+                          Опублікувати
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingAnnouncement(false);
+                            setNewAnnTitle("");
+                            setNewAnnContent("");
+                            setNewAnnPinned(false);
+                          }}
+                          className="flex-1 py-3 text-sm font-semibold border border-slate-800 hover:bg-slate-900 rounded-xl text-slate-400 transition"
+                        >
+                          Скасувати
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* Announcements List */}
+                {announcementsLoading ? (
+                  <div className="py-12 text-center text-slate-400">Завантаження оголошень...</div>
+                ) : announcements.length === 0 ? (
+                  <div className="rounded-3xl glass-panel p-12 text-center text-slate-500 font-semibold border border-slate-800/40 bg-slate-950/20">
+                    Немає активних оголошень.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {announcements.map((ann) => (
+                      <div
+                        key={ann.id}
+                        className={`rounded-3xl glass-panel p-6 shadow-sm border ${
+                          ann.is_pinned ? "border-indigo-500/30 bg-indigo-950/10" : "border-slate-800 bg-[#0f172a]/60"
+                        } flex justify-between items-start gap-4`}
+                      >
+                        <div className="space-y-2 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {ann.is_pinned && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                📌 Закріплено
+                              </span>
+                            )}
+                            <span className="text-xs text-slate-500">
+                              {new Date(ann.created_at).toLocaleString("uk-UA", {
+                                day: "numeric",
+                                month: "short",
+                                hour: "2-digit",
+                                minute: "2-digit"
+                              })}
+                            </span>
+                          </div>
+                          <h3 className="text-base font-bold text-white">{ann.title}</h3>
+                          <p className="text-sm text-slate-300 whitespace-pre-wrap">{ann.content}</p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteAnnouncement(ann.id)}
+                          className="p-2 rounded-lg bg-red-950/20 hover:bg-red-500/20 border border-red-500/10 text-red-400 hover:text-red-300 transition"
+                          title="Видалити оголошення"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

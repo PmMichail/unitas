@@ -2,14 +2,29 @@
 import React, { useState, useEffect, Suspense } from "react";
 import { useApp } from "@/context/AppContext";
 import { api } from "@/lib/api";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { LogIn, KeyRound, Sparkles, AlertCircle, ShieldCheck, ChevronLeft, Mail, UserPlus, Building2, Phone, Users, Check, Loader2 } from "lucide-react";
+import { LogIn, KeyRound, Sparkles, AlertCircle, ShieldCheck, ChevronLeft, Mail, UserPlus, Building2, Phone, Users, Check, Loader2, Sun, Moon } from "lucide-react";
+import { useTheme } from "next-themes";
 import { LiqPayFooter } from "@/components/LiqPayFooter";
 
 function LoginPageContent() {
   const { setTelegramId } = useApp();
-  const [loginMode, setLoginMode] = useState<"email" | "telegram">("email");
+  const router = useRouter();
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  const [loginMode, setLoginMode] = useState<"email" | "telegram" | "member">("email");
+  const [memberSlug, setMemberSlug] = useState("");
+  const [memberPhone, setMemberPhone] = useState("");
+  const [memberPassword, setMemberPassword] = useState("");
+  const [selectedOsbbName, setSelectedOsbbName] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [osbbSearchResults, setOsbbSearchResults] = useState<any[]>([]);
+  const [isSearchingOsbb, setIsSearchingOsbb] = useState(false);
   const [step, setStep] = useState<"id" | "code">("id");
   const [inputValue, setInputValue] = useState(""); // Telegram ID
   const [emailValue, setEmailValue] = useState("");
@@ -50,6 +65,43 @@ function LoginPageContent() {
       setIsRegister(true);
     }
   }, [registerParam]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("selected_member_osbb");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.slug) {
+          setMemberSlug(parsed.slug);
+          setSelectedOsbbName(parsed.name);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 2) {
+      setOsbbSearchResults([]);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsSearchingOsbb(true);
+      try {
+        const res = await api.searchOsbb(trimmed);
+        setOsbbSearchResults(res.results || []);
+      } catch (err) {
+        console.error("Failed to search OSBB", err);
+      } finally {
+        setIsSearchingOsbb(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery]);
 
   const handleTelegramLogin = async (id: string) => {
     const trimmedId = id.trim();
@@ -101,6 +153,44 @@ function LoginPageContent() {
       }
     } catch (err: any) {
       const errMsg = err.response?.data?.detail || "Неправильний Email або пароль.";
+      setError(errMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMemberLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedSlug = memberSlug.trim().toLowerCase();
+    const trimmedPhone = memberPhone.trim();
+    const trimmedPassword = memberPassword.trim();
+    if (!trimmedSlug) {
+      setError("Будь ласка, знайдіть та оберіть ваше ОСББ / Кооператив зі списку.");
+      return;
+    }
+    if (!trimmedPhone || !trimmedPassword) {
+      setError("Будь ласка, введіть номер телефону та пароль.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const data = await api.memberLogin({ slug: trimmedSlug, phone: trimmedPhone, password: trimmedPassword });
+      if (data.status === "pending") {
+        if (data.member_id) localStorage.setItem("pending_member_id", String(data.member_id));
+        localStorage.setItem("pending_phone", data.phone || trimmedPhone);
+        localStorage.setItem("selected_member_osbb", JSON.stringify({ name: selectedOsbbName || trimmedSlug, slug: trimmedSlug }));
+        router.push(`/osbb/${trimmedSlug}/pending`);
+        return;
+      }
+      localStorage.setItem("member_token", data.token);
+      localStorage.setItem("member_profile_slug", trimmedSlug);
+      localStorage.setItem("selected_member_osbb", JSON.stringify({ name: selectedOsbbName || trimmedSlug, slug: trimmedSlug }));
+      router.push(`/osbb/${trimmedSlug}/dashboard`);
+    } catch (err: any) {
+      const errMsg = err.response?.data?.detail || "Помилка авторизації. Перевірте пароль, телефон та код ОСББ.";
       setError(errMsg);
     } finally {
       setIsLoading(false);
@@ -304,6 +394,23 @@ function LoginPageContent() {
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-600/10 blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-600/10 blur-[120px] pointer-events-none" />
 
+      {/* Theme Toggle Button in top right */}
+      <div className="absolute top-4 right-4 z-50">
+        {mounted && (
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="p-3 bg-slate-900/40 backdrop-blur-xl border border-slate-800/80 rounded-2xl text-slate-400 hover:text-slate-200 transition-all hover:scale-[1.05] active:scale-[0.95]"
+            title="Змінити тему"
+          >
+            {theme === "dark" ? (
+              <Sun className="h-5 w-5 text-amber-400" />
+            ) : (
+              <Moon className="h-5 w-5 text-indigo-400" />
+            )}
+          </button>
+        )}
+      </div>
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md z-10">
         <div className="flex justify-center mb-4">
           <Link
@@ -319,7 +426,7 @@ function LoginPageContent() {
             <span className="font-extrabold text-white text-2xl">U</span>
           </div>
         </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
+        <h2 className="mt-6 text-center text-3xl font-extrabold tracking-tight text-slate-900 dark:text-transparent dark:bg-gradient-to-r dark:from-white dark:via-slate-100 dark:to-indigo-200 dark:bg-clip-text">
           {isRegister ? "Реєстрація в UniTax" : isForgotPassword ? "Відновлення пароля" : "Вхід до UniTax"}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-400">
@@ -828,6 +935,20 @@ function LoginPageContent() {
                   >
                     Telegram ID
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginMode("member");
+                      setError("");
+                    }}
+                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${
+                      loginMode === "member"
+                        ? "bg-indigo-650 text-white shadow"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Кабінет мешканця
+                  </button>
                 </div>
               )}
 
@@ -885,6 +1006,174 @@ function LoginPageContent() {
                           <>
                             <LogIn className="h-4 w-4" />
                             <span>Отримати код</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                ) : loginMode === "member" ? (
+                  <form onSubmit={handleMemberLogin} className="space-y-6">
+                    <div className="space-y-4">
+                      <div>
+                        {selectedOsbbName ? (
+                          <div className="bg-slate-900/60 border border-indigo-500/30 p-4 rounded-2xl flex items-center justify-between">
+                            <div>
+                              <span className="block text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">
+                                Обрана організація
+                              </span>
+                              <span className="text-sm font-bold text-slate-200">
+                                {selectedOsbbName}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedOsbbName("");
+                                setMemberSlug("");
+                                setSearchQuery("");
+                                setOsbbSearchResults([]);
+                              }}
+                              className="text-xs font-bold text-indigo-400 hover:text-indigo-300 transition-all underline ml-4"
+                            >
+                              Змінити
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <label htmlFor="member_search" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                              Пошук ОСББ / Кооперативу
+                            </label>
+                            <div className="relative rounded-2xl shadow-sm">
+                              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                <Building2 className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                              </div>
+                              <input
+                                type="text"
+                                name="member_search"
+                                id="member_search"
+                                value={searchQuery}
+                                onChange={(e) => {
+                                  setSearchQuery(e.target.value);
+                                  if (error) setError("");
+                                }}
+                                className="block w-full pl-11 pr-4 py-3 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 placeholder-slate-650 text-sm transition-all"
+                                placeholder="Введіть назву ОСББ, адресу або код ЄДРПОУ..."
+                                disabled={isLoading}
+                              />
+                              {isSearchingOsbb && (
+                                <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
+                                  <Loader2 className="h-4 w-4 text-indigo-500 animate-spin" />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Autocomplete results dropdown */}
+                            {osbbSearchResults.length > 0 && (
+                              <div className="absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl divide-y divide-slate-900 scrollbar-thin scrollbar-thumb-slate-850">
+                                {osbbSearchResults.map((osbb) => (
+                                  <button
+                                    key={osbb.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setMemberSlug(osbb.slug);
+                                      setSelectedOsbbName(osbb.name);
+                                      setSearchQuery("");
+                                      setOsbbSearchResults([]);
+                                    }}
+                                    className="w-full text-left px-4 py-3 hover:bg-slate-900 transition-all flex flex-col gap-0.5"
+                                  >
+                                    <span className="text-xs font-bold text-slate-200">
+                                      {osbb.name}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                                      {osbb.address && <span>{osbb.address}</span>}
+                                      {osbb.tax_id && (
+                                        <>
+                                          <span className="text-slate-700">•</span>
+                                          <span>ЄДРПОУ: {osbb.tax_id}</span>
+                                        </>
+                                      )}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="member_phone" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Номер телефону мешканця
+                        </label>
+                        <div className="relative rounded-2xl shadow-sm">
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Phone className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                          </div>
+                          <input
+                            type="text"
+                            name="member_phone"
+                            id="member_phone"
+                            value={memberPhone}
+                            onChange={(e) => {
+                              setMemberPhone(e.target.value);
+                              if (error) setError("");
+                            }}
+                            className="block w-full pl-11 pr-4 py-3 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 placeholder-slate-600 text-sm transition-all"
+                            placeholder="+380991234567"
+                            disabled={isLoading}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label htmlFor="member_password" className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Пароль
+                        </label>
+                        <div className="relative rounded-2xl shadow-sm">
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <KeyRound className="h-5 w-5 text-slate-500" aria-hidden="true" />
+                          </div>
+                          <input
+                            type="password"
+                            name="member_password"
+                            id="member_password"
+                            value={memberPassword}
+                            onChange={(e) => {
+                              setMemberPassword(e.target.value);
+                              if (error) setError("");
+                            }}
+                            className="block w-full pl-11 pr-4 py-3 bg-slate-950/60 border border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-200 placeholder-slate-600 text-sm transition-all"
+                            placeholder="••••••••"
+                            disabled={isLoading}
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {error && (
+                      <div className="rounded-2xl bg-rose-500/10 border border-rose-500/20 p-4">
+                        <div className="flex items-center space-x-3">
+                          <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" />
+                          <p className="text-xs font-semibold text-rose-200">{error}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <button
+                        type="submit"
+                        disabled={isLoading}
+                        className="w-full flex justify-center items-center py-3.5 px-4 bg-indigo-650 hover:bg-indigo-600 active:scale-[0.98] text-white text-sm font-bold rounded-2xl shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all gap-2 disabled:opacity-50"
+                      >
+                        {isLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        ) : (
+                          <>
+                            <LogIn className="h-4 w-4" />
+                            <span>Увійти в кабінет мешканця</span>
                           </>
                         )}
                       </button>

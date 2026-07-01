@@ -46,6 +46,13 @@ export default function SubscriptionPage() {
   const [selectedPlanId, setSelectedPlanId] = useState<number>(1);
   const [enableMemberModule, setEnableMemberModule] = useState<boolean>(false);
   
+  // New Tariff System States
+  const [tariffs, setTariffs] = useState<any[]>([]);
+  const [selectedTariff, setSelectedTariff] = useState<any>(null);
+  const [enableResidentModule, setEnableResidentModule] = useState<boolean>(false);
+  const [residentTiers, setResidentTiers] = useState<any[]>([]);
+  const [selectedResidentTiers, setSelectedResidentTiers] = useState<number[]>([]);
+  
   // UI States
   const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "half_yearly" | "yearly">("monthly");
   const [loading, setLoading] = useState(false);
@@ -137,7 +144,8 @@ export default function SubscriptionPage() {
         fetchPricingDetails(),
         fetchUsageDetails(),
         fetchPaymentsHistory(),
-        fetchPlans()
+        fetchPlans(),
+        fetchTariffs()
       ]);
     } catch (error) {
       console.error("Error loading subscription data:", error);
@@ -194,6 +202,74 @@ export default function SubscriptionPage() {
     }
   };
 
+  const fetchTariffs = async () => {
+    try {
+      const response = await fetch("https://unitas-backend.fly.dev/api/tariffs");
+      const data = await response.json();
+      setTariffs(data || []);
+      
+      // Initialize resident tiers from data
+      const residentTariff = data?.find((t: any) => t.code === "resident_module");
+      if (residentTariff?.additional_resident_tiers) {
+        setResidentTiers(residentTariff.additional_resident_tiers);
+      }
+      
+      // Select appropriate tariff based on profile type
+      if (selectedProfile) {
+        if (selectedProfile.tax_system === "non_profit" || selectedProfile.organization_subtype === "osbb" || selectedProfile.organization_subtype === "st" || selectedProfile.organization_subtype === "cooperative" || selectedProfile.organization_subtype === "go" || selectedProfile.organization_subtype === "bf") {
+          const nonProfitTariff = data?.find((t: any) => t.code === "non_profit");
+          if (nonProfitTariff) {
+            setSelectedTariff(nonProfitTariff);
+          }
+        } else if (subscription?.tariff_code && subscription.tariff_code !== "free" && subscription.tariff_code !== "business" && subscription.tariff_code !== "fop") {
+          const existingTariff = data?.find((t: any) => t.code === subscription.tariff_code);
+          if (existingTariff) {
+            setSelectedTariff(existingTariff);
+          } else {
+            selectTariffByProfileType(data, selectedProfile);
+          }
+        } else {
+          selectTariffByProfileType(data, selectedProfile);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load tariffs:", error);
+    }
+  };
+
+  const selectTariffByProfileType = (data: any[], profile: any) => {
+    console.log("Selecting tariff for profile:", profile);
+    
+    if (profile.tax_system === "non_profit" || profile.organization_subtype === "osbb" || profile.organization_subtype === "st" || profile.organization_subtype === "cooperative" || profile.organization_subtype === "go" || profile.organization_subtype === "bf") {
+      const nonProfitTariff = data?.find((t: any) => t.code === "non_profit");
+      if (nonProfitTariff) setSelectedTariff(nonProfitTariff);
+    } else if (profile.type === "company") {
+      // For companies, check if they are on simplified tax (єдиний податок) or general
+      if (profile.tax_system === "ednuy-3-5%" || profile.tax_system === "single_tax" || profile.tax_system === "fop_ep" || profile.tax_system === "llc_ep" || profile.tax_system === "spilnuy-3-5%") {
+        const tovEpTariff = data?.find((t: any) => t.code === "fop_3_tov_ep" || t.code === "tov_ep");
+        if (tovEpTariff) setSelectedTariff(tovEpTariff);
+      } else {
+        const tovGeneralTariff = data?.find((t: any) => t.code === "tov_general_vat");
+        if (tovGeneralTariff) setSelectedTariff(tovGeneralTariff);
+      }
+    } else if (profile.type === "fop") {
+      // Select tariff based on FOP group
+      const group = profile.group || profile.fop_group;
+      console.log("FOP group:", group);
+      if (group === 3 || group === "3") {
+        const fop3Tariff = data?.find((t: any) => t.code === "fop_3_tov_ep" || t.code === "fop_3");
+        if (fop3Tariff) setSelectedTariff(fop3Tariff);
+      } else {
+        const fop12Tariff = data?.find((t: any) => t.code === "fop_1_2");
+        if (fop12Tariff) setSelectedTariff(fop12Tariff);
+      }
+    } else {
+      if (data && data.length > 0) {
+        setSelectedTariff(data[0]);
+      }
+    }
+  };
+
   const fetchPricingDetails = async () => {
     try {
       const priceData = await api.getPricing();
@@ -231,42 +307,54 @@ export default function SubscriptionPage() {
   };
 
   const handleCheckout = async () => {
-    if (!selectedProfile) return;
+    if (!selectedProfile || !selectedTariff) return;
     setLoading(true);
     try {
-      const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
-      if (isOSBBOrST) {
-        const res = await api.createSubscription({
-          plan_id: selectedPlanId,
-          period: selectedPeriod,
-          has_resident_cabinet: enableMemberModule,
-          profile_id: selectedProfile.id
-        });
-        if (res.payment_url) {
-          window.location.href = res.payment_url;
+      // Calculate total price based on period
+      let monthlyTotal = selectedTariff.monthly_price;
+      if (selectedProfile?.tax_system === "non_profit" && enableResidentModule) {
+        const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+        if (residentTariff) {
+          monthlyTotal += residentTariff.base_resident_price || 0;
+          selectedResidentTiers.forEach(tierIndex => {
+            if (residentTariff.additional_resident_tiers && residentTariff.additional_resident_tiers[tierIndex]) {
+              monthlyTotal += residentTariff.additional_resident_tiers[tierIndex].price;
+            }
+          });
+        }
+      }
+      
+      let total = monthlyTotal;
+      if (selectedPeriod === "half_yearly") {
+        const basePrice = monthlyTotal * 6;
+        const discount = selectedTariff.half_yearly_discount || 0;
+        total = Math.round(basePrice * (1 - discount / 100));
+      } else if (selectedPeriod === "yearly") {
+        const basePrice = monthlyTotal * 12;
+        const discount = selectedTariff.yearly_discount || 0;
+        total = Math.round(basePrice * (1 - discount / 100));
+      }
+      
+      // Create payment with tariff information
+      const res = await api.createPayment({
+        profile_id: selectedProfile.id,
+        plan_type: "business",
+        payment_period: selectedPeriod,
+        tariff_code: selectedTariff.code,
+        amount: total,
+        is_member_module_active: enableResidentModule
+      });
+
+      if (res.payment_required) {
+        if (res.pageUrl) {
+          window.location.href = res.pageUrl;
         } else {
-          alert("Тариф успішно активовано!");
-          await loadData();
-          await refreshProfiles();
+          setLiqpayForm(res);
         }
       } else {
-        const res = await api.createPayment({
-          profile_id: selectedProfile.id,
-          plan_type: "business",
-          payment_period: selectedPeriod
-        });
-
-        if (res.payment_required) {
-          if (res.pageUrl) {
-            window.location.href = res.pageUrl;
-          } else {
-            setLiqpayForm(res);
-          }
-        } else {
-          alert("Тариф Business успішно активовано!");
-          await loadData();
-          await refreshProfiles();
-        }
+        alert(`Тариф ${selectedTariff.name_uk} успішно активовано!`);
+        await loadData();
+        await refreshProfiles();
       }
     } catch (error) {
       console.error("Error creating subscription payment:", error);
@@ -324,6 +412,16 @@ export default function SubscriptionPage() {
       alert("Помилка при зміні статусу автопродовження");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getFilteredTariffs = () => {
+    if (!tariffs || tariffs.length === 0) return [];
+    
+    if (selectedProfile?.tax_system === "non_profit") {
+      return tariffs.filter(t => t.code === "non_profit");
+    } else {
+      return tariffs.filter(t => t.code === "fop_1_2" || t.code === "fop_3_tov_ep" || t.code === "tov_general_vat" || t.code === "consulting_partner");
     }
   };
 
@@ -390,7 +488,7 @@ export default function SubscriptionPage() {
   const isPaidPlan = paidPlans.includes(subscription?.plan);
   const isActiveBusiness = isPaidPlan && subscription?.status === "active";
   const isPendingBusiness = isPaidPlan && subscription?.status === "pending";
-  const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit";
+  const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || selectedProfile?.organization_subtype === "st" || selectedProfile?.tax_system === "non_profit" || selectedProfile?.organization_subtype === "cooperative" || selectedProfile?.organization_subtype === "go" || selectedProfile?.organization_subtype === "bf";
 
   const getDynamicPricing = () => {
     const plan = plans.find(p => p.id === selectedPlanId) || plans[0];
@@ -553,7 +651,7 @@ export default function SubscriptionPage() {
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-6 border-b border-slate-800/60">
         <div>
-          <h1 className="text-3xl font-extrabold bg-gradient-to-r from-white via-slate-200 to-indigo-400 bg-clip-text text-transparent tracking-tight">
+          <h1 className="text-3xl font-extrabold bg-gradient-to-r from-amber-600 via-orange-500 to-amber-700 dark:from-white dark:via-slate-200 dark:to-indigo-400 bg-clip-text text-transparent tracking-tight">
             Керування підпискою
           </h1>
           <p className="text-xs text-slate-400 mt-1 leading-relaxed">
@@ -658,347 +756,204 @@ export default function SubscriptionPage() {
               </div>
             </div>
 
-            {/* Plans Grid */}
-            {(() => {
-              if (isOSBBOrST) {
-                return (
-                  <div className="space-y-6">
-                    <div className="space-y-4">
-                      {plans.map((p) => {
-                        const isSelected = selectedPlanId === p.id;
-                        const isPremium = p.has_member_module;
-                        const planBasePrice = selectedPeriod === "monthly"
-                          ? p.prices?.monthly ?? p.price
-                          : selectedPeriod === "half_yearly"
-                            ? p.prices?.half_yearly ?? 1499
-                            : p.prices?.yearly ?? 2999;
-                        const planPeriodLabel = selectedPeriod === "monthly"
-                          ? " грн/міс"
-                          : selectedPeriod === "half_yearly"
-                            ? " грн / 6 міс"
-                            : " грн / 12 міс";
-                        
+            {/* Selected Tariff Display */}
+            {selectedTariff && (
+              <div className="group relative p-5 bg-slate-900/60 border-2 border-indigo-500 rounded-3xl flex flex-col justify-between overflow-hidden shadow-lg shadow-indigo-500/10">
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div className="w-10 h-10 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center text-xl">
+                      {selectedTariff.code === "non_profit" ? "🏢" : selectedTariff.code === "resident_module" ? "👥" : "💼"}
+                    </div>
+                    <span className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                      Ваш тариф
+                    </span>
+                  </div>
+                  <div className="space-y-1 text-left">
+                    <h3 className="font-extrabold text-slate-800 dark:text-slate-200 text-base">
+                      {selectedTariff.name_uk}
+                    </h3>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed">
+                      {selectedTariff.description}
+                    </p>
+                  </div>
+                  <div className="pt-2 text-left">
+                    <div className="text-3xl font-black text-indigo-400">
+                      {selectedTariff.monthly_price} грн
+                    </div>
+                    <p className="text-xs text-slate-500">на місяць</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* Resident Module Checkbox Option (Only for Non-profits) */}
+            {selectedTariff && isOSBBOrST && (
+              <div className="p-4 bg-slate-900/40 border border-slate-800 rounded-3xl space-y-4">
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={enableResidentModule}
+                    onChange={(e) => setEnableResidentModule(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-700 text-indigo-650 focus:ring-indigo-500 focus:ring-offset-slate-950 bg-slate-900"
+                  />
+                  <div className="text-left">
+                    <span className="text-xs font-bold text-slate-200 group-hover:text-white transition-colors">
+                      Підключити модуль «Мешканці / Клієнти» (+300 грн/міс)
+                    </span>
+                    <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">
+                      Дозволяє мешканцям бачити квитанції, вносити показники та переглядати рахунки. Включає 60 об'єктів.
+                    </p>
+                  </div>
+                </label>
+
+                {enableResidentModule && (
+                  <div className="pt-3 border-t border-slate-800/80 space-y-2.5 text-left">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                      Кількість об'єктів (мешканців):
+                    </span>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedResidentTiers([])}
+                        className={`py-1 px-2 rounded-lg border text-[10px] font-bold text-center transition-all ${
+                          selectedResidentTiers.length === 0
+                            ? "bg-indigo-650 border-indigo-500 text-white"
+                            : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-250"
+                        }`}
+                      >
+                        До 60 (Безкоштовно)
+                      </button>
+                      {residentTiers.map((tier, idx) => {
+                        const isTierSelected = selectedResidentTiers.includes(idx);
                         return (
-                          <div
-                            key={p.id}
-                            onClick={() => setSelectedPlanId(p.id)}
-                            className={`p-5 rounded-2xl border transition-all duration-300 cursor-pointer relative overflow-hidden ${
-                              isSelected
-                                ? "bg-slate-900/60 border-indigo-500/40 shadow-lg shadow-indigo-500/5"
-                                : "bg-slate-950/20 border-slate-800/60 hover:border-slate-700/60"
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              if (isTierSelected) {
+                                setSelectedResidentTiers(selectedResidentTiers.filter(t => t !== idx));
+                              } else {
+                                setSelectedResidentTiers([...selectedResidentTiers, idx]);
+                              }
+                            }}
+                            className={`py-1 px-2 rounded-lg border text-[10px] font-bold text-center transition-all ${
+                              isTierSelected
+                                ? "bg-indigo-650 border-indigo-500 text-white"
+                                : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-255"
                             }`}
                           >
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                                  isSelected ? "border-indigo-500" : "border-slate-600"
-                                }`}>
-                                  {isSelected && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-                                </div>
-                                <div>
-                                  <h4 className="text-sm font-black text-slate-200">{p.name}</h4>
-                                  <p className="text-[10px] text-slate-500 mt-0.5 uppercase tracking-wider font-bold">
-                                    {isPremium ? "Повний функціонал ОСББ" : "Стартовий тариф"}
-                                  </p>
-                                </div>
-                              </div>
-                              
-                              <div className="text-right">
-                                <span className="text-xl font-black text-white">{planBasePrice}</span>
-                                <span className="text-xs text-slate-400">{planPeriodLabel}</span>
-                              </div>
-                            </div>
-
-                            <ul className="mt-4 pl-8 space-y-2 text-xs text-slate-400">
-                              <li className="flex items-center gap-2">
-                                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                <span>Білінг-панель</span>
-                              </li>
-                              <li className="flex items-center gap-2">
-                                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                <span>{isPremium ? "Необмежена кількість мешканців" : "До 100 мешканців"}</span>
-                              </li>
-                              {isPremium && (
-                                <>
-                                  <li className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-900" onClick={(e) => e.stopPropagation()}>
-                                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                                      <input
-                                        type="checkbox"
-                                        checked={enableMemberModule}
-                                        onChange={(e) => setEnableMemberModule(e.target.checked)}
-                                        className="w-4 h-4 rounded border border-slate-700 accent-indigo-650 bg-slate-900 transition-all cursor-pointer focus:ring-0"
-                                      />
-                                      <span className="font-bold text-slate-200 flex items-center gap-1">
-                                        Додати кабінет мешканців <span className="text-indigo-400 font-extrabold">(+250 грн/міс)</span>
-                                      </span>
-                                    </label>
-                                  </li>
-                                  <li className="flex items-center gap-2">
-                                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                    <span>Опитування та голосування</span>
-                                  </li>
-                                  <li className="flex items-center gap-2">
-                                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                    <span>Диспетчер заявок</span>
-                                  </li>
-                                </>
-                              )}
-                            </ul>
-                          </div>
+                            +{tier.count} (+{tier.price} грн)
+                          </button>
                         );
                       })}
                     </div>
-
-                    <div className="pt-4 border-t border-slate-800/80 space-y-3">
-                      <div className="flex justify-between items-center px-2">
-                        <span className="text-xs font-bold text-slate-400">Загальна сума до сплати:</span>
-                        <span className="text-2xl font-black text-indigo-400">
-                          {(() => {
-                            const pricing = getDynamicPricing();
-                            return (
-                              <>
-                                {pricing.total} грн
-                                <span className="text-xs text-slate-400 font-normal"> / {pricing.periodText}</span>
-                              </>
-                            );
-                          })()}
-                        </span>
-                      </div>
-                      
-                      <div className="px-2 pb-2 text-[10px] text-slate-500 font-bold tracking-wide italic leading-relaxed">
-                        Розшифровка: {getDynamicPricing().totalText}
-                      </div>
-                      
-                      <button
-                        onClick={handleCheckout}
-                        disabled={loading}
-                        className={`w-full py-3 rounded-xl text-xs font-black transition-all shadow-lg flex items-center justify-center gap-2 hover:scale-[1.01] ${
-                          loading
-                            ? "bg-indigo-700/50 text-white/50 cursor-not-allowed"
-                            : "bg-gradient-to-r from-indigo-650 to-indigo-700 hover:from-indigo-600 hover:to-indigo-650 text-white shadow-indigo-600/10"
-                        }`}
-                      >
-                        {loading ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <CreditCard className="w-4 h-4" />
-                            <span>Перейти до оплати тарифу</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
                   </div>
-                );
-              }
-
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {/* 1. Free plan option */}
-                  <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 ${
-                    !isActiveBusiness 
-                      ? "bg-slate-900/40 border-indigo-500/30" 
-                      : "bg-slate-950/20 border-slate-800/60 opacity-60 hover:opacity-85"
-                  }`}>
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <h3 className="text-base font-bold text-slate-200">Тариф Free</h3>
-                        {!isActiveBusiness && (
-                          <span className="bg-indigo-500/10 text-indigo-450 border border-indigo-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Базовий функціонал</p>
-                      
-                      <div className="mt-4 flex items-baseline gap-1">
-                        <span className="text-3xl font-black text-white">0</span>
-                        <span className="text-xs text-slate-400">грн / назавжди</span>
-                      </div>
-                      
-                      <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Інтерактивний дашборд</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Імпорт до 5 виписок на місяць</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Історія транзакцій за 30 днів</span>
-                        </li>
-                      </ul>
-                    </div>
-                    
-                    <div className="mt-6">
-                      {!isActiveBusiness ? (
-                        <button
-                          disabled
-                          className="w-full py-2.5 rounded-xl border border-indigo-500/20 bg-indigo-550/10 text-indigo-400 text-xs font-bold cursor-default"
-                        >
-                          Поточний тариф
-                        </button>
-                      ) : (
-                        <button
-                          onClick={async () => {
-                            const hasActiveBusiness = subscription?.plan === "business" && subscription?.status === "active";
-                            const expiresDate = subscription?.expires_at ? new Date(subscription.expires_at).toLocaleDateString("uk-UA") : null;
-                            
-                            let confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф?";
-                            if (hasActiveBusiness && expiresDate) {
-                              confirmMessage = `ℹ️ Ви вже оплатили Business-тариф до ${expiresDate}. Ви можете продовжувати користуватися всіма перевагами Business до кінця цього терміну. Після цієї дати підписка автоматично зміниться на Безкоштовну, а нових списань з картки не буде. Підтверджуєте скасування автоматичного подовження?`;
-                            } else {
-                              confirmMessage = "Ви дійсно хочете перейти на безкоштовний тариф? Ваш сплачений Business буде скасовано.";
+                )}
+              </div>
+            )}
+            {/* Selected Tariff Details */}
+            {selectedTariff && (
+              <div className="pt-4 border-t border-slate-800/80 space-y-3">
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-xs font-bold text-slate-400">Загальна сума до сплати:</span>
+                  <span className="text-2xl font-black text-indigo-400">
+                    {(() => {
+                      let monthlyTotal = selectedTariff.monthly_price;
+                      if (selectedProfile?.tax_system === "non_profit" && enableResidentModule) {
+                        const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+                        if (residentTariff) {
+                          monthlyTotal += residentTariff.base_resident_price || 0;
+                          selectedResidentTiers.forEach(tierIndex => {
+                            if (residentTariff.additional_resident_tiers && residentTariff.additional_resident_tiers[tierIndex]) {
+                              monthlyTotal += residentTariff.additional_resident_tiers[tierIndex].price;
                             }
-
-                            if (confirm(confirmMessage)) {
-                              setLoading(true);
-                              try {
-                                const res = await api.createPayment({
-                                  profile_id: selectedProfile.id,
-                                  plan_type: "free",
-                                  payment_period: "monthly"
-                                });
-                                
-                                if (res.deferred) {
-                                  alert(`Автопродовження підписки скасовано. Ваш тариф Business діятиме до ${expiresDate}.`);
-                                } else {
-                                  alert("Перехід на безкоштовний тариф активовано!");
-                                }
-                                loadData();
-                              } catch (e) {
-                                alert("Помилка при зміні тарифу");
-                              } finally {
-                                setLoading(false);
-                              }
-                            }
-                          }}
-                          className="w-full py-2.5 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-900/60 hover:bg-slate-900 text-slate-350 text-xs font-semibold transition-all"
-                        >
-                          Перейти на Free
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 2. Business plan option */}
-                  <div className={`p-5 rounded-2xl border flex flex-col justify-between transition-all duration-300 relative ${
-                    isActiveBusiness 
-                      ? "bg-slate-900/40 border-amber-500/30" 
-                      : "bg-slate-950/20 border-slate-800/60 hover:border-slate-700/60"
-                  }`}>
-                    {selectedPeriod === "yearly" && (
-                      <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
-                        Економія {yearlySavings} грн
-                      </div>
-                    )}
-                    {selectedPeriod === "half_yearly" && (
-                      <div className="absolute top-2 right-2 bg-emerald-500/10 text-emerald-450 border border-emerald-500/25 px-2 py-0.5 rounded-lg text-[8px] uppercase font-black tracking-widest animate-bounce">
-                        Економія {halfYearlySavings} грн
-                      </div>
-                    )}
-                    
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-1.5">
-                          <Crown className="w-4 h-4 text-amber-400" />
-                          <h3 className="text-base font-bold text-slate-200">Тариф Business</h3>
-                        </div>
-                        {isActiveBusiness && (
-                          <span className="bg-amber-500/10 text-amber-450 border border-amber-500/20 px-2 py-0.5 rounded-md text-[9px] uppercase font-bold">Активний</span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider font-bold">Безлімітний AI доступ</p>
+                          });
+                        }
+                      }
                       
-                      <div className="mt-4 flex items-baseline gap-1">
-                        <span className="text-3xl font-black text-white">
-                          {selectedPeriod === "monthly" 
-                            ? prices.monthly 
-                            : selectedPeriod === "half_yearly" 
-                              ? prices.half_yearly 
-                              : prices.yearly}
-                        </span>
-                        <span className="text-xs text-slate-400">
-                          грн / {selectedPeriod === "monthly" 
-                            ? "міс" 
-                            : selectedPeriod === "half_yearly" 
-                              ? "пів року" 
-                              : "рік"}
-                        </span>
-                      </div>
+                      let total = monthlyTotal;
+                      let periodText = "міс";
                       
-                      <ul className="mt-5 space-y-2.5 text-xs text-slate-400">
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Всі функції Free без лімітів</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>AI генерація та авто-заповнення звітів</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Управління найманими працівниками</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Автоматична банківська синхронізація</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Експорт даних в Excel/CSV</span>
-                        </li>
-                      </ul>
-                    </div>
-                    
-                    <div className="mt-6 space-y-2">
-                      <button
-                        onClick={handleCheckout}
-                        disabled={loading}
-                        className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all shadow-lg flex items-center justify-center gap-1.5 ${
-                          loading 
-                            ? "bg-amber-600/50 text-white/50 cursor-not-allowed" 
-                            : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white shadow-amber-600/10 hover:scale-[1.01]"
-                        }`}
-                      >
-                        {loading ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <CreditCard className="w-3.5 h-3.5" />
-                            <span>
-                              Оплатити підписку ({selectedPeriod === "monthly" ? prices.monthly : selectedPeriod === "half_yearly" ? prices.half_yearly : prices.yearly} грн)
-                            </span>
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleOpenInvoiceModal}
-                        disabled={loading}
-                        className="w-full py-2.5 rounded-xl border border-slate-700 hover:border-slate-650 bg-slate-900/40 hover:bg-slate-900 text-slate-200 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                      >
-                        <Mail className="w-3.5 h-3.5" />
-                        <span>Отримати рахунок на email</span>
-                      </button>
-
-                      {/* Direct Demo Upgrader */}
-                      <button
-                        onClick={handleUpgradeToBusinessDemo}
-                        disabled={loading}
-                        className="w-full py-2 rounded-xl text-[10px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/5 border border-indigo-500/10 hover:bg-indigo-500/10 transition-all flex items-center justify-center gap-1"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>Швидка демо-активація (без оплат)</span>
-                      </button>
-                    </div>
-
-                  </div>
-
+                      if (selectedPeriod === "half_yearly") {
+                        total = monthlyTotal * 6;
+                        periodText = "6 міс";
+                      } else if (selectedPeriod === "yearly") {
+                        total = monthlyTotal * 12;
+                        periodText = "12 міс";
+                      }
+                      
+                      return (
+                        <>
+                          {total} грн
+                          <span className="text-xs text-slate-400 font-normal"> / {periodText}</span>
+                        </>
+                      );
+                    })()}
+                  </span>
                 </div>
-              );
-            })()}
+                
+                <div className="px-2 pb-2 text-[10px] text-slate-500 font-bold tracking-wide italic leading-relaxed">
+                  {(() => {
+                    let monthlyTotal = selectedTariff.monthly_price;
+                    if (selectedProfile?.tax_system === "non_profit" && enableResidentModule) {
+                      const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+                      if (residentTariff) {
+                        monthlyTotal += residentTariff.base_resident_price || 0;
+                        selectedResidentTiers.forEach(tierIndex => {
+                          if (residentTariff.additional_resident_tiers && residentTariff.additional_resident_tiers[tierIndex]) {
+                            monthlyTotal += residentTariff.additional_resident_tiers[tierIndex].price;
+                          }
+                        });
+                      }
+                    }
+                    
+                    let periodText = "місяць";
+                    if (selectedPeriod === "half_yearly") {
+                      periodText = "6 місяців";
+                    } else if (selectedPeriod === "yearly") {
+                      periodText = "12 місяців";
+                    }
+                    
+                    if (selectedProfile?.tax_system === "non_profit") {
+                      let breakdown = `Базовий облік (${selectedTariff.monthly_price} грн/міс × ${selectedPeriod === "monthly" ? 1 : selectedPeriod === "half_yearly" ? 6 : 12} ${periodText})`;
+                      if (enableResidentModule) {
+                        const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+                        if (residentTariff) {
+                          breakdown += ` + Модуль мешканців (база: ${residentTariff.base_resident_price} грн/міс`;
+                          selectedResidentTiers.forEach(tierIndex => {
+                            if (residentTariff.additional_resident_tiers && residentTariff.additional_resident_tiers[tierIndex]) {
+                              breakdown += ` + ${residentTariff.additional_resident_tiers[tierIndex].price} грн`;
+                            }
+                          });
+                          breakdown += ")";
+                        }
+                      }
+                      return breakdown;
+                    } else {
+                      return `Тариф ${selectedTariff.name_uk} (${selectedTariff.monthly_price} грн/міс × ${selectedPeriod === "monthly" ? 1 : selectedPeriod === "half_yearly" ? 6 : 12} ${periodText})`;
+                    }
+                  })()}
+                </div>
+                
+                <button
+                  onClick={handleCheckout}
+                  disabled={loading}
+                  className={`w-full py-3 rounded-xl text-xs font-black transition-all shadow-lg flex items-center justify-center gap-2 hover:scale-[1.01] ${
+                    loading
+                      ? "bg-indigo-700/50 text-white/50 cursor-not-allowed"
+                      : "bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white shadow-indigo-600/20"
+                  }`}
+                >
+                  {loading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <CreditCard className="w-4 h-4" />
+                      <span>Перейти до оплати тарифу</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
 
           </div>
         </div>

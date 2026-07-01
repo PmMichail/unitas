@@ -186,7 +186,7 @@ export default function IncomingDocuments() {
       <div className="max-w-6xl mx-auto z-10 relative">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
+            <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-amber-600 via-orange-500 to-amber-700 dark:from-white dark:via-slate-100 dark:to-indigo-200 bg-clip-text text-transparent">
               Вхідні документи
             </h1>
             <p className="text-slate-400 text-sm mt-1">

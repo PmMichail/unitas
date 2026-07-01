@@ -901,7 +901,7 @@ export default function InvoicesList() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
+          <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-amber-600 via-orange-500 to-amber-700 dark:from-white dark:via-slate-100 dark:to-indigo-200 bg-clip-text text-transparent">
             Відправити контрагенту
           </h1>
           <p className="text-sm text-slate-400 mt-1">

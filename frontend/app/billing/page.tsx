@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/context/AppContext";
-import { api, invoicesApi } from "@/lib/api";
+import { api, invoicesApi, API_BASE_URL } from "@/lib/api";
 import {
   Users,
   Plus,
@@ -40,7 +40,10 @@ import {
   Clock,
   Printer,
   Download,
-  History as HistoryIcon
+  History as HistoryIcon,
+  Megaphone,
+  ExternalLink,
+  ShieldAlert
 } from "lucide-react";
 
 interface Member {
@@ -127,7 +130,20 @@ export default function BillingPage() {
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState("");
   const [balanceFilter, setBalanceFilter] = useState<"all" | "debt" | "prepaid">("all");
-  const [activeTab, setActiveTab] = useState<"members" | "contractors" | "payments" | "meters" | "moderation" | "resident_cabinet">("members");
+  const [activeTab, setActiveTab] = useState<"members" | "contractors" | "payments" | "meters" | "moderation" | "resident_cabinet" | "board">("members");
+
+  // Board Workspace State
+  const [boardIssues, setBoardIssues] = useState<any[]>([]);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [isCreatingIssue, setIsCreatingIssue] = useState(false);
+  const [newIssueTitle, setNewIssueTitle] = useState("");
+  const [newIssueDesc, setNewIssueDesc] = useState("");
+  const [signingIssueId, setSigningIssueId] = useState<number | null>(null);
+  const [signingPassword, setSigningPassword] = useState("");
+  const [certificates, setCertificates] = useState<any[]>([]);
+  const [selectedCertId, setSelectedCertId] = useState<number | null>(null);
+  const [isSigning, setIsSigning] = useState(false);
+  const [isPublishingIssueId, setIsPublishingIssueId] = useState<number | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -161,6 +177,7 @@ export default function BillingPage() {
   const [number, setNumber] = useState("");
   const [isBoardMember, setIsBoardMember] = useState(false);
   const [isBoardChairman, setIsBoardChairman] = useState(false);
+  const [modalTab, setModalTab] = useState<"property" | "resident">("property");
 
   // Charge Modal & Accrual Config
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
@@ -231,7 +248,15 @@ export default function BillingPage() {
   const [rcLoading, setRcLoading] = useState(false);
 
   // Resident Cabinet Sub-tabs and Data lists
-  const [rcSubTab, setRcSubTab] = useState<"general" | "contacts" | "security" | "zones" | "tickets" | "documents" | "surveys">("general");
+  const [rcSubTab, setRcSubTab] = useState<"announcements" | "general" | "contacts" | "security" | "zones" | "tickets" | "documents" | "surveys">("announcements");
+
+  // Announcements Sub-tab State
+  const [announcements, setAnnouncements] = useState<any[]>([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(false);
+  const [isCreatingAnnouncement, setIsCreatingAnnouncement] = useState(false);
+  const [newAnnTitle, setNewAnnTitle] = useState("");
+  const [newAnnContent, setNewAnnContent] = useState("");
+  const [newAnnPinned, setNewAnnPinned] = useState(false);
 
   // Contacts Sub-tab State
   const [contactsList, setContactsList] = useState<any[]>([]);
@@ -280,6 +305,18 @@ export default function BillingPage() {
   const [bulkImportFile, setBulkImportFile] = useState<File | null>(null);
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkImportResult, setBulkImportResult] = useState<string | null>(null);
+
+  // Batch Generator State
+  const [batchGeneratorOpen, setBatchGeneratorOpen] = useState(false);
+  const [batchStreet, setBatchStreet] = useState("");
+  const [batchNumber, setBatchNumber] = useState("");
+  const [batchPropertyType, setBatchPropertyType] = useState("кв.");
+  const [batchFromNumber, setBatchFromNumber] = useState<number>(1);
+  const [batchToNumber, setBatchToNumber] = useState<number>(10);
+  const [batchArea, setBatchArea] = useState<number>(0);
+  const [batchRatePerSqm, setBatchRatePerSqm] = useState<number>(0);
+  const [batchFixedFee, setBatchFixedFee] = useState<number>(0);
+  const [batchGenerating, setBatchGenerating] = useState(false);
 
   // Geolocation Local State
   const [profileLat, setProfileLat] = useState<number | null>(null);
@@ -726,6 +763,49 @@ export default function BillingPage() {
     }
   };
 
+  const handleBatchGenerateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (batchFromNumber <= 0 || batchToNumber <= 0) {
+      showToast("Діапазон номерів повинен бути більшим за 0", "error");
+      return;
+    }
+    if (batchFromNumber > batchToNumber) {
+      showToast("Початковий номер не може бути більшим за кінцевий", "error");
+      return;
+    }
+
+    setBatchGenerating(true);
+    try {
+      const data = await api.batchGenerateMembers(selectedProfile.id, {
+        street: batchStreet || undefined,
+        number: batchNumber || undefined,
+        property_type: batchPropertyType,
+        from_number: batchFromNumber,
+        to_number: batchToNumber,
+        area: batchArea,
+        rate_per_sqm: batchRatePerSqm,
+        fixed_monthly_fee: batchFixedFee,
+        user_id: selectedProfile.user_id
+      });
+      showToast(data.message || "Генерація завершена успішно!", "success");
+      setBatchGeneratorOpen(false);
+      setBatchStreet("");
+      setBatchNumber("");
+      setBatchFromNumber(1);
+      setBatchToNumber(10);
+      setBatchArea(0);
+      setBatchRatePerSqm(0);
+      setBatchFixedFee(0);
+      loadData();
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.response?.data?.detail || "Помилка при генерації об'єктів", "error");
+    } finally {
+      setBatchGenerating(false);
+    }
+  };
+
   const downloadCsvTemplate = () => {
     const csvContent = "\ufeff" + 
       "Номер квартири / об'єкта,ПІБ власника,Площа (кв.м),Тариф за кв.м,Фіксований внесок,Email,Телефон,Початковий баланс,Тип об'єкта,Роль\n" +
@@ -744,6 +824,183 @@ export default function BillingPage() {
   };
 
   // --- RESIDENT CABINET OPERATIONS ---
+
+  const fetchAnnouncements = async () => {
+    if (!selectedProfile) return;
+    setAnnouncementsLoading(true);
+    try {
+      const data = await api.getAnnouncements(selectedProfile.id);
+      if (Array.isArray(data)) {
+        setAnnouncements(data);
+      }
+    } catch (err) {
+      console.error("Error fetching announcements:", err);
+    } finally {
+      setAnnouncementsLoading(false);
+    }
+  };
+
+  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!newAnnTitle.trim() || !newAnnContent.trim()) return;
+    try {
+      await api.createAnnouncement(selectedProfile.id, {
+        title: newAnnTitle,
+        content: newAnnContent,
+        is_pinned: newAnnPinned
+      });
+      setNewAnnTitle("");
+      setNewAnnContent("");
+      setNewAnnPinned(false);
+      setIsCreatingAnnouncement(false);
+      fetchAnnouncements();
+      showToast("Оголошення успішно опубліковано!");
+    } catch (err) {
+      console.error("Error creating announcement:", err);
+      showToast("Помилка при публікації оголошення", "error");
+    }
+  };
+
+  const handleDeleteAnnouncement = async (id: number) => {
+    if (!selectedProfile) return;
+    if (confirm("Ви впевнені, що хочете видалити це оголошення?")) {
+      try {
+        await api.deleteAnnouncement(selectedProfile.id, id);
+        fetchAnnouncements();
+        showToast("Оголошення видалено");
+      } catch (err) {
+        console.error("Error deleting announcement:", err);
+        showToast("Помилка при видаленні оголошення", "error");
+      }
+    }
+  };
+
+  // --- BOARD WORKSPACE OPERATIONS ---
+
+  const fetchBoardIssues = async () => {
+    if (!selectedProfile) return;
+    setBoardLoading(true);
+    try {
+      const data = await api.getBoardIssues("AdminSecret2026", selectedProfile.id);
+      if (Array.isArray(data)) {
+        setBoardIssues(data);
+      }
+    } catch (err) {
+      console.error("Error fetching board issues:", err);
+    } finally {
+      setBoardLoading(false);
+    }
+  };
+
+  const fetchCertificates = async () => {
+    if (!selectedProfile) return;
+    try {
+      const data = await api.getCertificates(selectedProfile.id);
+      if (Array.isArray(data)) {
+        setCertificates(data || []);
+        if (data.length > 0) {
+          setSelectedCertId(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching certificates:", err);
+    }
+  };
+
+  const handleCreateIssue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!newIssueTitle.trim()) return;
+    try {
+      await api.createBoardIssue("AdminSecret2026", {
+        title: newIssueTitle,
+        description: newIssueDesc
+      }, selectedProfile.id);
+      setNewIssueTitle("");
+      setNewIssueDesc("");
+      setIsCreatingIssue(false);
+      fetchBoardIssues();
+      showToast("Питання успішно створено!");
+    } catch (err) {
+      console.error("Error creating issue:", err);
+      showToast("Помилка при створенні питання", "error");
+    }
+  };
+
+  const handleStartVoting = async (issueId: number) => {
+    if (!selectedProfile) return;
+    try {
+      await api.startBoardVoting("AdminSecret2026", issueId, selectedProfile.id);
+      fetchBoardIssues();
+      showToast("Голосування розпочато!");
+    } catch (err) {
+      console.error("Error starting voting:", err);
+      showToast("Помилка при запуску голосування", "error");
+    }
+  };
+
+  const handleEndVoting = async (issueId: number) => {
+    if (!selectedProfile) return;
+    try {
+      await api.endBoardVoting("AdminSecret2026", issueId, selectedProfile.id);
+      fetchBoardIssues();
+      showToast("Голосування завершено!");
+    } catch (err) {
+      console.error("Error ending voting:", err);
+      showToast("Помилка при завершенні голосування", "error");
+    }
+  };
+
+  const handleSignProtocol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signingIssueId || !selectedProfile) return;
+    setIsSigning(true);
+    try {
+      await api.signBoardProtocol("AdminSecret2026", signingIssueId, {
+        password: signingPassword,
+        certificate_id: selectedCertId || undefined
+      }, selectedProfile.id);
+      setSigningPassword("");
+      setSigningIssueId(null);
+      fetchBoardIssues();
+      showToast("Протокол успішно підписано КЕП!");
+    } catch (err: any) {
+      console.error("Error signing protocol:", err);
+      showToast(err.response?.data?.detail || "Помилка при підписі протоколу", "error");
+    } finally {
+      setIsSigning(false);
+    }
+  };
+
+  const handlePublishProtocol = async (issueId: number) => {
+    if (!selectedProfile) return;
+    setIsPublishingIssueId(issueId);
+    try {
+      await api.publishBoardProtocol("AdminSecret2026", issueId, selectedProfile.id);
+      showToast("Протокол успішно опубліковано у публічні документи!");
+      fetchBoardIssues();
+    } catch (err: any) {
+      console.error("Error publishing protocol:", err);
+      showToast(err.response?.data?.detail || "Помилка при публікації протоколу", "error");
+    } finally {
+      setIsPublishingIssueId(null);
+    }
+  };
+
+  const handleDeleteIssue = async (issueId: number) => {
+    if (!selectedProfile) return;
+    if (confirm("Ви впевнені, що хочете видалити це питання з порядку денного правління?")) {
+      try {
+        await api.deleteBoardIssue("AdminSecret2026", issueId, selectedProfile.id);
+        fetchBoardIssues();
+        showToast("Питання успішно видалено!");
+      } catch (err: any) {
+        console.error("Error deleting issue:", err);
+        showToast(err.response?.data?.detail || "Помилка при видаленні питання", "error");
+      }
+    }
+  };
 
   const fetchRCContacts = async () => {
     if (!selectedProfile) return;
@@ -1071,8 +1328,13 @@ export default function BillingPage() {
   };
 
   useEffect(() => {
-    if (activeTab === "resident_cabinet") {
-      if (rcSubTab === "contacts") {
+    if (activeTab === "board") {
+      fetchBoardIssues();
+      fetchCertificates();
+    } else if (activeTab === "resident_cabinet") {
+      if (rcSubTab === "announcements") {
+        fetchAnnouncements();
+      } else if (rcSubTab === "contacts") {
         fetchRCContacts();
       } else if (rcSubTab === "security") {
         fetchRCSecurityDevices();
@@ -1107,6 +1369,7 @@ export default function BillingPage() {
     setNumber("");
     setIsBoardMember(false);
     setIsBoardChairman(false);
+    setModalTab("property");
     setMemberModalOpen(true);
   };
 
@@ -1128,6 +1391,7 @@ export default function BillingPage() {
     setNumber(member.number || "");
     setIsBoardMember(member.is_board_member || false);
     setIsBoardChairman(member.is_board_chairman || false);
+    setModalTab("property");
     setMemberModalOpen(true);
   };
 
@@ -1717,15 +1981,15 @@ export default function BillingPage() {
 
   // Calculations for stats
   const totalDebt = members
-    .filter((m) => m.property_type !== "провайдер" && m.balance < 0)
+    .filter((m) => m.property_type !== "провайдер" && !m.parent_id && m.balance < 0)
     .reduce((sum, m) => sum + Math.abs(m.balance), 0);
   
   const totalPrepaid = members
-    .filter((m) => m.property_type !== "провайдер" && m.balance > 0)
+    .filter((m) => m.property_type !== "провайдер" && !m.parent_id && m.balance > 0)
     .reduce((sum, m) => sum + m.balance, 0);
 
   const estimatedMonthlyAccruals = members
-    .filter((m) => m.property_type !== "провайдер")
+    .filter((m) => m.property_type !== "провайдер" && !m.parent_id)
     .reduce((sum, m) => {
       if (m.rate_per_sqm && m.area) {
         return sum + m.rate_per_sqm * m.area;
@@ -1733,18 +1997,31 @@ export default function BillingPage() {
       return sum + (m.fixed_monthly_fee || 0);
     }, 0);
 
-  // Filtered members list
+  // Filtered members list (only primary physical objects/units)
   const filteredMembers = members.filter((m) => {
     const isProvider = m.property_type === "провайдер";
     if (isProvider) return false;
+    
+    // Only show primary objects/units in the main billing list
+    if (m.parent_id) return false;
 
     const searchLower = searchTerm.toLowerCase();
+    
+    // Search within child accounts (co-owners/residents) associated with this parent object
+    const children = members.filter(c => c.parent_id === m.id);
+    const matchesChildren = children.some(c => 
+      (c.owner_name && c.owner_name.toLowerCase().includes(searchLower)) ||
+      (c.email && c.email.toLowerCase().includes(searchLower)) ||
+      (c.phone && c.phone.toLowerCase().includes(searchLower))
+    );
+
     const matchesSearch =
       m.identifier.toLowerCase().includes(searchLower) ||
       (m.owner_name && m.owner_name.toLowerCase().includes(searchLower)) ||
       (m.email && m.email.toLowerCase().includes(searchLower)) ||
       (m.phone && m.phone.toLowerCase().includes(searchLower)) ||
-      (m.property_type && m.property_type.toLowerCase().includes(searchLower));
+      (m.property_type && m.property_type.toLowerCase().includes(searchLower)) ||
+      matchesChildren;
 
     if (balanceFilter === "debt") return matchesSearch && m.balance < 0;
     if (balanceFilter === "prepaid") return matchesSearch && m.balance > 0;
@@ -1945,7 +2222,7 @@ export default function BillingPage() {
               </div>
             </div>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-4">
-              {members.length} <span className="text-sm font-medium">од.</span>
+              {members.filter(m => !m.parent_id && m.property_type !== "провайдер").length} <span className="text-sm font-medium">од.</span>
             </h3>
             <p className="text-xs text-slate-400 mt-2">Квартири, ділянки, паркомісця тощо</p>
           </div>
@@ -1983,7 +2260,7 @@ export default function BillingPage() {
                   : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-250"
               }`}
             >
-              Список мешканців ({members.filter(m => m.property_type !== "провайдер").length})
+              Список об'єктів ({members.filter(m => !m.parent_id && m.property_type !== "провайдер").length})
             </button>
             <button
               onClick={() => setActiveTab("contractors")}
@@ -2026,6 +2303,16 @@ export default function BillingPage() {
               Модерація ({moderationMembers.filter(m => m.status === "pending").length})
             </button>
             <button
+              onClick={() => setActiveTab("board")}
+              className={`flex-1 md:flex-initial flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
+                activeTab === "board"
+                  ? "bg-indigo-600 text-white shadow-md"
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-250"
+              }`}
+            >
+              Правління ({boardIssues.length})
+            </button>
+            <button
               onClick={() => setActiveTab("resident_cabinet")}
               className={`flex-1 md:flex-initial flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 activeTab === "resident_cabinet"
@@ -2053,6 +2340,13 @@ export default function BillingPage() {
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Імпорт списком</span>
+                </button>
+                <button
+                  onClick={() => setBatchGeneratorOpen(true)}
+                  className="flex items-center justify-center space-x-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold px-3 py-2 rounded-xl w-full md:w-auto"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Генератор об'єктів</span>
                 </button>
               </div>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -2273,6 +2567,262 @@ export default function BillingPage() {
           </div>
         )}
 
+        {/* Board Workspace Tab */}
+        {activeTab === "board" && (
+          <div className="space-y-6">
+            <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  🏛️ Робочий простір правління ОСББ
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Обговорення питань, голосування та автоматичне формування протоколів засідань.
+                </p>
+              </div>
+              {!isCreatingIssue && (
+                <button
+                  onClick={() => setIsCreatingIssue(true)}
+                  className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                >
+                  <Plus size={16} /> Створити питання
+                </button>
+              )}
+            </div>
+
+            {/* Create Issue Form */}
+            {isCreatingIssue && (
+              <div className="glass-panel rounded-3xl p-6 border border-indigo-500/20 dark:border-indigo-500/10 bg-slate-50/50 dark:bg-slate-955/40 shadow-xl">
+                <h3 className="text-base font-bold text-slate-850 dark:text-white mb-4">Нове питання на порядок денний</h3>
+                <form onSubmit={handleCreateIssue} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Тема питання</label>
+                    <input
+                      type="text"
+                      required
+                      value={newIssueTitle}
+                      onChange={(e) => setNewIssueTitle(e.target.value)}
+                      placeholder="Наприклад: Про ремонт покрівлі другого під'їзду"
+                      className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-905 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Опис питання / Пропозиція</label>
+                    <textarea
+                      rows={4}
+                      value={newIssueDesc}
+                      onChange={(e) => setNewIssueDesc(e.target.value)}
+                      placeholder="Детально опишіть суть питання, пропозиції членів правління та очікувані результати..."
+                      className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-905 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition"
+                    >
+                      Опублікувати питання
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreatingIssue(false);
+                        setNewIssueTitle("");
+                        setNewIssueDesc("");
+                      }}
+                      className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-xl text-slate-500 dark:text-slate-400 transition"
+                    >
+                      Скасувати
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Issues List */}
+            {boardLoading ? (
+              <div className="py-12 text-center text-slate-500 dark:text-slate-400 font-semibold">Завантаження питань...</div>
+            ) : boardIssues.length === 0 ? (
+              <div className="glass-panel rounded-3xl p-12 text-center text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-800/40">
+                Питання для обговорення правлінням ще не створені.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {boardIssues.map((issue) => (
+                  <div
+                    key={issue.id}
+                    className="glass-panel rounded-3xl p-6 shadow-sm border border-slate-200 dark:border-slate-800/60 bg-white/40 dark:bg-slate-900/10 space-y-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span
+                        className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                          issue.status === "discussion"
+                            ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+                            : issue.status === "voting"
+                            ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20"
+                            : issue.is_signed
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                            : "bg-slate-500/10 text-slate-505 dark:text-slate-400 border-slate-200 dark:border-slate-800"
+                        }`}
+                      >
+                        {issue.status === "discussion" && "💬 Обговорення"}
+                        {issue.status === "voting" && "🗳️ Голосування"}
+                        {issue.status === "completed" && (issue.is_signed ? "✅ Підписано КЕП" : "📄 Очікує підпису")}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400 dark:text-slate-500">{new Date(issue.created_at).toLocaleDateString("uk-UA")}</span>
+                        <button
+                          onClick={() => handleDeleteIssue(issue.id)}
+                          className="p-1.5 text-rose-500 hover:bg-rose-500/10 rounded-lg transition"
+                          title="Видалити питання"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-base font-bold text-slate-850 dark:text-white">{issue.title}</h3>
+                      {issue.description && (
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mt-1 whitespace-pre-line">{issue.description}</p>
+                      )}
+                    </div>
+
+                    {/* Votes Stats */}
+                    {issue.status !== "discussion" && (
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-850 flex flex-wrap items-center justify-between gap-4">
+                        <div className="flex gap-4">
+                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold">👍 ЗА: {issue.stats?.yes || 0}</span>
+                          <span className="text-xs text-rose-600 dark:text-rose-450 font-bold">👎 ПРОТИ: {issue.stats?.no || 0}</span>
+                          <span className="text-xs text-slate-555 dark:text-slate-400 font-bold">😐 УТРИМАЛИСЬ: {issue.stats?.abstain || 0}</span>
+                        </div>
+                        <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">Всього голосів: {issue.stats?.total || 0}</span>
+                      </div>
+                    )}
+
+                    {/* AI generated Protocol Minutes */}
+                    {issue.ai_protocol && (
+                      <div className="p-4 rounded-2xl bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/20 dark:border-indigo-500/10 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <h4 className="text-xs font-bold text-indigo-650 dark:text-indigo-400 uppercase tracking-wider">📄 Сформований ШІ-протокол</h4>
+                          {issue.document_id && (
+                            <a
+                              href={`${API_BASE_URL}/api/documents/download/${issue.document_id}`}
+                              target="_blank"
+                              className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-455 dark:hover:text-indigo-300 font-semibold flex items-center gap-1"
+                            >
+                              Завантажити <ExternalLink size={12} />
+                            </a>
+                          )}
+                        </div>
+                        <pre className="text-xs text-slate-600 dark:text-slate-350 overflow-x-auto whitespace-pre-wrap max-h-48 custom-scrollbar border-t border-slate-200 dark:border-indigo-500/5 pt-2">
+                          {issue.ai_protocol}
+                        </pre>
+                      </div>
+                    )}
+
+                    {/* Admin Action Buttons */}
+                    <div className="flex gap-3 pt-2">
+                      {issue.status === "discussion" && (
+                        <button
+                          onClick={() => handleStartVoting(issue.id)}
+                          className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                        >
+                          Запустити голосування
+                        </button>
+                      )}
+                      {issue.status === "voting" && (
+                        <button
+                          onClick={() => handleEndVoting(issue.id)}
+                          className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                        >
+                          Завершити голосування та створити протокол AI
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Sign Protocol Block */}
+                    {issue.status === "completed" && !issue.is_signed && (
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800/40">
+                        {signingIssueId === issue.id ? (
+                          <form onSubmit={handleSignProtocol} className="space-y-3 p-4 rounded-2xl bg-indigo-500/5 dark:bg-indigo-950/20 border border-indigo-500/20 dark:border-indigo-500/10">
+                            <h4 className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase">Підписання протоколу КЕП</h4>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 dark:text-slate-400 mb-1">Оберіть сертифікат</label>
+                              <select
+                                value={selectedCertId || ""}
+                                onChange={(e) => setSelectedCertId(Number(e.target.value))}
+                                className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300"
+                              >
+                                {certificates.map((c) => (
+                                  <option key={c.id} value={c.id}>{c.cert_owner_name} ({c.cert_serial})</option>
+                                ))}
+                                {certificates.length === 0 && (
+                                  <option value="">Немає сертифікатів КЕП</option>
+                                )}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 dark:text-slate-400 mb-1">Пароль захисту КЕП</label>
+                              <input
+                                type="password"
+                                required
+                                value={signingPassword}
+                                onChange={(e) => setSigningPassword(e.target.value)}
+                                placeholder="Введіть пароль ключа..."
+                                className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                              />
+                            </div>
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="submit"
+                                disabled={isSigning}
+                                className="flex-1 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition"
+                              >
+                                {isSigning ? "Підписання..." : "Підписати протокол"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSigningIssueId(null)}
+                                className="px-3 py-2 text-xs font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg text-slate-500 dark:text-slate-400 transition"
+                              >
+                                Скасувати
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setSigningIssueId(issue.id);
+                              if (certificates.length > 0 && !selectedCertId) {
+                                setSelectedCertId(certificates[0].id);
+                              }
+                            }}
+                            className="w-full py-2.5 rounded-xl bg-indigo-500/5 hover:bg-indigo-600 border border-indigo-500/20 text-indigo-600 hover:text-white text-xs font-bold transition flex items-center justify-center gap-1.5"
+                          >
+                            <ShieldAlert size={14} /> Підписати протокол КЕП
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    
+                    {issue.status === "completed" && (
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800/40">
+                        <button
+                          onClick={() => handlePublishProtocol(issue.id)}
+                          disabled={isPublishingIssueId === issue.id}
+                          className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/10"
+                        >
+                          <Send size={14} /> {isPublishingIssueId === issue.id ? "Публікація..." : "Опублікувати у публічні документи"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Resident Cabinet Module Tab */}
         {activeTab === "resident_cabinet" && (
           <div className="space-y-6">
@@ -2431,7 +2981,7 @@ export default function BillingPage() {
                             Всього особових рахунків
                           </div>
                           <div className="text-3xl font-black text-slate-900 dark:text-white">
-                            {moderationMembers.length}
+                            {moderationMembers.filter(m => !m.parent_id).length}
                           </div>
                           <div className="text-[10px] text-slate-400 mt-1">Кількість заведених об'єктів</div>
                         </div>
@@ -2461,6 +3011,7 @@ export default function BillingPage() {
                     {/* Sub-tabs menu */}
                     <div className="flex flex-wrap gap-2 p-1.5 bg-slate-150/40 dark:bg-slate-900/60 border border-slate-200/50 dark:border-slate-800/40 rounded-2xl">
                       {[
+                        { id: "announcements", label: "Оголошення", icon: Megaphone },
                         { id: "general", label: "Основне", icon: Settings },
                         { id: "contacts", label: "Контакти", icon: Phone },
                         { id: "security", label: "Безпека", icon: Lock },
@@ -2487,6 +3038,143 @@ export default function BillingPage() {
                         );
                       })}
                     </div>
+
+                    {/* Announcements sub-tab */}
+                    {rcSubTab === "announcements" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                              📢 Оголошення ОСББ
+                            </h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                              Створюйте оголошення, які будуть показані усім мешканцам на головній сторінці кабінету та в додатку.
+                            </p>
+                          </div>
+                          {!isCreatingAnnouncement && (
+                            <button
+                              onClick={() => setIsCreatingAnnouncement(true)}
+                              className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                            >
+                              <Plus size={16} /> Нове оголошення
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Create Announcement Form */}
+                        {isCreatingAnnouncement && (
+                          <div className="glass-panel rounded-3xl p-6 border border-indigo-500/20 dark:border-indigo-500/10 bg-slate-50/50 dark:bg-slate-950/40 shadow-xl">
+                            <h3 className="text-base font-bold text-slate-850 dark:text-white mb-4">Створення нового оголошення</h3>
+                            <form onSubmit={handleCreateAnnouncement} className="space-y-4">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Заголовок</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={newAnnTitle}
+                                  onChange={(e) => setNewAnnTitle(e.target.value)}
+                                  placeholder="Наприклад: Планове відключення води"
+                                  className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-905 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Текст оголошення</label>
+                                <textarea
+                                  rows={4}
+                                  required
+                                  value={newAnnContent}
+                                  onChange={(e) => setNewAnnContent(e.target.value)}
+                                  placeholder="Текст повідомлення для мешканців..."
+                                  className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-905 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  id="is_pinned"
+                                  checked={newAnnPinned}
+                                  onChange={(e) => setNewAnnPinned(e.target.checked)}
+                                  className="rounded border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-905 text-indigo-650 focus:ring-indigo-500"
+                                />
+                                <label htmlFor="is_pinned" className="text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                                  Закріпити вгорі списку
+                                </label>
+                              </div>
+                              <div className="flex gap-3 pt-2">
+                                <button
+                                  type="submit"
+                                  className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition"
+                                >
+                                  Опублікувати
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCreatingAnnouncement(false);
+                                    setNewAnnTitle("");
+                                    setNewAnnContent("");
+                                    setNewAnnPinned(false);
+                                  }}
+                                  className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-xl text-slate-500 dark:text-slate-400 transition"
+                                >
+                                  Скасувати
+                                </button>
+                              </div>
+                            </form>
+                          </div>
+                        )}
+
+                        {/* Announcements List */}
+                        {announcementsLoading ? (
+                          <div className="py-12 text-center text-slate-500 dark:text-slate-400 font-semibold">Завантаження оголошень...</div>
+                        ) : announcements.length === 0 ? (
+                          <div className="glass-panel rounded-3xl p-12 text-center text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-800/40">
+                            Немає активних оголошень.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {announcements.map((ann) => (
+                              <div
+                                key={ann.id}
+                                className={`glass-panel rounded-3xl p-6 shadow-sm border ${
+                                  ann.is_pinned 
+                                    ? "border-indigo-500/30 dark:border-indigo-500/30 bg-indigo-500/5 dark:bg-indigo-950/10" 
+                                    : "border-slate-200 dark:border-slate-800/60 bg-white/40 dark:bg-slate-900/10"
+                                } flex justify-between items-start gap-4`}
+                              >
+                                <div className="space-y-2 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {ann.is_pinned && (
+                                      <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 border border-indigo-500/20 dark:border-indigo-500/30">
+                                        📌 Закріплено
+                                      </span>
+                                    )}
+                                    <span className="text-xs text-slate-400 dark:text-slate-500">
+                                      {new Date(ann.created_at).toLocaleString("uk-UA", {
+                                        day: "numeric",
+                                        month: "short",
+                                        hour: "2-digit",
+                                        minute: "2-digit"
+                                      })}
+                                    </span>
+                                  </div>
+                                  <h3 className="text-base font-bold text-slate-850 dark:text-white">{ann.title}</h3>
+                                  <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{ann.content}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAnnouncement(ann.id)}
+                                  className="p-2 rounded-lg bg-red-500/5 hover:bg-red-500/10 dark:bg-red-950/20 dark:hover:bg-red-500/20 border border-red-500/10 text-red-500 dark:text-red-400 hover:text-red-650 transition shrink-0"
+                                  title="Видалити оголошення"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* General config sub-tab */}
                     {rcSubTab === "general" && (
@@ -3446,19 +4134,19 @@ export default function BillingPage() {
                     filteredMembers.map((m) => {
                       const hasDebt = m.balance < 0;
                       const hasPrepay = m.balance > 0;
-                      const parentMember = m.parent_id ? members.find(p => p.id === m.parent_id) : null;
+                      const children = members.filter(child => child.parent_id === m.id);
                       return (
                         <tr key={m.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors duration-150">
                           <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">
                             <button
-                              type="button"
+                               type="button"
                               onClick={() => handleOpenMemberDetails(m.id)}
                               className="flex items-center space-x-2.5 text-left hover:text-indigo-650 transition-colors"
                             >
                               <div className="w-9 h-9 rounded-lg bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 flex items-center justify-center shrink-0">
                                 <Building className="w-5 h-5" />
                               </div>
-                              <div className="flex flex-col">
+                              <div className="flex flex-col animate-fade-in">
                                 <span className="text-slate-800 dark:text-white font-bold hover:underline">
                                   {(() => {
                                     const type = (m.property_type || "кв.").trim();
@@ -3469,17 +4157,63 @@ export default function BillingPage() {
                                     return `${type} ${id}`;
                                   })()}
                                 </span>
+                                {(m.street || m.number) && (
+                                  <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                                    {m.street}{m.number ? `, буд. ${m.number}` : ""}
+                                  </span>
+                                )}
                               </div>
                             </button>
                           </td>
                           <td className="px-6 py-4 font-medium text-slate-700 dark:text-slate-200">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span>{m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}</span>
-                              {m.share && (
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
-                                  частка {m.share}
-                                </span>
-                              )}
+                            <div className="space-y-2">
+                              {/* Primary Owner */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold">{m.owner_name || <span className="text-slate-400 italic">Не вказано</span>}</span>
+                                {m.share && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 text-indigo-600 dark:text-indigo-400">
+                                    частка {m.share}
+                                  </span>
+                                )}
+                              </div>
+                              {/* Child Owners / Residents */}
+                              {children.map(child => (
+                                <div key={child.id} className="flex items-center gap-2 flex-wrap text-xs text-slate-500 dark:text-slate-400 pl-2 border-l border-slate-200 dark:border-slate-800 group/child">
+                                  <span>{child.owner_name}</span>
+                                  {child.role === "tenant" ? (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">Мешканець</span>
+                                  ) : (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">Власник</span>
+                                  )}
+                                  {child.share && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">частка {child.share}</span>
+                                  )}
+                                  <div className="flex items-center gap-1.5 opacity-60 hover:opacity-100 transition-opacity ml-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenEditModal(child);
+                                      }}
+                                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-amber-500 hover:text-amber-600 transition-all"
+                                      title="Редагувати співвласника"
+                                    >
+                                      <Edit className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteMember(child.id);
+                                      }}
+                                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-red-500 hover:text-red-600 transition-all"
+                                      title="Видалити співвласника"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </td>
                           <td className="px-6 py-4 text-xs font-semibold">
@@ -3493,20 +4227,41 @@ export default function BillingPage() {
                               </span>
                             )}
                           </td>
-                          <td className="px-6 py-4 text-xs text-slate-500 space-y-1">
-                            {m.email && (
-                              <div className="flex items-center">
-                                <Mail className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                                <a href={`mailto:${m.email}`} className="hover:text-indigo-650 hover:underline">{m.email}</a>
+                          <td className="px-6 py-4 text-xs text-slate-500 space-y-2">
+                            {/* Primary Contacts */}
+                            <div>
+                              {m.email && (
+                                <div className="flex items-center">
+                                  <Mail className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                                  <a href={`mailto:${m.email}`} className="hover:text-indigo-650 hover:underline">{m.email}</a>
+                                </div>
+                              )}
+                              {m.phone && (
+                                <div className="flex items-center">
+                                  <Phone className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                                  <a href={`tel:${m.phone}`} className="font-semibold text-indigo-600 hover:underline">{m.phone}</a>
+                                </div>
+                              )}
+                              {!m.email && !m.phone && <span className="text-slate-400 italic">-</span>}
+                            </div>
+                            {/* Child Contacts */}
+                            {children.map(child => (
+                              <div key={child.id} className="pt-1.5 border-t border-slate-100 dark:border-slate-800/40 space-y-0.5 pl-1">
+                                <div className="text-[9px] font-bold text-slate-400 dark:text-slate-500 truncate max-w-[150px]">{child.owner_name}:</div>
+                                {child.email && (
+                                  <div className="flex items-center text-[10px]">
+                                    <Mail className="w-3 h-3 mr-1 text-slate-400" />
+                                    <a href={`mailto:${child.email}`} className="hover:text-indigo-650 hover:underline truncate max-w-[140px]">{child.email}</a>
+                                  </div>
+                                )}
+                                {child.phone && (
+                                  <div className="flex items-center text-[10px]">
+                                    <Phone className="w-3 h-3 mr-1 text-slate-400" />
+                                    <a href={`tel:${child.phone}`} className="font-semibold text-indigo-650 hover:underline">{child.phone}</a>
+                                  </div>
+                                )}
                               </div>
-                            )}
-                            {m.phone && (
-                              <div className="flex items-center">
-                                <Phone className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                                <a href={`tel:${m.phone}`} className="font-semibold text-indigo-600 hover:underline">{m.phone}</a>
-                              </div>
-                            )}
-                            {!m.email && !m.phone && <span className="text-slate-400 italic">-</span>}
+                            ))}
                           </td>
                           <td className="px-6 py-4 text-xs text-slate-500 space-y-1">
                             {m.area && m.rate_per_sqm ? (
@@ -4272,240 +5027,347 @@ export default function BillingPage() {
               </button>
             </div>
 
+            {propertyType !== "провайдер" && (
+              <div className="flex border-b border-slate-200 dark:border-slate-800/60 text-xs font-bold uppercase tracking-wider bg-slate-50/50 dark:bg-slate-950/20">
+                <button
+                  type="button"
+                  onClick={() => setModalTab("property")}
+                  className={`flex-1 py-3 text-center border-b-2 transition-all ${
+                    modalTab === "property"
+                      ? "border-indigo-600 text-indigo-650 dark:text-indigo-400 dark:border-indigo-400"
+                      : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  }`}
+                >
+                  🏠 Характеристики об'єкта
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab("resident")}
+                  className={`flex-1 py-3 text-center border-b-2 transition-all ${
+                    modalTab === "resident"
+                      ? "border-indigo-600 text-indigo-650 dark:text-indigo-400 dark:border-indigo-400"
+                      : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  }`}
+                >
+                  👤 Дані мешканця
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleSaveMember} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Тип об'єкта *
-                  </label>
-                  <select
-                    value={propertyType}
-                    onChange={(e) => setPropertyType(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="кв.">Квартира (кв.)</option>
-                    <option value="дл.">Ділянка (дл.)</option>
-                    <option value="п/м">Паркомісце (п/м)</option>
-                    <option value="провайдер">Контрагент (провайдер, оренда тощо)</option>
-                    <option value="інше">Інше</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Номер / Назва об'єкта *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="напр: 14 або ділянка 25"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    ПІБ власника / Назва компанії
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="напр: Шевченко Т.Г. або ТОВ Провайдер"
-                    value={ownerName}
-                    onChange={(e) => setOwnerName(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Прив'язати до головного об'єкта
-                  </label>
-                  <select
-                    value={parentId}
-                    onChange={(e) => setParentId(parseInt(e.target.value))}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="-1">Немає (Самостійний об'єкт)</option>
-                    {members
-                      .filter(m => !editingMember || m.id !== editingMember.id)
-                      .map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.property_type || "кв."} {m.identifier} ({m.owner_name || "Не вказано"})
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Вулиця
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="напр: Шевченка, Зелена"
-                    value={street}
-                    onChange={(e) => setStreet(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Номер будинку
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="напр: 12, 45А"
-                    value={number}
-                    onChange={(e) => setNumber(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Площа (кв.м)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={area}
-                    onChange={(e) => setArea(parseFloat(e.target.value) || 0)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Тариф (грн/кв.м)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={ratePerSqm}
-                    onChange={(e) => setRatePerSqm(parseFloat(e.target.value) || 0)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Фікс. внесок (грн)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={fixedFee}
-                    onChange={(e) => setFixedFee(parseFloat(e.target.value) || 0)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Ел. пошта
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="owner@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Номер телефону
-                  </label>
-                  <input
-                    type="tel"
-                    placeholder="+380..."
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Роль мешканця
-                  </label>
-                  <select
-                    value={memberRole}
-                    onChange={(e) => setMemberRole(e.target.value)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="owner">Власник (Має право голосу)</option>
-                    <option value="tenant">Мешканець/Орендар (Без права голосу)</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">
-                    Початковий баланс (грн)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={balance}
-                    onChange={(e) => setBalance(parseFloat(e.target.value) || 0)}
-                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                {memberRole === "owner" && (
-                  <div className="space-y-1.5 col-span-2">
+              {propertyType === "провайдер" ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Тип об'єкта *
+                      </label>
+                      <select
+                        value={propertyType}
+                        onChange={(e) => setPropertyType(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="кв.">Квартира (кв.)</option>
+                        <option value="дл.">Ділянка (дл.)</option>
+                        <option value="п/м">Паркомісце (п/м)</option>
+                        <option value="провайдер">Контрагент (провайдер, оренда тощо)</option>
+                        <option value="інше">Інше</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Номер / Назва об'єкта *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="напр: 14 або ділянка 25"
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
                     <label className="text-xs font-bold text-slate-500 uppercase">
-                      Частка власності
+                      Назва компанії / ПІБ контрагента
                     </label>
                     <input
                       type="text"
-                      placeholder="Наприклад: 1/2, 1/3 або 100%"
-                      value={memberShare}
-                      onChange={(e) => setMemberShare(e.target.value)}
+                      placeholder="напр: ТОВ Провайдер"
+                      value={ownerName}
+                      onChange={(e) => setOwnerName(e.target.value)}
                       className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
-                )}
-              </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Ел. пошта
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="owner@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Номер телефону
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="+380..."
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : modalTab === "property" ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Тип об'єкта *
+                      </label>
+                      <select
+                        value={propertyType}
+                        onChange={(e) => setPropertyType(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="кв.">Квартира (кв.)</option>
+                        <option value="дл.">Ділянка (дл.)</option>
+                        <option value="п/м">Паркомісце (п/м)</option>
+                        <option value="провайдер">Контрагент (провайдер, оренда тощо)</option>
+                        <option value="інше">Інше</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Номер / Назва об'єкта *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="напр: 14 або ділянка 25"
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
 
-              <div className="flex flex-col gap-2.5 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
-                <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={isBoardMember}
-                    onChange={(e) => {
-                      setIsBoardMember(e.target.checked);
-                      if (!e.target.checked) setIsBoardChairman(false);
-                    }}
-                    className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
-                  />
-                  <span>Член правління ОСББ</span>
-                </label>
-                
-                {isBoardMember && (
-                  <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-750 dark:text-slate-300 ml-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Вулиця
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="напр: Шевченка, Зелена"
+                        value={street}
+                        onChange={(e) => setStreet(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Номер будинку
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="напр: 12, 45А"
+                        value={number}
+                        onChange={(e) => setNumber(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Площа (кв.м)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={area}
+                        onChange={(e) => setArea(parseFloat(e.target.value) || 0)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Тариф (грн/кв.м)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={ratePerSqm}
+                        onChange={(e) => setRatePerSqm(parseFloat(e.target.value) || 0)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Фікс. внесок (грн)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={fixedFee}
+                        onChange={(e) => setFixedFee(parseFloat(e.target.value) || 0)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      Прив'язати до головного об'єкта
+                    </label>
+                    <select
+                      value={parentId}
+                      onChange={(e) => setParentId(parseInt(e.target.value))}
+                      className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="-1">Немає (Самостійний об'єкт)</option>
+                      {members
+                        .filter(m => !editingMember || m.id !== editingMember.id)
+                        .map(m => (
+                          <option key={m.id} value={m.id}>
+                            {m.property_type || "кв."} {m.identifier} ({m.owner_name || "Не вказано"})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      ПІБ власника / Назва компанії
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={isBoardChairman}
-                      onChange={(e) => setIsBoardChairman(e.target.checked)}
-                      className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
+                      type="text"
+                      placeholder="напр: Шевченко Т.Г. або ТОВ Провайдер"
+                      value={ownerName}
+                      onChange={(e) => setOwnerName(e.target.value)}
+                      className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
-                    <span>Голова правління ОСББ</span>
-                  </label>
-                )}
-              </div>
+                  </div>
 
-              <span className="text-[10px] text-slate-400 block leading-tight">Вкажіть суму зі знаком мінус "-", якщо є стартовий борг</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Номер телефону
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="+380..."
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Ел. пошта
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="owner@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Роль мешканця
+                      </label>
+                      <select
+                        value={memberRole}
+                        onChange={(e) => setMemberRole(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="owner">Власник (Має право голосу)</option>
+                        <option value="tenant">Мешканець/Орендар (Без права голосу)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Початковий баланс членських внесків (грн)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={balance}
+                        onChange={(e) => setBalance(parseFloat(e.target.value) || 0)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  
+                  <span className="text-[10px] text-slate-400 block leading-tight -mt-1.5">
+                    Вкажіть суму зі знаком мінус "-", якщо є стартовий борг по членських внесках.
+                  </span>
+
+                  {memberRole === "owner" && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Частка власності
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Наприклад: 1/2, 1/3 або 100%"
+                        value={memberShare}
+                        onChange={(e) => setMemberShare(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2.5 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
+                    <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={isBoardMember}
+                        onChange={(e) => {
+                          setIsBoardMember(e.target.checked);
+                          if (!e.target.checked) setIsBoardChairman(false);
+                        }}
+                        className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
+                      />
+                      <span>Член правління ОСББ</span>
+                    </label>
+
+                    {isBoardMember && (
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-750 dark:text-slate-300 ml-6">
+                        <input
+                          type="checkbox"
+                          checked={isBoardChairman}
+                          onChange={(e) => setIsBoardChairman(e.target.checked)}
+                          className="w-4 h-4 rounded text-indigo-650 focus:ring-indigo-500 border-slate-350 dark:border-slate-800"
+                        />
+                        <span>Голова правління ОСББ</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
                 <button
@@ -4622,6 +5484,165 @@ export default function BillingPage() {
                     <>
                       <Check className="w-4 h-4" />
                       Завантажити
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Generator Modal */}
+      {batchGeneratorOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 border-2 border-indigo-600 dark:border-indigo-500 rounded-3xl w-full max-w-lg p-6 shadow-2xl space-y-6 text-slate-900 dark:text-slate-100">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-indigo-500" />
+                  Генератор об'єктів (Майстер створення)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Швидко створіть масив ділянок або квартир для автоматичного формування адрес та реєстрації мешканців
+                </p>
+              </div>
+              <button
+                onClick={() => setBatchGeneratorOpen(false)}
+                className="p-1 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBatchGenerateSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Тип об'єктів *</label>
+                  <select
+                    value={batchPropertyType}
+                    onChange={(e) => {
+                      setBatchPropertyType(e.target.value);
+                      if (e.target.value === "дл.") {
+                        setBatchNumber("");
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="кв.">Квартири (кв.)</option>
+                    <option value="дл.">Ділянки (дл.)</option>
+                    <option value="п/м">Паркомісця (п/м)</option>
+                    <option value="інше">Інші об'єкти</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Вулиця (напр. Зелена) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="вулиця або лінія"
+                    value={batchStreet}
+                    onChange={(e) => setBatchStreet(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {batchPropertyType === "кв." && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Номер будинку (напр. 12 або 45А) *</label>
+                  <input
+                    type="text"
+                    required={batchPropertyType === "кв."}
+                    placeholder="Номер будинку для квартир"
+                    value={batchNumber}
+                    onChange={(e) => setBatchNumber(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Діапазон номерів: З № *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={batchFromNumber}
+                    onChange={(e) => setBatchFromNumber(parseInt(e.target.value) || 1)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">По № *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={batchToNumber}
+                    onChange={(e) => setBatchToNumber(parseInt(e.target.value) || 1)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Площа за замовч. (кв.м)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={batchArea}
+                    onChange={(e) => setBatchArea(parseFloat(e.target.value) || 0)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Тариф (грн/кв.м)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={batchRatePerSqm}
+                    onChange={(e) => setBatchRatePerSqm(parseFloat(e.target.value) || 0)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Фікс. внесок (грн)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={batchFixedFee}
+                    onChange={(e) => setBatchFixedFee(parseFloat(e.target.value) || 0)}
+                    className="w-full px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-4 border-t border-slate-200 dark:border-slate-800/60">
+                <button
+                  type="button"
+                  onClick={() => setBatchGeneratorOpen(false)}
+                  className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 rounded-xl transition-all"
+                  disabled={batchGenerating}
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  disabled={batchGenerating}
+                  className="flex-1 py-3 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {batchGenerating ? (
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      Згенерувати
                     </>
                   )}
                 </button>

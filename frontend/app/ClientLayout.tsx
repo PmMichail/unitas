@@ -164,6 +164,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
       "/settings",
       "/settings/subscription",
       "/benefits",
+      "/tariffs",
     ];
     return allowed.includes(path) || path.startsWith("/statements/") || path.startsWith("http");
   };
@@ -172,6 +173,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     const allowed = [
       "/profiles",
       "/settings/subscription",
+      "/tariffs",
     ];
     return allowed.includes(path);
   };
@@ -180,7 +182,7 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
   const showExpiredLockScreen = isExpired && !isAllowedPathForExpired(pathname);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
-  const [theme, setThemeState] = useState<"dark" | "light">("dark");
+  const [theme, setThemeState] = useState<"dark" | "light">("light");
   const { theme: nextTheme, setTheme } = useTheme();
 
   // Polling for blocked status
@@ -294,11 +296,12 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
     { name: "Пошта", href: "/settings/email", icon: Mail },
     { name: "КЕП (Підписи)", href: "/settings/certificates", icon: Shield },
     { name: "API ДПС", href: "/settings/tax-api", icon: Cpu },
-    { name: "Тариф та оплата", href: "/settings/subscription", icon: Crown },
+    { name: "Тарифи", href: "/tariffs", icon: Crown },
+    { name: "Тариф та оплата", href: "/settings/subscription", icon: CreditCard },
     { name: "Налаштування", href: "/settings", icon: SettingsIcon },
   ];
 
-  const isNoLayout = pathname === "/" || ["/login", "/register", "/privacy", "/terms", "/refund"].includes(pathname) || pathname.startsWith("/benefits") || pathname.startsWith("/admin") || pathname.startsWith("/osbb");
+  const isNoLayout = pathname === "/" || ["/login", "/register", "/privacy", "/terms", "/refund"].includes(pathname) || pathname.startsWith("/benefits") || pathname.startsWith("/admin") || pathname.startsWith("/osbb") || pathname.startsWith("/consulting");
   if (isNoLayout) {
     return (
       <div className="min-h-screen bg-[#fafbfd] dark:bg-[#090d16] text-[#090e1a] dark:text-[#f1f5f9] font-sans">
@@ -850,7 +853,7 @@ function SupportChatWidget() {
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
       <AppProvider>
         <MainLayoutContent>{children}</MainLayoutContent>
       </AppProvider>

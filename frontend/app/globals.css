@@ -7,7 +7,7 @@
 :root {
   --background: #e2e8f0;
   --foreground: #0f172a;
-  --border: rgba(99, 102, 241, 0.14);
+  --border: rgba(217, 119, 6, 0.65);
   --card: rgba(255, 255, 255, 0.95);
   --accent: #6366f1;
   --font-sans: 'Outfit', sans-serif;
@@ -16,7 +16,7 @@
 .dark {
   --background: #090d16;
   --foreground: #f1f5f9;
-  --border: rgba(255, 255, 255, 0.05);
+  --border: rgba(245, 158, 11, 0.5);
   --card: rgba(15, 23, 42, 0.45);
   --accent: #6366f1;
 }
@@ -31,22 +31,29 @@ body {
 }
 
 /* Premium styling modifiers */
-.glass-panel {
+.glass-panel,
+div[class*="rounded-3xl"].border,
+div[class*="rounded-2xl"].border {
   background: var(--card);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
+  border-color: var(--border) !important;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.dark .glass-panel:hover {
-  border-color: rgba(99, 102, 241, 0.25);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 0 0 20px -5px rgba(99, 102, 241, 0.1);
+.dark .glass-panel:hover,
+.dark div[class*="rounded-3xl"].border:hover,
+.dark div[class*="rounded-2xl"].border:hover {
+  border-color: rgba(245, 158, 11, 0.25) !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 0 0 20px -5px rgba(245, 158, 11, 0.1);
 }
 
-.light .glass-panel:hover {
-  border-color: rgba(99, 102, 241, 0.15);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 0 20px -5px rgba(99, 102, 241, 0.02);
+.light .glass-panel:hover,
+.light div[class*="rounded-3xl"].border:hover,
+.light div[class*="rounded-2xl"].border:hover {
+  border-color: rgba(217, 119, 6, 0.25) !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 0 20px -5px rgba(217, 119, 6, 0.02);
 }
 
 .glow-button {
@@ -94,8 +101,8 @@ body {
 .light .bg-slate-900\/95,
 .light .bg-slate-900\/40 {
   background-color: #ffffff !important;
-  border-color: rgba(99, 102, 241, 0.14) !important;
-  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 8px -1px rgba(99, 102, 241, 0.02) !important;
+  border-color: rgba(217, 119, 6, 0.65) !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 8px -1px rgba(217, 119, 6, 0.02) !important;
 }
 
 /* Inner nested boxes, tabs, switchers, list items, and table headers */
@@ -437,12 +444,12 @@ body {
 /* Apply subtle elegant border to all modals across the app for visual framing consistency */
 .fixed.inset-0 > div[class*="bg-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]),
 .fixed.inset-0 > div[class*="rounded-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]) {
-  border: 1px solid rgba(99, 102, 241, 0.15) !important;
+  border: 1px solid rgba(217, 119, 6, 0.25) !important;
   box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.08) !important;
 }
 .dark .fixed.inset-0 > div[class*="bg-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]),
 .dark .fixed.inset-0 > div[class*="rounded-"]:not([class*="absolute"]):not([class*="fixed"]):not([class*="backdrop"]) {
-  border-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(245, 158, 11, 0.2) !important;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
 }
 

@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro";
 
 const client = axios.create({
   baseURL: API_BASE_URL,
@@ -194,7 +194,7 @@ export const api = {
 
   createProfile: async (data: {
     telegram_id: string;
-    type: "fop" | "company";
+    type: "fop" | "company" | "consulting";
     name: string;
     tax_id: string;
     tax_system: string;
@@ -229,7 +229,7 @@ export const api = {
   updateProfile: async (
     profileId: number,
     data: {
-      type?: "fop" | "company";
+      type?: "fop" | "company" | "consulting";
       name?: string;
       tax_id?: string;
       tax_system?: string;
@@ -305,6 +305,21 @@ export const api = {
   }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/profiles/${profileId}/members`, formData);
+    return response.data;
+  },
+
+  batchGenerateMembers: async (profileId: number, data: {
+    street?: string;
+    number?: string;
+    property_type: string;
+    from_number: number;
+    to_number: number;
+    area: number;
+    rate_per_sqm: number;
+    fixed_monthly_fee: number;
+    user_id?: number;
+  }) => {
+    const response = await client.post(`/api/profiles/${profileId}/members/batch-generate`, data);
     return response.data;
   },
 
@@ -977,7 +992,7 @@ export const api = {
     });
     return response.data;
   },
-  createPayment: async (data: { profile_id: number; plan_type: string; payment_period: string }) => {
+  createPayment: async (data: { profile_id: number; plan_type: string; payment_period: string; tariff_code?: string; amount?: number; is_member_module_active?: boolean }) => {
     const response = await client.post("/api/payments/create", data);
     return response.data;
   },
@@ -1329,40 +1344,98 @@ export const api = {
     const response = await client.get(`/api/certificates/${profileId}`);
     return response.data;
   },
-  getBoardIssues: async (token: string) => {
+  getBoardIssues: async (token?: string, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.get("/api/board/issues", {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
     return response.data;
   },
-  createBoardIssue: async (token: string, data: { title: string; description?: string }) => {
+  createBoardIssue: async (token: string | undefined, data: { title: string; description?: string }, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.post("/api/board/issues", data, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
     return response.data;
   },
-  startBoardVoting: async (token: string, issueId: number) => {
+  startBoardVoting: async (token: string | undefined, issueId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.post(`/api/board/issues/${issueId}/vote-start`, null, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
     return response.data;
   },
-  voteBoardIssue: async (token: string, issueId: number, data: { vote_value: string; comment?: string }) => {
+  voteBoardIssue: async (token: string | undefined, issueId: number, data: { vote_value: string; comment?: string }, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.post(`/api/board/issues/${issueId}/vote`, data, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
     return response.data;
   },
-  endBoardVoting: async (token: string, issueId: number) => {
+  endBoardVoting: async (token: string | undefined, issueId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.post(`/api/board/issues/${issueId}/vote-end`, null, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
     return response.data;
   },
-  signBoardProtocol: async (token: string, issueId: number, data: { password?: string; certificate_id?: number }) => {
+  signBoardProtocol: async (token: string | undefined, issueId: number, data: { password?: string; certificate_id?: number }, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
     const response = await client.post(`/api/board/issues/${issueId}/sign`, data, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
     });
+    return response.data;
+  },
+  publishBoardProtocol: async (token: string | undefined, issueId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/board/issues/${issueId}/publish`, null, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  deleteBoardIssue: async (token: string | undefined, issueId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.delete(`/api/board/issues/${issueId}`, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  // Announcements
+  getAnnouncements: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/announcements`);
+    return response.data;
+  },
+  createAnnouncement: async (profileId: number, data: { title: string; content: string; is_pinned?: boolean }, token?: string) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/profiles/${profileId}/announcements`, data, { headers });
+    return response.data;
+  },
+  deleteAnnouncement: async (profileId: number, announcementId: number, token?: string) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.delete(`/api/profiles/${profileId}/announcements/${announcementId}`, { headers });
+    return response.data;
+  },
+  // Meter readings posting/unposting
+  postReadings: async (profileId: number, month: number, year: number) => {
+    const formData = new FormData();
+    formData.append("month", String(month));
+    formData.append("year", String(year));
+    const response = await client.post(`/api/profiles/${profileId}/meters/post-readings`, formData);
+    return response.data;
+  },
+  unpostReadings: async (profileId: number, month: number, year: number) => {
+    const formData = new FormData();
+    formData.append("month", String(month));
+    formData.append("year", String(year));
+    const response = await client.post(`/api/profiles/${profileId}/meters/unpost-readings`, formData);
     return response.data;
   }
 };
@@ -1719,42 +1792,6 @@ export const legislationApi = {
   },
   getCurrentSubscription: async (profileId: number) => {
     const response = await client.get(`/api/subscriptions/current/${profileId}`);
-    return response.data;
-  },
-  getBoardIssues: async (token: string) => {
-    const response = await client.get("/api/board/issues", {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  createBoardIssue: async (token: string, data: { title: string; description?: string }) => {
-    const response = await client.post("/api/board/issues", data, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  startBoardVoting: async (token: string, issueId: number) => {
-    const response = await client.post(`/api/board/issues/${issueId}/vote-start`, null, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  voteBoardIssue: async (token: string, issueId: number, data: { vote_value: string; comment?: string }) => {
-    const response = await client.post(`/api/board/issues/${issueId}/vote`, data, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  endBoardVoting: async (token: string, issueId: number) => {
-    const response = await client.post(`/api/board/issues/${issueId}/vote-end`, null, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    return response.data;
-  },
-  signBoardProtocol: async (token: string, issueId: number, data: { password?: string; certificate_id?: number }) => {
-    const response = await client.post(`/api/board/issues/${issueId}/sign`, data, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
     return response.data;
   }
 };
