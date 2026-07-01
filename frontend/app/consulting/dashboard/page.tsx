@@ -62,6 +62,7 @@ export default function ConsultingDashboard() {
   const [filterMyClients, setFilterMyClients] = useState(false);
   const [filterNeedsAttention, setFilterNeedsAttention] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [isSeeding, setIsSeeding] = useState(false);
 
   useEffect(() => {
     fetchCurrentUserId();
@@ -82,6 +83,24 @@ export default function ConsultingDashboard() {
       // Fallback to user_id=1 for development
       setCurrentUserId(1);
       fetchDashboardData(1);
+    }
+  };
+
+  const handleSeedTestData = async () => {
+    setIsSeeding(true);
+    try {
+      const response = await axios.post("/api/consulting/seed-test-data");
+      console.log("Test data seeded:", response.data);
+      alert("Тестові дані успішно створено!");
+      // Refresh dashboard data
+      if (currentUserId) {
+        fetchDashboardData(currentUserId);
+      }
+    } catch (error) {
+      console.error("Failed to seed test data:", error);
+      alert("Помилка при створенні тестових даних");
+    } finally {
+      setIsSeeding(false);
     }
   };
 
@@ -333,12 +352,23 @@ export default function ConsultingDashboard() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
-            Кабінет Партнера
-          </h1>
-          <p className="text-slate-600 dark:text-slate-400">
-            {dashboardData?.consulting_company.name} • {dashboardData?.total_clients} клієнтів
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
+                Кабінет Партнера
+              </h1>
+              <p className="text-slate-600 dark:text-slate-400">
+                {dashboardData?.consulting_company.name} • {dashboardData?.total_clients} клієнтів
+              </p>
+            </div>
+            <button
+              onClick={handleSeedTestData}
+              disabled={isSeeding}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
+            >
+              {isSeeding ? "Створення..." : "Створити тестові дані"}
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
