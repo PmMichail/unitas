@@ -287,12 +287,16 @@ class User(Base):
     hashed_password = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     verification_code = Column(String, nullable=True)
-    role = Column(String, default="user") # user, admin, guest
+    role = Column(String, default="user") # user, admin, guest, owner, manager, end_user
+    account_type = Column(String, default="individual") # individual, consulting
     language = Column(String, default="uk")
     expires_at = Column(DateTime, nullable=True)
     # Consulting company fields
     consulting_company_id = Column(Integer, ForeignKey("consulting_companies.id"), nullable=True)
     is_consulting_owner = Column(Boolean, default=False)
+    # Marketplace fields
+    is_listed_in_marketplace = Column(Boolean, default=False)
+    public_bio_uk = Column(Text, nullable=True)
     companies = relationship("Company", back_populates="owner")
     profiles = relationship("Profile", back_populates="owner")
     consulting_company = relationship("ConsultingCompany", foreign_keys=[consulting_company_id])
@@ -934,6 +938,35 @@ class ConsultingClientAssignment(Base):
     client_profile = relationship("Profile")
     accountant = relationship("User")
 
+class ConsultingServiceOffer(Base):
+    __tablename__ = "consulting_service_offers"
+    id = Column(Integer, primary_key=True, index=True)
+    consulting_company_id = Column(Integer, ForeignKey("consulting_companies.id"))
+    title_uk = Column(String, nullable=False)
+    description_uk = Column(Text, nullable=True)
+    price_uah = Column(Float, nullable=False)
+    target_type = Column(String, default="fop")  # 'fop', 'tov', 'osbb'
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    consulting_company = relationship("ConsultingCompany")
+    orders = relationship("ConsultingMarketplaceOrder", back_populates="service_offer")
+
+class ConsultingMarketplaceOrder(Base):
+    __tablename__ = "consulting_marketplace_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    client_profile_id = Column(Integer, ForeignKey("profiles.id"))
+    service_offer_id = Column(Integer, ForeignKey("consulting_service_offers.id"))
+    amount = Column(Float, nullable=False)
+    status = Column(String, default="pending")  # 'pending', 'paid', 'failed'
+    liqpay_order_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    client_profile = relationship("Profile")
+    service_offer = relationship("ConsultingServiceOffer", back_populates="orders")
+
 def get_config_val(db: Session, key: str, default: float) -> float:
     config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
     if config is None:
@@ -1039,6 +1072,44 @@ class BoardVote(Base):
     vote_value = Column(String, nullable=False) # yes, no, abstain
     voted_at = Column(DateTime, default=datetime.utcnow)
     comment = Column(Text, nullable=True)
+
+class GeneralMeeting(Base):
+    __tablename__ = "general_meetings"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id", ondelete="CASCADE"))
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String, default="discussion") # discussion, voting, completed
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    ai_protocol = Column(Text, nullable=True)
+    is_signed = Column(Boolean, default=False)
+    signature_text = Column(Text, nullable=True)
+    document_id = Column(Integer, ForeignKey("profile_documents.id", ondelete="SET NULL"), nullable=True)
+
+class MeetingQuestion(Base):
+    __tablename__ = "meeting_questions"
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("general_meetings.id", ondelete="CASCADE"))
+    question_text = Column(Text, nullable=False)
+
+class MeetingVote(Base):
+    __tablename__ = "meeting_votes"
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("general_meetings.id", ondelete="CASCADE"))
+    member_id = Column(Integer, ForeignKey("units_or_members.id", ondelete="CASCADE"))
+    voted_at = Column(DateTime, default=datetime.utcnow)
+    is_signed = Column(Boolean, default=False)
+    signature_data = Column(Text, nullable=True)
+
+class MeetingVoteAnswer(Base):
+    __tablename__ = "meeting_vote_answers"
+    id = Column(Integer, primary_key=True, index=True)
+    vote_id = Column(Integer, ForeignKey("meeting_votes.id", ondelete="CASCADE"))
+    question_id = Column(Integer, ForeignKey("meeting_questions.id", ondelete="CASCADE"))
+    vote_value = Column(String, nullable=False) # yes, no, abstain
 
 class Announcement(Base):
     __tablename__ = "announcements"
@@ -1273,7 +1344,11 @@ migrations = [
     "ALTER TABLE units_or_members ADD COLUMN is_board_chairman BOOLEAN DEFAULT FALSE",
     "CREATE TABLE IF NOT EXISTS board_issues (id INTEGER PRIMARY KEY, profile_id INTEGER, title TEXT NOT NULL, description TEXT, status TEXT DEFAULT 'discussion', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, ai_protocol TEXT, is_signed BOOLEAN DEFAULT FALSE, signed_by INTEGER, signature_text TEXT, document_id INTEGER, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
     "CREATE TABLE IF NOT EXISTS board_votes (id INTEGER PRIMARY KEY, issue_id INTEGER, member_id INTEGER, vote_value TEXT NOT NULL, voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, comment TEXT, FOREIGN KEY(issue_id) REFERENCES board_issues(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES units_or_members(id) ON DELETE CASCADE)",
-    "CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY, profile_id INTEGER, title TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, is_pinned BOOLEAN DEFAULT FALSE, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)"
+    "CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY, profile_id INTEGER, title TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, is_pinned BOOLEAN DEFAULT FALSE, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE)",
+    "ALTER TABLE users ADD COLUMN account_type VARCHAR DEFAULT 'individual'",
+    "ALTER TABLE users ADD COLUMN language VARCHAR DEFAULT 'uk'",
+    "ALTER TABLE users ADD COLUMN is_listed_in_marketplace BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE users ADD COLUMN public_bio_uk TEXT DEFAULT NULL"
 ]
 
 import re
@@ -2133,6 +2208,117 @@ except Exception as profile_migrate_err:
     db.rollback()
 
 db.close()
+
+# Startup deduplication of parsed payments to clean up historical duplicates
+try:
+    db_dedup = SessionLocal()
+    from api.main import ParsedPayment, TaxEvent
+    
+    # Fetch all payments ordered by id (so we keep the oldest/first)
+    all_payments = db_dedup.query(ParsedPayment).order_by(ParsedPayment.id.asc()).all()
+    
+    def get_normalized_words(text: str) -> set:
+        if not text:
+            return set()
+        text = text.lower()
+        lookalikes = {'a':'а', 'c':'с', 'e':'е', 'i':'і', 'o':'о', 'p':'р', 'x':'х', 'y':'у'}
+        for k, v in lookalikes.items():
+            text = text.replace(k, v)
+        import re
+        tokens = re.findall(r'[a-zа-яєіїґ]+|[0-9]+', text)
+        return set(tokens)
+
+    def is_duplicate_payment(p1_date, p1_amount, p1_direction, p1_purpose, p1_contragent,
+                             p2_date, p2_amount, p2_direction, p2_purpose, p2_contragent) -> bool:
+        if p1_date != p2_date or p1_direction != p2_direction:
+            return False
+        if abs(float(p1_amount or 0.0) - float(p2_amount or 0.0)) > 0.01:
+            return False
+            
+        words1 = get_normalized_words(p1_purpose)
+        words2 = get_normalized_words(p2_purpose)
+        
+        if not words1 and not words2:
+            c_words1 = get_normalized_words(p1_contragent)
+            c_words2 = get_normalized_words(p2_contragent)
+            if not c_words1 or not c_words2:
+                return False
+            intersection = c_words1.intersection(c_words2)
+            union = c_words1.union(c_words2)
+            return (len(intersection) / len(union)) >= 0.7 if union else False
+            
+        intersection = words1.intersection(words2)
+        max_len = max(len(words1), len(words2))
+        if max_len == 0:
+            return False
+            
+        similarity = len(intersection) / max_len
+        if similarity >= 0.7:
+            c_words1 = get_normalized_words(p1_contragent)
+            c_words2 = get_normalized_words(p2_contragent)
+            
+            if not c_words1 or not c_words2:
+                return True
+                
+            c_intersection = c_words1.intersection(c_words2)
+            c_max_len = max(len(c_words1), len(c_words2))
+            c_similarity = len(c_intersection) / c_max_len if c_max_len > 0 else 0.0
+            
+            c1_norm = "".join(c_words1)
+            c2_norm = "".join(c_words2)
+            if c_similarity >= 0.4 or c1_norm in c2_norm or c2_norm in c1_norm:
+                return True
+                
+        return False
+
+    groups = {}
+    for p in all_payments:
+        amount_rounded = round(float(p.amount or 0.0), 2)
+        key = (p.profile_id, p.date, amount_rounded, p.direction)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(p)
+
+    deleted_count = 0
+    for key, p_list in groups.items():
+        if len(p_list) <= 1:
+            continue
+            
+        # We have multiple payments with the same date/amount/direction.
+        # Find duplicates using fuzzy match
+        to_delete = set()
+        kept_payments = []
+        
+        for p in p_list:
+            is_dup = False
+            for kept in kept_payments:
+                if is_duplicate_payment(
+                    p.date, p.amount, p.direction, p.purpose, p.contragent,
+                    kept.date, kept.amount, kept.direction, kept.purpose, kept.contragent
+                ):
+                    # Duplicate found! Link TaxEvents of p to kept
+                    db_dedup.query(TaxEvent).filter(TaxEvent.payment_id == p.id).update(
+                        {TaxEvent.payment_id: kept.id},
+                        synchronize_session=False
+                    )
+                    to_delete.add(p.id)
+                    is_dup = True
+                    break
+            if not is_dup:
+                kept_payments.append(p)
+                
+        if to_delete:
+            db_dedup.query(ParsedPayment).filter(ParsedPayment.id.in_(list(to_delete))).delete(
+                synchronize_session=False
+            )
+            deleted_count += len(to_delete)
+
+    if deleted_count > 0:
+        db_dedup.commit()
+        print(f"[DEDUPLICATION] Successfully cleaned up {deleted_count} duplicate payments.")
+    db_dedup.close()
+except Exception as dedup_err:
+    print(f"[DEDUPLICATION] Error: {dedup_err}")
 
 # API App Initialization
 app = FastAPI(title="UniTax API", version="0.1.0")
@@ -3308,122 +3494,187 @@ async def upload_statement(
     with open(temp_path, "wb") as f:
         f.write(file_content)
 
-    # parser = UniversalParser()
-    # try:
-    #     parsed_txs = parser.parse(temp_path)
-    # except Exception as e:
-    #     if os.path.exists(temp_path):
-    #         os.remove(temp_path)
-    #     raise HTTPException(status_code=400, detail=f"Не вдалося розпарсити виписку: {str(e)}")
+    from ai_parser.universal_parser import UniversalParser
+    parser = UniversalParser()
+    try:
+        parsed_txs = parser.parse(temp_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Не вдалося розпарсити виписку: {str(e)}")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
-    raise HTTPException(status_code=400, detail="Parser temporarily disabled - ai_parser module not available")
+    if not parsed_txs:
+        raise HTTPException(status_code=400, detail="Не вдалося знайти транзакцій у виписці. Перевірте правильність файлу.")
 
-    # if not parsed_txs:
-    #     raise HTTPException(status_code=400, detail="Не вдалося знайти транзакцій у виписці. Перевірте правильність файлу.")
-    #
-    # # Визначаємо банк з першої транзакції
-    # bank_name = parser.bank_name or (parsed_txs[0]["bank_name"] if parsed_txs else "Невідомий Банк")
-    #
-    # # Спробуємо знайти профіль за tax_id з виписки
-    # profile = None
-    # if parser.statement_tax_id:
-    #     profile = db.query(Profile).filter(Profile.tax_id == parser.statement_tax_id).first()
-    #
-    # # Якщо не знайдено, використовуємо profile_id (company_id)
-    # if not profile:
-    #     profile = db.query(Profile).filter(Profile.id == company_id).first()
-    #
-    # if not profile:
-    #     raise HTTPException(status_code=404, detail="Профіль не знайдено")
-    #
-    # # Автоматично заповнюємо tax_id профілю, якщо він порожній, та запускаємо синхронізацію
-    # if parser.statement_tax_id and (not profile.tax_id or not profile.tax_id.strip()):
-    #     profile.tax_id = parser.statement_tax_id
-    #     db.commit()
-    #     db.refresh(profile)
-    #     sync_user_profiles_by_tax_id(db, profile.user_id)
-    #     # Перезавантажуємо профіль після можливого злиття
-    #     profile = db.query(Profile).filter(Profile.tax_id == parser.statement_tax_id).first()
-    #     if not profile:
-    #         profile = db.query(Profile).filter(Profile.id == company_id).first()
-    #
-    # profile_id = profile.id
-    #
-    # # Створюємо запис про виписку
-    # statement = BankStatement(
-    #     company_id=profile_id,
-    #     profile_id=profile_id,
-    #     file_name=file.filename,
-    #     file_hash=file_hash,
-    #     bank_name=bank_name,
-    #     uploaded_at=date.today(),
-    #     status="parsed",
-    #     period_start=parser.period_start,
-    #     period_end=parser.period_end
-    # )
-    # db.add(statement)
-    # db.commit()
-    # db.refresh(statement)
-    #
-    # # Зберігаємо платежі з уникненням дублікатів (на випадок перекриття періодів виписок)
-    # seen_in_upload = {}
-    # inserted_count = 0
-    #
-    # for tx in parsed_txs:
-    #     tx_date = datetime.strptime(tx["date"], "%Y-%m-%d").date()
-    #
-    #     # Створюємо унікальний ключ для транзакції
-    #     tx_key = (tx_date, tx["amount"], tx["direction"], tx["purpose"], tx["contragent"])
-    #     seen_count = seen_in_upload.get(tx_key, 0) + 1
-    #     seen_in_upload[tx_key] = seen_count
-    #
-    #     # Рахуємо скільки таких самих транзакцій вже є в базі для цього профілю
-    #     db_count = db.query(ParsedPayment).filter(
-    #         ParsedPayment.profile_id == profile_id,
-    #         ParsedPayment.date == tx_date,
-    #         ParsedPayment.amount == tx["amount"],
-    #         ParsedPayment.direction == tx["direction"],
-    #         ParsedPayment.purpose == tx["purpose"],
-    #         ParsedPayment.contragent == tx["contragent"]
-    #     ).count()
-    #
-    #     if db_count >= seen_count:
-    #         # Ця транзакція вже є в базі, пропускаємо її
-    #         continue
-    #
-    #     # Для зарплат: шукати ПІБ працівника та лінкувати
-    #     employee_id = None
-    #     purpose_lower = tx["purpose"].lower()
-    #     if tx["type"] in ["salary_payment", "tax_payment"]:
-    #         stmt_employees = db.query(Employee).filter(
-    #             (Employee.profile_id == profile_id) | (Employee.company_id == profile_id)
-    #         ).all()
-    #         for emp in stmt_employees:
-    #             if emp.name.lower() in purpose_lower or (emp.tax_id and emp.tax_id in purpose_lower):
-    #                 employee_id = emp.id
-    #                 break
-    #
-    #     db_payment = ParsedPayment(
-    #         statement_id=statement.id,
-    #         date=tx_date,
-    #         amount=tx["amount"],
-    #         direction=tx["direction"],
-    #         purpose=tx["purpose"],
-    #         contragent=tx["contragent"],
-    #         type=tx["type"],
-    #         tax_type=tx["tax_type"],
-    #         profile_id=profile_id,
-    #         employee_id=employee_id,
-    #         taxable=tx.get("taxable", True),
-    #         transaction_type=tx.get("transaction_type", "income")
-    #     )
-    #     db.add(db_payment)
-    #     inserted_count += 1
-    # db.commit()
-    #
-    # return {"message": f"Завантажено {inserted_count} нових транзакцій з {bank_name} для профілю '{profile.name}' (пропущено {len(parsed_txs) - inserted_count} дублікатів)", "statement_id": statement.id}
+    # Визначаємо банк з першої транзакції
+    bank_name = parser.bank_name or (parsed_txs[0]["bank_name"] if parsed_txs else "Невідомий Банк")
+
+    # Спробуємо знайти профіль за tax_id з виписки
+    profile = None
+    if parser.statement_tax_id:
+        profile = db.query(Profile).filter(Profile.tax_id == parser.statement_tax_id).first()
+
+    # Якщо не знайдено, використовуємо profile_id (company_id)
+    if not profile:
+        profile = db.query(Profile).filter(Profile.id == company_id).first()
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+
+    # Автоматично заповнюємо tax_id профілю, якщо він порожній, та запускаємо синхронізацію
+    if parser.statement_tax_id and (not profile.tax_id or not profile.tax_id.strip()):
+        profile.tax_id = parser.statement_tax_id
+        db.commit()
+        db.refresh(profile)
+        sync_user_profiles_by_tax_id(db, profile.user_id)
+        # Перезавантажуємо профіль після можливого злиття
+        profile = db.query(Profile).filter(Profile.tax_id == parser.statement_tax_id).first()
+        if not profile:
+            profile = db.query(Profile).filter(Profile.id == company_id).first()
+
+    profile_id = profile.id
+
+    # Створюємо запис про виписку
+    statement = BankStatement(
+        company_id=profile_id,
+        profile_id=profile_id,
+        file_name=file.filename,
+        file_hash=file_hash,
+        bank_name=bank_name,
+        uploaded_at=date.today(),
+        status="parsed",
+        period_start=parser.period_start,
+        period_end=parser.period_end
+    )
+    db.add(statement)
+    db.commit()
+    db.refresh(statement)
+
+    # Зберігаємо платежі з уникненням дублікатів (на випадок перекриття періодів виписок)
+    def get_normalized_words(text: str) -> set:
+        if not text:
+            return set()
+        text = text.lower()
+        lookalikes = {'a':'а', 'c':'с', 'e':'е', 'i':'і', 'o':'о', 'p':'р', 'x':'х', 'y':'у'}
+        for k, v in lookalikes.items():
+            text = text.replace(k, v)
+        import re
+        tokens = re.findall(r'[a-zа-яєіїґ]+|[0-9]+', text)
+        return set(tokens)
+
+    def is_duplicate_payment(p1_date, p1_amount, p1_direction, p1_purpose, p1_contragent,
+                             p2_date, p2_amount, p2_direction, p2_purpose, p2_contragent) -> bool:
+        if p1_date != p2_date or p1_direction != p2_direction:
+            return False
+        if abs(float(p1_amount or 0.0) - float(p2_amount or 0.0)) > 0.01:
+            return False
+            
+        words1 = get_normalized_words(p1_purpose)
+        words2 = get_normalized_words(p2_purpose)
+        
+        if not words1 and not words2:
+            c_words1 = get_normalized_words(p1_contragent)
+            c_words2 = get_normalized_words(p2_contragent)
+            if not c_words1 or not c_words2:
+                return False
+            intersection = c_words1.intersection(c_words2)
+            union = c_words1.union(c_words2)
+            return (len(intersection) / len(union)) >= 0.7 if union else False
+            
+        intersection = words1.intersection(words2)
+        max_len = max(len(words1), len(words2))
+        if max_len == 0:
+            return False
+            
+        similarity = len(intersection) / max_len
+        if similarity >= 0.7:
+            c_words1 = get_normalized_words(p1_contragent)
+            c_words2 = get_normalized_words(p2_contragent)
+            
+            if not c_words1 or not c_words2:
+                return True
+                
+            c_intersection = c_words1.intersection(c_words2)
+            c_max_len = max(len(c_words1), len(c_words2))
+            c_similarity = len(c_intersection) / c_max_len if c_max_len > 0 else 0.0
+            
+            c1_norm = "".join(c_words1)
+            c2_norm = "".join(c_words2)
+            if c_similarity >= 0.4 or c1_norm in c2_norm or c2_norm in c1_norm:
+                return True
+                
+        return False
+
+    # Pre-fetch existing payments for these dates to optimize queries
+    tx_dates = {datetime.strptime(tx["date"], "%Y-%m-%d").date() for tx in parsed_txs}
+    db_payments = db.query(ParsedPayment).filter(
+        ParsedPayment.profile_id == profile_id,
+        ParsedPayment.date.in_(list(tx_dates))
+    ).all()
+
+    seen_in_upload = []
+    inserted_count = 0
+
+    for tx in parsed_txs:
+        tx_date = datetime.strptime(tx["date"], "%Y-%m-%d").date()
+        tx_amount = float(tx["amount"] or 0.0)
+
+        # Count duplicates in db
+        db_dup_count = sum(1 for db_p in db_payments if is_duplicate_payment(
+            tx_date, tx_amount, tx["direction"], tx["purpose"], tx["contragent"],
+            db_p.date, db_p.amount, db_p.direction, db_p.purpose, db_p.contragent
+        ))
+
+        # Count duplicates in current upload
+        upload_dup_count = sum(1 for upload_p in seen_in_upload if is_duplicate_payment(
+            tx_date, tx_amount, tx["direction"], tx["purpose"], tx["contragent"],
+            upload_p["date"], upload_p["amount"], upload_p["direction"], upload_p["purpose"], upload_p["contragent"]
+        )) + 1
+
+        seen_in_upload.append({
+            "date": tx_date,
+            "amount": tx_amount,
+            "direction": tx["direction"],
+            "purpose": tx["purpose"],
+            "contragent": tx["contragent"]
+        })
+
+        if db_dup_count >= upload_dup_count:
+            # Already in database, skip
+            continue
+
+        # Для зарплат: шукати ПІБ працівника та лінкувати
+        employee_id = None
+        purpose_lower = tx["purpose"].lower()
+        if tx["type"] in ["salary_payment", "tax_payment"]:
+            stmt_employees = db.query(Employee).filter(
+                (Employee.profile_id == profile_id) | (Employee.company_id == profile_id)
+            ).all()
+            for emp in stmt_employees:
+                if emp.name.lower() in purpose_lower or (emp.tax_id and emp.tax_id in purpose_lower):
+                    employee_id = emp.id
+                    break
+
+        db_payment = ParsedPayment(
+            statement_id=statement.id,
+            date=tx_date,
+            amount=tx["amount"],
+            direction=tx["direction"],
+            purpose=tx["purpose"],
+            contragent=tx["contragent"],
+            type=tx["type"],
+            tax_type=tx["tax_type"],
+            profile_id=profile_id,
+            employee_id=employee_id,
+            taxable=tx.get("taxable", True),
+            transaction_type=tx.get("transaction_type", "income")
+        )
+        db.add(db_payment)
+        inserted_count += 1
+    db.commit()
+
+    return {"message": f"Завантажено {inserted_count} нових транзакцій з {bank_name} для профілю '{profile.name}' (пропущено {len(parsed_txs) - inserted_count} дублікатів)", "statement_id": statement.id}
 
 @app.get("/api/profiles/{profile_id}/statements")
 def get_profile_statements(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -3855,7 +4106,7 @@ def get_dashboard(
         query = query.filter(ParsedPayment.date <= end_dt)
     payments = query.all()
     
-    total_income = sum(p.amount for p in payments if p.direction == "in")
+    total_income = sum(p.amount for p in payments if p.direction == "in" and p.transaction_type not in ("refund", "own_funds"))
     total_expense = sum(p.amount for p in payments if p.direction == "out")
     
     # Розрахунок повернень
@@ -4078,7 +4329,8 @@ def get_dashboard(
     esv_diff = esv_due_total - esv_paid
     pit_diff = employee_pit_due - pit_paid
 
-    # Override with official DPSSettlement if it exists
+    # Fetch official DPSSettlement if it exists
+    dps_info = None
     try:
         latest_row = db.query(DPSSettlement).filter(DPSSettlement.profile_id == profile_id).order_by(DPSSettlement.recorded_at.desc()).first()
         if latest_row:
@@ -4088,30 +4340,21 @@ def get_dashboard(
                 DPSSettlement.recorded_at == latest_at
             ).all()
             
-            # Fetch new payments since latest_at to reconcile the cabinet debt
-            from services.tax_calculator import get_new_payments_after
-            new_payments = get_new_payments_after(db, profile_id, latest_at)
-            
+            dps_items = []
             for s in settlements:
-                name_lower = s.tax_name.lower()
-                code_str = s.tax_code or ""
-                debt_val = float(s.debt or 0.0)
-                overpaid_val = float(s.overpaid or 0.0)
-                
-                if "єдиний податок" in name_lower or "єп" in name_lower or "18050400" in code_str or "18050400" in name_lower:
-                    ep_diff = max(0.0, debt_val - new_payments.get("unified_tax", 0.0))
-                    ep_paid = max(0.0, tax_due - ep_diff + overpaid_val)
-                elif "соціальний" in name_lower or "єсв" in name_lower or "71040000" in code_str or "71010000" in code_str or "71040000" in name_lower or "71010000" in name_lower:
-                    esv_diff = max(0.0, debt_val - new_payments.get("esv", 0.0))
-                    esv_paid = max(0.0, esv_due_total - esv_diff + overpaid_val)
-                elif "військовий" in name_lower or "вз" in name_lower or "11011700" in code_str or "11011000" in code_str or "11011001" in code_str or "11011700" in name_lower or "11011000" in name_lower or "11011001" in name_lower:
-                    mil_diff = max(0.0, debt_val - new_payments.get("military_tax", 0.0))
-                    mil_paid = max(0.0, military_tax_due_total - mil_diff + overpaid_val)
-                elif "пдфо" in name_lower or "доходи фізичних" in name_lower or "11010100" in code_str or "11010500" in code_str or "11010100" in name_lower or "11010500" in name_lower:
-                    pit_diff = max(0.0, debt_val - new_payments.get("pit", 0.0))
-                    pit_paid = max(0.0, employee_pit_due - pit_diff + overpaid_val)
+                dps_items.append({
+                    "tax_name": s.tax_name,
+                    "tax_code": s.tax_code,
+                    "debt": float(s.debt or 0.0),
+                    "overpaid": float(s.overpaid or 0.0),
+                    "paid": float(getattr(s, 'paid', 0.0) or 0.0)
+                })
+            dps_info = {
+                "recorded_at": latest_at.isoformat() if hasattr(latest_at, 'isoformat') else str(latest_at),
+                "settlements": dps_items
+            }
     except Exception as e:
-        print(f"[Dashboard] Failed to apply DPS settlement override: {e}")
+        print(f"[Dashboard] Failed to fetch DPS settlements info: {e}")
 
     total_tax_paid = ep_paid + mil_paid + esv_paid + pit_paid
 
@@ -4377,6 +4620,7 @@ def get_dashboard(
         "contractor_payments_total": round(contractor_payments_total, 2),
         "contractor_payments": contractor_payments_list,
         "breakdown": breakdown_list,
+        "dps_info": dps_info,
         "expires_at": user.expires_at.isoformat() if (user and user.role == "guest" and user.expires_at) else None
     }
 
@@ -5206,7 +5450,7 @@ def get_statement_debug(company_id: int, user_id: Optional[int] = None, db: Sess
         
     payments = db.query(ParsedPayment).filter(ParsedPayment.statement_id == statement.id).all()
     
-    total_income = sum(p.amount for p in payments if p.direction == "in")
+    total_income = sum(p.amount for p in payments if p.direction == "in" and p.transaction_type not in ("refund", "own_funds"))
     total_expense = sum(p.amount for p in payments if p.direction == "out")
     
     return {
@@ -12158,6 +12402,47 @@ def get_banking_details(profile: Profile, db: Session = None) -> tuple:
                 mfo_val = "310530"
     return bank_name, mfo_val, iban_val
 
+def add_brand_footer_to_story(story, styles, font_name):
+    import qrcode
+    from reportlab.platypus import Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    import io
+    
+    story.append(Spacer(1, 20))
+    
+    qr = qrcode.QRCode(version=1, box_size=2, border=1)
+    qr.add_data("https://www.unitax.pro")
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    qr_buffer = io.BytesIO()
+    img.save(qr_buffer, format="PNG")
+    qr_buffer.seek(0)
+    
+    qr_img = Image(qr_buffer, width=45, height=45)
+    qr_img.hAlign = 'LEFT'
+    
+    footer_text_style = ParagraphStyle(
+        'FooterBrandUnique',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor("#4F46E5")
+    )
+    
+    footer_data = [
+        [qr_img, Paragraph("Сформовано <b><font color='#4F46E5'>www.UniTax.pro</font></b><br/>AI податковий асистент", footer_text_style)]
+    ]
+    footer_table = Table(footer_data, colWidths=[55, 485])
+    footer_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(footer_table)
+
 def generate_invoice_pdf(invoice: Invoice, profile: Profile, db: Session = None) -> bytes:
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -12351,6 +12636,7 @@ def generate_invoice_pdf(invoice: Invoice, profile: Profile, db: Session = None)
     ]))
     story.append(sig_table)
     
+    add_brand_footer_to_story(story, styles, font_name)
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -12362,7 +12648,7 @@ def generate_subscription_invoice_number(db: Session, profile_id: int) -> str:
     ).count() + 1
     return f"UT-SUB-{profile_id}-{count:04d}"
 
-def generate_subscription_invoice_pdf(profile: Profile, plan_type: str, payment_period: str, amount: float, invoice_number: str, date_val) -> bytes:
+def generate_subscription_invoice_pdf(profile: Profile, plan_type: str, payment_period: str, amount: float, invoice_number: str, date_val, tariff_code: Optional[str] = None) -> bytes:
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -12468,7 +12754,16 @@ def generate_subscription_invoice_pdf(profile: Profile, plan_type: str, payment_
     ]
     
     period_label = "на 1 місяць" if payment_period == "monthly" else "на 6 місяців" if payment_period == "half_yearly" else "на 1 рік"
-    item_name = f"Передплата за користування онлайн-сервісом UniTax за тарифом Business ({period_label})"
+    tariff_names = {
+        "fop_1_2": "ФОП 1–2 група",
+        "fop_3_tov_ep": "ФОП 3 група + ТОВ (єдиний податок)",
+        "non_profit": "Неприбуткова організація",
+        "resident_module": "Модуль «Мешканці / Клієнти»",
+        "tov_general_vat": "ТОВ / ФОП (Загальна система + ПДВ)",
+        "consulting_partner": "Консалтинговий партнер"
+    }
+    tariff_name_str = tariff_names.get(tariff_code, "Business")
+    item_name = f"Передплата за користування онлайн-сервісом UniTax за тарифом {tariff_name_str} ({period_label})"
     
     items_data = [
         table_headers,
@@ -12520,6 +12815,7 @@ def generate_subscription_invoice_pdf(profile: Profile, plan_type: str, payment_
     ]))
     story.append(sig_table)
     
+    add_brand_footer_to_story(story, styles, font_name)
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -12700,6 +12996,7 @@ def generate_act_pdf(invoice: Invoice, act: ServiceAct, profile: Profile, db: Se
     ]))
     story.append(sig_table)
     
+    add_brand_footer_to_story(story, styles, font_name)
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -12865,11 +13162,40 @@ def generate_waybill_pdf(invoice: Invoice, act: ServiceAct, profile: Profile, db
     ]))
     story.append(sig_table)
     
+    add_brand_footer_to_story(story, styles, font_name)
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 def send_email_with_attachments(to_email: str, subject: str, body: str, attachments: list, profile_id: Optional[int] = None):
+    body_suffix = "\n\nСформовано www.UniTax.pro AI податковий асистент\nПерейдіть за посиланням або відскануйте доданий QR-код: https://www.unitax.pro"
+    if body_suffix not in body:
+        body += body_suffix
+        
+    try:
+        import io
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data("https://www.unitax.pro")
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        qr_buffer = io.BytesIO()
+        img.save(qr_buffer, format="PNG")
+        qr_bytes = qr_buffer.getvalue()
+        
+        has_qr = any(name == "unitax_qr.png" for name, _ in attachments)
+        if not has_qr:
+            attachments = list(attachments) + [("unitax_qr.png", qr_bytes)]
+    except Exception as qre:
+        print(f"[QR ATTACH ERROR] Failed to attach QR code to email: {qre}")
+        
+    safe_attachments = []
+    for name, f_bytes in attachments:
+        safe_name = name.replace("№", "No").replace(" ", "_")
+        safe_name = "".join(c if ord(c) < 128 else '_' for c in safe_name)
+        safe_attachments.append((safe_name, f_bytes))
+    attachments = safe_attachments
+    
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
@@ -13670,6 +13996,34 @@ def disconnect_google_auth(
     raise HTTPException(status_code=404, detail="Not connected")
 
 def send_email_via_gmail_api(profile_id: int, to_email: str, subject: str, body: str, attachments: list, db_session_factory):
+    body_suffix = "\n\nСформовано www.UniTax.pro AI податковий асистент\nПерейдіть за посиланням або відскануйте доданий QR-код: https://www.unitax.pro"
+    if body_suffix not in body:
+        body += body_suffix
+        
+    try:
+        import io
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data("https://www.unitax.pro")
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        qr_buffer = io.BytesIO()
+        img.save(qr_buffer, format="PNG")
+        qr_bytes = qr_buffer.getvalue()
+        
+        has_qr = any(name == "unitax_qr.png" for name, _ in attachments)
+        if not has_qr:
+            attachments = list(attachments) + [("unitax_qr.png", qr_bytes)]
+    except Exception as qre:
+        print(f"[QR ATTACH ERROR] Failed to attach QR code to email: {qre}")
+        
+    safe_attachments = []
+    for name, f_bytes in attachments:
+        safe_name = name.replace("№", "No").replace(" ", "_")
+        safe_name = "".join(c if ord(c) < 128 else '_' for c in safe_name)
+        safe_attachments.append((safe_name, f_bytes))
+    attachments = safe_attachments
+    
     db = db_session_factory()
     try:
         auth = db.query(EmailAuth).filter(EmailAuth.profile_id == profile_id).first()
@@ -14002,7 +14356,7 @@ def get_invoice_document_pdf(invoice_id: int, user_id: Optional[int] = None, db:
             filename = f"act_{act.act_number}.pdf"
             
         return Response(content=pdf_bytes, media_type="application/pdf", headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": make_content_disposition(filename)
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
@@ -14041,7 +14395,7 @@ def get_invoice_pdf_endpoint(invoice_id: int, user_id: Optional[int] = None, db:
             filename = f"act_{inv.invoice_number}.pdf"
             
         return Response(content=pdf_bytes, media_type="application/pdf", headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": make_content_disposition(filename)
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve PDF: {str(e)}")
@@ -14539,6 +14893,7 @@ class SignDocumentRequest(BaseModel):
 def sign_document_endpoint(
     doc_id: int,
     req: SignDocumentRequest,
+    request: Request,
     user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
@@ -14572,6 +14927,11 @@ def sign_document_endpoint(
         profile = db.query(Profile).filter(Profile.id == profile_id).first()
         if profile and profile.user_id != user_id:
             raise HTTPException(status_code=403, detail="Access denied: document does not belong to this user")
+            
+    if req.use_diia:
+        base_url = str(request.base_url).rstrip("/")
+        auth_url = f"{base_url}/api/diia/mock-sign?doc_id={doc_id}&doc_type={req.doc_type}"
+        return {"diia_flow": True, "auth_url": auth_url}
         
     if req.doc_type in ("invoice", "contract", "waybill") or (req.doc_type == "act" and db.query(Invoice).filter(Invoice.id == doc_id, Invoice.document_type == "act").first() is not None):
         inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
@@ -14589,6 +14949,431 @@ def sign_document_endpoint(
         return sign_service_act(act, cert_record, db)
         
     return {"status": "success", "message": "Document signed successfully"}
+
+def sign_document_with_diia(doc_id: int, doc_type: str, db: Session):
+    if doc_type in ("invoice", "contract", "waybill") or (doc_type == "act" and db.query(Invoice).filter(Invoice.id == doc_id, Invoice.document_type == "act").first() is not None):
+        inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+        if not inv:
+            act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+            if act:
+                return sign_service_act_diia(act, db)
+            return None
+        return sign_invoice_row_diia(inv, db)
+    elif doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if act:
+            return sign_service_act_diia(act, db)
+    return None
+
+def sign_invoice_row_diia(inv, db):
+    import os
+    import hashlib
+    file_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf")
+    if inv.file_content:
+        pdf_bytes = inv.file_content
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+    elif os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+            inv.file_content = pdf_bytes
+    else:
+        profile = db.query(Profile).filter(Profile.id == inv.profile_id).first()
+        if not profile:
+            return None
+        pdf_bytes = generate_invoice_pdf(inv, profile, db)
+        inv.file_content = pdf_bytes
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+            
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    import base64
+    mock_sig = f"DIIA_SIGNATURE_FOR_HASH_{pdf_hash}_SIGNED_BY_DIIAPIDPYS".encode()
+    signed_bytes = base64.b64encode(mock_sig)
+    
+    signed_path = os.path.join("temp_uploads", f"document_{inv.id}.pdf.p7m")
+    with open(signed_path, "wb") as f:
+        f.write(signed_bytes)
+        
+    inv.status = "signed"
+    inv.file_hash = pdf_hash
+    inv.signed_file_path = signed_path
+    inv.signed_file_content = signed_bytes
+    inv.extracted_file_path = file_path
+    db.commit()
+    return True
+
+def sign_service_act_diia(act, db):
+    import os
+    import hashlib
+    inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+    if not inv:
+        return None
+    profile = db.query(Profile).filter(Profile.id == act.profile_id).first()
+    if not profile:
+        return None
+        
+    file_path = os.path.join("temp_uploads", f"act_{act.id}.pdf")
+    if act.file_content:
+        pdf_bytes = act.file_content
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+    elif os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+            act.file_content = pdf_bytes
+    else:
+        if inv.document_type == "waybill":
+            pdf_bytes = generate_waybill_pdf(inv, act, profile, db)
+        else:
+            pdf_bytes = generate_act_pdf(inv, act, profile, db)
+        act.file_content = pdf_bytes
+        os.makedirs("temp_uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(pdf_bytes)
+            
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    import base64
+    mock_sig = f"DIIA_SIGNATURE_FOR_HASH_{pdf_hash}_SIGNED_BY_DIIAPIDPYS".encode()
+    signed_bytes = base64.b64encode(mock_sig)
+    
+    signed_path = os.path.join("temp_uploads", f"act_{act.id}.pdf.p7m")
+    with open(signed_path, "wb") as f:
+        f.write(signed_bytes)
+        
+    act.status = "signed"
+    act.file_hash = pdf_hash
+    act.signed_file_path = signed_path
+    act.signed_file_content = signed_bytes
+    act.extracted_file_path = file_path
+    
+    if inv.status == "draft":
+        inv.status = "sent"
+        
+    db.commit()
+    return True
+
+@app.get("/api/diia/mock-sign")
+def diia_mock_sign_page(doc_id: int, doc_type: str, db: Session = Depends(get_db)):
+    from fastapi.responses import HTMLResponse
+    doc_name = "Документ"
+    doc_amount = 0.0
+    client_name = ""
+    if doc_type in ("invoice", "contract", "waybill"):
+        inv = db.query(Invoice).filter(Invoice.id == doc_id).first()
+        if inv:
+            if doc_type == "contract":
+                doc_name = f"Договір № {inv.invoice_number}"
+            elif doc_type == "waybill":
+                doc_name = f"Видаткова накладна № {inv.invoice_number}"
+            else:
+                doc_name = f"Рахунок-фактура № {inv.invoice_number}"
+            doc_amount = inv.amount
+            client_name = inv.client_name or ""
+    elif doc_type == "act":
+        act = db.query(ServiceAct).filter(ServiceAct.id == doc_id).first()
+        if act:
+            doc_name = f"Акт виконаних робіт № {act.act_number}"
+            inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
+            if inv:
+                doc_amount = inv.amount
+                client_name = inv.client_name or ""
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="uk">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Дія.Підпис - Підтвердження підпису</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;450;600;800&display=swap" rel="stylesheet">
+        <style>
+            body {{
+                background-color: #020617;
+                color: #f8fafc;
+                font-family: 'Inter', sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                margin: 0;
+                padding: 16px;
+                box-sizing: border-box;
+                position: relative;
+                overflow: hidden;
+            }}
+            .glow-1 {{
+                position: absolute;
+                top: -10%;
+                left: -10%;
+                width: 50%;
+                height: 50%;
+                border-radius: 50%;
+                background: rgba(99, 102, 241, 0.05);
+                filter: blur(120px);
+                pointer-events: none;
+            }}
+            .glow-2 {{
+                position: absolute;
+                bottom: -10%;
+                right: -10%;
+                width: 50%;
+                height: 50%;
+                border-radius: 50%;
+                background: rgba(20, 184, 166, 0.05);
+                filter: blur(120px);
+                pointer-events: none;
+            }}
+            .card {{
+                background: rgba(15, 23, 42, 0.6);
+                backdrop-filter: blur(20px);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 24px;
+                padding: 32px;
+                width: 100%;
+                max-width: 440px;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+                z-index: 10;
+                box-sizing: border-box;
+                text-align: center;
+            }}
+            .logo-container {{
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 64px;
+                height: 64px;
+                background: linear-gradient(135deg, #14b8a6, #0d9488);
+                border-radius: 20px;
+                margin-bottom: 24px;
+                box-shadow: 0 8px 16px rgba(20, 184, 166, 0.2);
+            }}
+            .logo-text {{
+                font-size: 32px;
+                font-weight: 800;
+                color: #ffffff;
+            }}
+            h1 {{
+                font-size: 22px;
+                font-weight: 800;
+                margin: 0 0 8px 0;
+                letter-spacing: -0.02em;
+                background: linear-gradient(to right, #f8fafc, #cbd5e1);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }}
+            .subtitle {{
+                font-size: 14px;
+                color: #94a3b8;
+                margin: 0 0 24px 0;
+            }}
+            .doc-info {{
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 16px;
+                padding: 16px;
+                margin-bottom: 24px;
+                text-align: left;
+            }}
+            .doc-row {{
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 8px;
+                font-size: 13px;
+            }}
+            .doc-row:last-child {{
+                margin-bottom: 0;
+            }}
+            .doc-label {{
+                color: #64748b;
+            }}
+            .doc-val {{
+                font-weight: 600;
+                color: #e2e8f0;
+            }}
+            .input-group {{
+                margin-bottom: 24px;
+                text-align: left;
+            }}
+            label {{
+                display: block;
+                font-size: 12px;
+                font-weight: 600;
+                color: #94a3b8;
+                margin-bottom: 8px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }}
+            input {{
+                width: 100%;
+                background: rgba(0, 0, 0, 0.4);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 12px;
+                padding: 12px 16px;
+                font-size: 16px;
+                color: #ffffff;
+                box-sizing: border-box;
+                outline: none;
+                transition: all 0.2s;
+                letter-spacing: 0.1em;
+            }}
+            input:focus {{
+                border-color: #14b8a6;
+                box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.1);
+            }}
+            .btn {{
+                width: 100%;
+                background: linear-gradient(135deg, #14b8a6, #0d9488);
+                color: #ffffff;
+                border: none;
+                border-radius: 14px;
+                padding: 14px;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+                box-shadow: 0 4px 12px rgba(20, 184, 166, 0.1);
+            }}
+            .btn:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 6px 16px rgba(20, 184, 166, 0.2);
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="glow-1"></div>
+        <div class="glow-2"></div>
+        <div class="card">
+            <div class="logo-container">
+                <span class="logo-text">Д</span>
+            </div>
+            <h1>Накладання Дія.Підпису</h1>
+            <p class="subtitle">Симуляція електронного підпису для UniTax</p>
+            <div class="doc-info">
+                <div class="doc-row">
+                    <span class="doc-label">Документ:</span>
+                    <span class="doc-val">{doc_name}</span>
+                </div>
+                <div class="doc-row">
+                    <span class="doc-label">Контрагент:</span>
+                    <span class="doc-val">{client_name}</span>
+                </div>
+                <div class="doc-row">
+                    <span class="doc-label">Сума:</span>
+                    <span class="doc-val">{doc_amount:,.2f} грн</span>
+                </div>
+            </div>
+            <form action="/api/diia/mock-sign/confirm" method="POST">
+                <input type="hidden" name="doc_id" value="{doc_id}">
+                <input type="hidden" name="doc_type" value="{doc_type}">
+                <div class="input-group">
+                    <label for="code">Введіть 4-значний PIN-код Дія</label>
+                    <input type="password" id="code" name="code" maxLength="4" placeholder="••••" required pattern="[0-9]{{4}}">
+                </div>
+                <button type="submit" class="btn">Підписати в Дії</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.post("/api/diia/mock-sign/confirm")
+def diia_mock_sign_confirm(
+    doc_id: int = Form(...),
+    doc_type: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    from fastapi.responses import HTMLResponse
+    sign_document_with_diia(doc_id, doc_type, db)
+    redirect_target = "/incoming" if doc_type == "act" else "/invoices"
+    html_success = f"""
+    <!DOCTYPE html>
+    <html lang="uk">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Підпис успішно накладено</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;450;650&display=swap" rel="stylesheet">
+        <style>
+            body {{
+                background-color: #020617;
+                color: #f8fafc;
+                font-family: 'Inter', sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                margin: 0;
+                padding: 16px;
+                box-sizing: border-box;
+            }}
+            .card {{
+                background: rgba(15, 23, 42, 0.6);
+                backdrop-filter: blur(20px);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 24px;
+                padding: 40px 32px;
+                width: 100%;
+                max-width: 400px;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+                text-align: center;
+            }}
+            .checkmark-container {{
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 72px;
+                height: 72px;
+                background: rgba(16, 185, 129, 0.1);
+                border: 2px solid #10b981;
+                border-radius: 50%;
+                margin-bottom: 24px;
+                color: #10b981;
+                font-size: 36px;
+                font-weight: bold;
+            }}
+            h1 {{
+                font-size: 20px;
+                font-weight: 700;
+                margin: 0 0 12px 0;
+                color: #f8fafc;
+            }}
+            p {{
+                font-size: 14px;
+                color: #94a3b8;
+                margin: 0 0 24px 0;
+                line-height: 1.5;
+            }}
+            .redirect-text {{
+                font-size: 12px;
+                color: #64748b;
+            }}
+        </style>
+        <script>
+            setTimeout(function() {{
+                var frontendUrl = "https://www.unitax.pro";
+                if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {{
+                    frontendUrl = window.location.protocol + "//" + window.location.hostname + ":3000";
+                }}
+                window.location.href = frontendUrl + "{redirect_target}";
+            }}, 2000);
+        </script>
+    </head>
+    <body>
+        <div class="card">
+            <div class="checkmark-container">✓</div>
+            <h1>Документ підписано!</h1>
+            <p>Дія.Підпис успішно накладено на документ. Статус оновлено на "Підписано".</p>
+            <div class="redirect-text">Повернення до кабінету UniTax...</div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_success)
 
 @app.get("/api/documents/{doc_id}/signed")
 def get_signed_document_pdf(
@@ -14624,7 +15409,7 @@ def get_signed_document_pdf(
                 inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
                 label = "waybill" if (inv and inv.document_type == "waybill") else "act"
                 return Response(content=act.signed_file_content, media_type="application/pkcs7-signature", headers={
-                    "Content-Disposition": f"attachment; filename={label}_{act.act_number}.pdf.p7m"
+                    "Content-Disposition": make_content_disposition(f"{label}_{act.act_number}.pdf.p7m")
                 })
             elif act.signed_file_path and os.path.exists(act.signed_file_path):
                 with open(act.signed_file_path, "rb") as f:
@@ -14632,7 +15417,7 @@ def get_signed_document_pdf(
                 inv = db.query(Invoice).filter(Invoice.id == act.invoice_id).first()
                 label = "waybill" if (inv and inv.document_type == "waybill") else "act"
                 return Response(content=p7m_bytes, media_type="application/pkcs7-signature", headers={
-                    "Content-Disposition": f"attachment; filename={label}_{act.act_number}.pdf.p7m"
+                    "Content-Disposition": make_content_disposition(f"{label}_{act.act_number}.pdf.p7m")
                 })
             
     # 2. Check if it is an Invoice/Contract/Waybill row
@@ -14641,14 +15426,14 @@ def get_signed_document_pdf(
         if getattr(inv, 'signed_file_content', None) is not None:
             label = inv.document_type or "document"
             return Response(content=inv.signed_file_content, media_type="application/pkcs7-signature", headers={
-                "Content-Disposition": f"attachment; filename={label}_{inv.invoice_number}.pdf.p7m"
+                "Content-Disposition": make_content_disposition(f"{label}_{inv.invoice_number}.pdf.p7m")
             })
         elif inv.signed_file_path and os.path.exists(inv.signed_file_path):
             with open(inv.signed_file_path, "rb") as f:
                 p7m_bytes = f.read()
             label = inv.document_type or "document"
             return Response(content=p7m_bytes, media_type="application/pkcs7-signature", headers={
-                "Content-Disposition": f"attachment; filename={label}_{inv.invoice_number}.pdf.p7m"
+                "Content-Disposition": make_content_disposition(f"{label}_{inv.invoice_number}.pdf.p7m")
             })
         
     # Fallback to generation / dynamic signing if signed_file_path is missing but status is signed
@@ -14701,7 +15486,7 @@ def get_signed_document_pdf(
     # Sign it dynamically
     signed_bytes = sign_pdf_mock_or_real(pdf_bytes, None, db)
     return Response(content=signed_bytes, media_type="application/pkcs7-signature", headers={
-        "Content-Disposition": f"attachment; filename={filename}.p7m"
+        "Content-Disposition": make_content_disposition(f"{filename}.p7m")
     })
 
 @app.post("/api/documents/upload")
@@ -14895,6 +15680,7 @@ def create_templated_document(
     ]))
     story.append(t)
     
+    add_brand_footer_to_story(story, styles, font_name)
     doc.build(story)
     
     with open(file_path, "rb") as f:
@@ -15364,7 +16150,7 @@ def download_profile_document(
         content=doc.file_content,
         media_type=doc.content_type,
         headers={
-            "Content-Disposition": f"attachment; filename={doc.filename}"
+            "Content-Disposition": make_content_disposition(doc.filename)
         }
     )
 
@@ -16086,40 +16872,96 @@ async def upload_certificate(
                         detail=f"Не вдалося прочитати JKS файл: {str(jks_err)}"
                     )
             
+            is_dat_key = False
             if filename.endswith((".dat", ".zs2")):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Цей формат КЕП використовує українські DSTU/GOST алгоритми і не може бути прочитаний стандартним OpenSSL. Потрібна інтеграція з IIT EUSignCP або DSTU/GOST бібліотекою. Сертифікат не збережено."
-                )
+                # IIT/DSTU format — try jkurwa-based signing instead of OpenSSL
+                import tempfile
+                import subprocess
+                import json
+                import base64
+                
+                with tempfile.NamedTemporaryFile(delete=False) as temp_in:
+                    temp_in.write(file_content)
+                    temp_in_path = temp_in.name
+                
+                try:
+                    cmd = ["node", "dps-nodejs/get_cert_info.js", temp_in_path, password]
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                    
+                    if result.returncode != 0:
+                        err = result.stderr.strip() or "unknown error"
+                        logger.error(f"[CERT UPLOAD] get_cert_info.js failed: {err}")
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Не вдалося прочитати IIT КЕП (.dat): {err}. Перевірте пароль та формат файлу."
+                        )
+                        
+                    info = json.loads(result.stdout.strip())
+                    
+                    val_from = datetime.fromisoformat(info["valid_from"].replace("Z", "+00:00"))
+                    val_to = datetime.fromisoformat(info["valid_to"].replace("Z", "+00:00"))
+                    
+                    # Save as DPS JKS credential for this profile
+                    existing_jks = db.query(DPSJKSCredential).filter(
+                        DPSJKSCredential.profile_id == profile_id
+                    ).first()
+                    if existing_jks:
+                        existing_jks.jks_data = file_content
+                        existing_jks.password_encrypted = encrypt_token(password)
+                        existing_jks.updated_at = datetime.now()
+                    else:
+                        db.add(DPSJKSCredential(
+                            profile_id=profile_id,
+                            jks_data=file_content,
+                            password_encrypted=encrypt_token(password),
+                        ))
+                    db.commit()
+                    
+                    cert_owner_name = info["cert_owner_name"]
+                    cert_issuer = info["cert_issuer"]
+                    cert_serial = info["cert_serial"]
+                    valid_from = val_from
+                    valid_to = val_to
+                    cert_thumbprint = info["cert_thumbprint"]
+                    cert_pem = info["cert_pem"]
+                    private_key_encrypted = base64.b64encode(file_content).decode('utf-8')
+                    is_dat_key = True
+                finally:
+                    import os
+                    try:
+                        os.unlink(temp_in_path)
+                    except Exception:
+                        pass
             
-            if not cert:
-                raise HTTPException(status_code=400, detail="Невірний пароль або пошкоджений файл КЕП.")
-        
-        # Extract details
-        subject = cert.get_subject()
-        cert_owner_name = subject.CN or f"{subject.GN or ''} {subject.SN or ''}".strip() or "КЕП Власник"
-        
-        issuer = cert.get_issuer()
-        cert_issuer = issuer.O or issuer.CN or "Невідомий АЦСК"
-        
-        cert_serial = str(cert.get_serial_number())
-        
-        valid_to_str = cert.get_notAfter().decode('utf-8')
-        valid_to = datetime.strptime(valid_to_str, "%Y%m%d%H%M%SZ")
-        
-        valid_from_str = cert.get_notBefore().decode('utf-8')
-        valid_from = datetime.strptime(valid_from_str, "%Y%m%d%H%M%SZ")
-        
-        cert_thumbprint = cert.digest("sha1").decode('utf-8').replace(":", "").lower()
-        
-        # PEM format
-        cert_pem = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('utf-8')
-        private_key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, private_key)
+            if not is_dat_key:
+                if not cert:
+                    raise HTTPException(status_code=400, detail="Невірний пароль або пошкоджений файл КЕП.")
+            
+                # Extract details
+                subject = cert.get_subject()
+                cert_owner_name = subject.CN or f"{subject.GN or ''} {subject.SN or ''}".strip() or "КЕП Власник"
+                
+                issuer = cert.get_issuer()
+                cert_issuer = issuer.O or issuer.CN or "Невідомий АЦСК"
+                
+                cert_serial = str(cert.get_serial_number())
+                
+                valid_to_str = cert.get_notAfter().decode('utf-8')
+                valid_to = datetime.strptime(valid_to_str, "%Y%m%d%H%M%SZ")
+                
+                valid_from_str = cert.get_notBefore().decode('utf-8')
+                valid_from = datetime.strptime(valid_from_str, "%Y%m%d%H%M%SZ")
+                
+                cert_thumbprint = cert.digest("sha1").decode('utf-8').replace(":", "").lower()
+                
+                # PEM format
+                cert_pem = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('utf-8')
+                private_key_pem = crypto.dump_privatekey(crypto.FILETYPE_PEM, private_key)
 
-        # Encrypt private key
-        # from services.report_signer import encrypt_private_key
-        # private_key_encrypted = encrypt_private_key(private_key_pem)
-        private_key_encrypted = private_key_pem  # Temporarily disable encryption
+                # Encrypt private key
+                # from services.report_signer import encrypt_private_key
+                # private_key_encrypted = encrypt_private_key(private_key_pem)
+                private_key_encrypted = private_key_pem  # Temporarily disable encryption
         
         # Check if certificate with same serial number already exists (global constraint)
         existing_cert = db.query(Certificate).filter(
@@ -16162,8 +17004,10 @@ async def upload_certificate(
         return {
             "id": db_cert.id,
             "cert_owner_name": cert_owner_name,
+            "owner_name": cert_owner_name,
             "cert_issuer": cert_issuer,
             "cert_serial": cert_serial,
+            "serial_number": cert_serial,
             "valid_to": valid_to.strftime("%Y-%m-%d")
         }
     except HTTPException:
@@ -16201,8 +17045,10 @@ def get_certificates_by_profile(profile_id: int, user_id: Optional[int] = None, 
     return [{
         "id": c.id,
         "cert_owner_name": c.cert_owner_name,
+        "owner_name": c.cert_owner_name,
         "cert_issuer": c.cert_issuer,
         "cert_serial": c.cert_serial,
+        "serial_number": c.cert_serial,
         "valid_to": c.valid_to.strftime("%Y-%m-%d") if c.valid_to else None
     } for c in certs]
 
@@ -16214,8 +17060,10 @@ def get_certificates(profile_id: Optional[int] = None, user_id: Optional[int] = 
     return [{
         "id": c.id,
         "cert_owner_name": c.cert_owner_name,
+        "owner_name": c.cert_owner_name,
         "cert_issuer": c.cert_issuer,
         "cert_serial": c.cert_serial,
+        "serial_number": c.cert_serial,
         "valid_to": c.valid_to.strftime("%Y-%m-%d") if c.valid_to else None
     } for c in certs]
 
@@ -18231,7 +19079,7 @@ async def export_taxes_calendar(
 # from services.ai_service import ai_service
 # from services.tax_calculator import tax_calculator
 # from services.liqpay_service import liqpay_service
-# from services.monobank_service import monobank_service
+from services.monobank_service import monobank_service
 
 class AIAnalyzeTransactionRequest(BaseModel):
     transaction_id: int
@@ -18521,10 +19369,7 @@ async def create_payment_combined(req: dict, user_id: Optional[int] = None, db: 
         if user_id is not None and profile.user_id != user_id:
             raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
         
-        # Enterprise accounts cannot pay directly - invoice only
-        if profile.type != "fop":
-            raise HTTPException(status_code=403, detail="Підприємства можуть оплачувати тільки за рахунками. Будь ласка, зверніться до адміністратора для отримання рахунку.")
-            
+
         period = "month" if payment_period == "monthly" else "halfyearly" if payment_period == "half_yearly" else "year"
         existing_sub = db.query(Subscription).filter(Subscription.profile_id == profile_id).first()
         
@@ -19816,6 +20661,23 @@ async def disconnect_bank(bank_name: str, profile_id: int, user_id: Optional[int
     
     return {"status": "disconnected"}
 
+# --- DPS JKS Credential Model ---
+
+class DPSJKSCredential(Base):
+    __tablename__ = "dps_jks_credentials"
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("profiles.id"), unique=True, nullable=False)
+    jks_data = Column(LargeBinary, nullable=False)
+    password_encrypted = Column(String, nullable=False)
+    edrpou = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+try:
+    DPSJKSCredential.__table__.create(bind=engine, checkfirst=True)
+except Exception as _jks_err:
+    logger.warning(f"DPSJKSCredential table create: {_jks_err}")
+
 # --- DPS API Endpoints ---
 
 class CheckDebtRequest(BaseModel):
@@ -19854,15 +20716,78 @@ def parse_settlement_table(data: list) -> list:
         })
     return table
 
-def format_dps_settlement_response(table: list, source: str, fetched_at: datetime | None = None) -> dict:
+def enrich_dps_settlements_with_pending(table: list, profile_id: int, db: Session, snapshot_at: datetime | None = None) -> list:
+    """
+    Enrich DPS settlement rows with pending payments (payments made after DPS snapshot).
+    For each tax row, adds:
+    - status: 'confirmed' (DPS sees it) or 'pending' (payment in transit to DPS)
+    - pending_amount: sum of payments after snapshot that match this tax
+    - effective_debt: debt - pending_amount (real-time debt estimate)
+    """
+    if not table:
+        return table
+
+    snapshot_at = snapshot_at or datetime.now()
+    from services.tax_calculator import get_new_payments_after
+
+    # Get new payments since snapshot (with 10-day window for DPS delay)
+    new_payments = get_new_payments_after(db, profile_id, snapshot_at)
+
+    # Map tax names from DPS to internal tax types
+    tax_name_to_type = {}
+    for item in table:
+        name_lower = item.get("tax_name", "").lower()
+        code_str = item.get("tax_code", "") or ""
+        if "єдиний податок" in name_lower or "єп" in name_lower or "18050400" in code_str:
+            tax_name_to_type[item["tax_name"]] = "unified_tax"
+        elif "соціальний" in name_lower or "єсв" in name_lower or "71040000" in code_str or "71010000" in code_str:
+            tax_name_to_type[item["tax_name"]] = "esv"
+        elif "військовий" in name_lower or "вз" in name_lower or "11011700" in code_str or "11011000" in code_str:
+            tax_name_to_type[item["tax_name"]] = "military_tax"
+        elif "пдфо" in name_lower or "доходи фізичних" in name_lower or "11010100" in code_str:
+            tax_name_to_type[item["tax_name"]] = "pit"
+
+    enriched = []
+    for item in table:
+        tax_name = item.get("tax_name")
+        tax_type = tax_name_to_type.get(tax_name)
+        pending_amount = 0.0
+        if tax_type:
+            pending_amount = new_payments.get(tax_type, 0.0)
+
+        debt = float(item.get("debt") or 0.0)
+        effective_debt = max(0.0, debt - pending_amount)
+
+        status = "pending" if pending_amount > 0 else "confirmed"
+
+        enriched.append({
+            **item,
+            "status": status,
+            "pending_amount": round(pending_amount, 2),
+            "effective_debt": round(effective_debt, 2),
+            "snapshot_at": snapshot_at.isoformat()
+        })
+
+    return enriched
+
+
+def format_dps_settlement_response(table: list, source: str, fetched_at: datetime | None = None, profile_id: int = None, db: Session = None) -> dict:
     fetched_at = fetched_at or datetime.now()
+
+    # Enrich with pending payments if profile_id and db provided
+    if profile_id and db:
+        table = enrich_dps_settlements_with_pending(table, profile_id, db, fetched_at)
+
     settlement_status = [
         {
             "tax_name": item["tax_name"],
             "accrued": item["accrued"],
             "paid": item["paid"],
-            "overpayment": item["overpaid"],
-            "underpayment": item["debt"]
+            "overpayment": item.get("overpaid", 0.0),
+            "underpayment": item["debt"],
+            "status": item.get("status", "unknown"),
+            "pending_amount": item.get("pending_amount", 0.0),
+            "effective_debt": item.get("effective_debt", item.get("debt", 0.0))
         }
         for item in table
     ]
@@ -19878,6 +20803,8 @@ def format_dps_settlement_response(table: list, source: str, fetched_at: datetim
         "has_overpayment": any(item["overpaid"] > 0 for item in table),
         "total_debt": round(sum(item["debt"] for item in table), 2),
         "total_overpayment": round(sum(item["overpaid"] for item in table), 2),
+        "total_pending": round(sum(item.get("pending_amount", 0.0) for item in table), 2),
+        "total_effective_debt": round(sum(item.get("effective_debt", item.get("debt", 0.0)) for item in table), 2),
         "fetched_at": fetched_at.isoformat(),
         "checked_at": fetched_at.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -19903,6 +20830,82 @@ def get_latest_manual_dps_table(profile_id: int, db: Session) -> list:
         }
         for row in latest_rows
     ]
+
+def save_dps_settlement_snapshot(profile_id: int, table: list, db: Session, source: str = "api") -> bool:
+    """
+    Persist a DPS settlement snapshot as DPSSettlement rows.
+    Deduplicates: skips saving if the latest snapshot of the same source has
+    identical content (tax_code/debt/overpaid/accrued/paid), to avoid clutter.
+    Returns True if a new snapshot was saved, False if skipped as duplicate.
+    """
+    if not table:
+        return False
+
+    def _signature(rows: list) -> set:
+        return {(
+            (r.get("tax_code") or r.get("tax_name") or "").strip(),
+            round(float(r.get("debt") or 0.0), 2),
+            round(float(r.get("overpaid") or 0.0), 2),
+            round(float(r.get("accrued") or 0.0), 2),
+            round(float(r.get("paid") or 0.0), 2),
+        ) for r in rows}
+
+    # Compare with the latest snapshot of the same source
+    latest_row = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id,
+        DPSSettlement.source == source
+    ).order_by(DPSSettlement.recorded_at.desc()).first()
+
+    if latest_row:
+        latest_at = latest_row.recorded_at
+        latest_rows = db.query(DPSSettlement).filter(
+            DPSSettlement.profile_id == profile_id,
+            DPSSettlement.source == source,
+            DPSSettlement.recorded_at == latest_at
+        ).all()
+        existing_sig = {(
+            (r.tax_code or r.tax_name or "").strip(),
+            round(float(r.debt or 0.0), 2),
+            round(float(r.overpaid or 0.0), 2),
+            round(float(r.accrued or 0.0), 2),
+            round(float(r.paid or 0.0), 2),
+        ) for r in latest_rows}
+        if existing_sig == _signature(table):
+            logger.info(f"[DPS SNAPSHOT] Skipped duplicate {source} snapshot for profile {profile_id}")
+            return False
+
+    recorded_at = datetime.now()
+    for item in table:
+        deadline_val = item.get("payment_deadline")
+        if isinstance(deadline_val, str):
+            try:
+                if "T" in deadline_val:
+                    deadline_val = datetime.fromisoformat(deadline_val)
+                else:
+                    deadline_val = datetime.strptime(deadline_val.strip(), "%Y-%m-%d")
+            except Exception:
+                deadline_val = None
+        db.add(DPSSettlement(
+            profile_id=profile_id,
+            tax_name=item.get("tax_name") or "Невідомий платіж",
+            tax_code=item.get("tax_code") or "",
+            overpaid=float(item.get("overpaid") or 0.0),
+            debt=float(item.get("debt") or 0.0),
+            penalty=float(item.get("penalty") or 0.0),
+            accrued=float(item.get("accrued") or 0.0),
+            paid=float(item.get("paid") or 0.0),
+            payment_deadline=deadline_val,
+            source=source,
+            recorded_at=recorded_at
+        ))
+    db.commit()
+    logger.info(f"[DPS SNAPSHOT] Saved {source} snapshot for profile {profile_id}: {len(table)} rows")
+    try:
+        sync_profile_calendar(profile_id, db)
+    except Exception as sync_err:
+        logger.warning(f"[DPS SNAPSHOT] Calendar sync failed: {sync_err}")
+    return True
+
 
 @app.post("/api/dps/upload")
 async def upload_dps_statement(
@@ -19947,7 +20950,7 @@ async def upload_dps_statement(
         except Exception as sync_err:
             print(f"[Calendar Sync Error] Failed to sync calendar after upload: {sync_err}")
             
-        response = format_dps_settlement_response(table, "Ручне завантаження виписки ДПС", recorded_at)
+        response = format_dps_settlement_response(table, "Ручне завантаження виписки ДПС", recorded_at, profile_id, db)
         response["message"] = f"Виписку ДПС успішно розпізнано. Рядків: {len(table)}"
         return response
     except HTTPException:
@@ -20012,7 +21015,13 @@ async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] 
         table = parse_settlement_table(detailed_data)
         if table:
             logger.info(f"[DPS FETCH] Successfully retrieved data: {len(table)} rows")
-            return format_dps_settlement_response(table, "ДПС API (детальна таблиця)")
+            # Persist the official DPS snapshot for reconciliation/history
+            try:
+                save_dps_settlement_snapshot(req.profile_id, table, db, source="api")
+            except Exception as save_err:
+                db.rollback()
+                logger.warning(f"[DPS FETCH] Failed to save API snapshot: {save_err}")
+            return format_dps_settlement_response(table, "ДПС API (детальна таблиця)", datetime.now(), req.profile_id, db)
     except Exception as e:
         logger.warning(f"[DPS FETCH] DPS API automatic query failed: {e}")
     
@@ -20020,7 +21029,7 @@ async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] 
     manual_table = get_latest_manual_dps_table(req.profile_id, db)
     if manual_table:
         logger.info(f"[DPS FETCH] Using manual upload fallback: {len(manual_table)} rows")
-        response = format_dps_settlement_response(manual_table, "Остання завантажена вручну виписка ДПС")
+        response = format_dps_settlement_response(manual_table, "Остання завантажена вручну виписка ДПС", datetime.now(), req.profile_id, db)
         response["warning"] = "Автоматичний запит до ДПС не спрацював. Показано останню завантажену вручну виписку."
         return response
     
@@ -20038,6 +21047,86 @@ async def fetch_detailed_dps_data(req: CheckDebtRequest, user_id: Optional[int] 
         "total_overpayment": 0.0,
         "source": "немає даних"
     }
+
+@app.post("/api/dps/upload-jks")
+async def upload_dps_jks(
+    profile_id: int = Form(...),
+    password: str = Form(...),
+    file: UploadFile = File(...),
+    cert_file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
+    """Upload JKS/DAT key file (+ optional .cer certificate) for DPS API authorization via jkurwa"""
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+
+    jks_data = await file.read()
+    if not jks_data:
+        raise HTTPException(status_code=400, detail="Файл порожній")
+
+    # If separate .cer provided and key is a ZIP — inject cert into ZIP
+    if cert_file:
+        cert_bytes = await cert_file.read()
+        if cert_bytes:
+            import zipfile, io
+            # Check if key is already a ZIP
+            if jks_data[:4] == b'PK\x03\x04':
+                # Rebuild ZIP with cert added
+                buf = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(jks_data), 'r') as zf_in:
+                    with zipfile.ZipFile(buf, 'w') as zf_out:
+                        for info in zf_in.infolist():
+                            zf_out.writestr(info, zf_in.read(info.filename))
+                        zf_out.writestr(cert_file.filename or 'cert.cer', cert_bytes)
+                jks_data = buf.getvalue()
+            else:
+                # Wrap key + cert into a ZIP
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, 'w') as zf:
+                    zf.writestr(file.filename or 'Key-6.dat', jks_data)
+                    zf.writestr(cert_file.filename or 'cert.cer', cert_bytes)
+                jks_data = buf.getvalue()
+
+    try:
+        from services.jkurwa_signer import sign_with_jkurwa
+        sig = sign_with_jkurwa(jks_data, password)
+        logger.info(f"[JKS UPLOAD] Profile {profile_id}: JKS validated, sig length={len(sig)}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Не вдалося перевірити JKS ключ: {str(e)}")
+
+    existing = db.query(DPSJKSCredential).filter(DPSJKSCredential.profile_id == profile_id).first()
+    if existing:
+        existing.jks_data = jks_data
+        existing.password_encrypted = encrypt_token(password)
+        existing.updated_at = datetime.now()
+    else:
+        db.add(DPSJKSCredential(
+            profile_id=profile_id,
+            jks_data=jks_data,
+            password_encrypted=encrypt_token(password),
+        ))
+    db.commit()
+    return {"ok": True, "message": "JKS ключ успішно збережено та перевірено", "sig_length": len(sig)}
+
+
+@app.get("/api/dps/jks-status/{profile_id}")
+async def get_jks_status(profile_id: int, db: Session = Depends(get_db)):
+    """Check if a JKS key is configured for this profile"""
+    cred = db.query(DPSJKSCredential).filter(DPSJKSCredential.profile_id == profile_id).first()
+    return {"has_jks": cred is not None, "updated_at": cred.updated_at.isoformat() if cred else None}
+
+
+@app.delete("/api/dps/jks/{profile_id}")
+async def delete_dps_jks(profile_id: int, db: Session = Depends(get_db)):
+    """Remove stored JKS key for this profile"""
+    cred = db.query(DPSJKSCredential).filter(DPSJKSCredential.profile_id == profile_id).first()
+    if not cred:
+        raise HTTPException(status_code=404, detail="JKS ключ не знайдено")
+    db.delete(cred)
+    db.commit()
+    return {"ok": True}
+
 
 @app.get("/api/dps/payment-deadlines")
 async def get_payment_deadlines(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -20727,6 +21816,8 @@ class SendSubscriptionInvoiceRequest(BaseModel):
     plan_type: str = "business"
     payment_period: str = "monthly"
     email: str
+    amount: Optional[float] = None
+    tariff_code: Optional[str] = None
 
 class SupportMessageRequest(BaseModel):
     profile_id: int
@@ -20756,11 +21847,13 @@ def send_subscription_invoice(req: SendSubscriptionInvoiceRequest, db: Session =
     if not profile:
         raise HTTPException(status_code=404, detail="Профіль не знайдено")
         
-    pricing = db.query(Pricing).filter(
-        Pricing.plan_type == req.plan_type,
-        Pricing.payment_period == req.payment_period
-    ).first()
-    price_val = pricing.price if pricing else (2999.0 if req.payment_period == "yearly" else 1499.0 if req.payment_period == "half_yearly" else 299.0)
+    price_val = req.amount
+    if price_val is None:
+        pricing = db.query(Pricing).filter(
+            Pricing.plan_type == req.plan_type,
+            Pricing.payment_period == req.payment_period
+        ).first()
+        price_val = pricing.price if pricing else (2999.0 if req.payment_period == "yearly" else 1499.0 if req.payment_period == "half_yearly" else 299.0)
     
     invoice_number = generate_subscription_invoice_number(db, profile.id)
     pdf_bytes = generate_subscription_invoice_pdf(
@@ -20769,7 +21862,8 @@ def send_subscription_invoice(req: SendSubscriptionInvoiceRequest, db: Session =
         payment_period=req.payment_period,
         amount=price_val,
         invoice_number=invoice_number,
-        date_val=datetime.utcnow()
+        date_val=datetime.utcnow(),
+        tariff_code=req.tariff_code
     )
     
     subject = f"UniTax: Рахунок за підписку № {invoice_number}"
@@ -20795,7 +21889,7 @@ def send_subscription_invoice(req: SendSubscriptionInvoiceRequest, db: Session =
     # Create the pending payment record so it displays in history
     new_payment = Payment(
         profile_id=profile.id,
-        tax_type=req.plan_type,
+        tax_type=req.tariff_code or req.plan_type,
         amount=price_val,
         period=req.payment_period,
         status="pending",
@@ -20808,6 +21902,95 @@ def send_subscription_invoice(req: SendSubscriptionInvoiceRequest, db: Session =
     db.commit()
     
     return {"status": "success", "message": f"Рахунок успішно надіслано на {req.email}"}
+
+@app.get("/api/subscriptions/download-invoice-pdf")
+def download_subscription_invoice_pdf(
+    profile_id: int, 
+    plan_type: str, 
+    payment_period: str, 
+    amount: Optional[float] = None,
+    tariff_code: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    price_val = amount
+    if price_val is None:
+        pricing = db.query(Pricing).filter(
+            Pricing.plan_type == plan_type,
+            Pricing.payment_period == payment_period
+        ).first()
+        price_val = pricing.price if pricing else (2999.0 if payment_period == "yearly" else 1499.0 if payment_period == "half_yearly" else 299.0)
+    
+    invoice_number = generate_subscription_invoice_number(db, profile.id)
+    pdf_bytes = generate_subscription_invoice_pdf(
+        profile=profile,
+        plan_type=plan_type,
+        payment_period=payment_period,
+        amount=price_val,
+        invoice_number=invoice_number,
+        date_val=datetime.utcnow(),
+        tariff_code=tariff_code
+    )
+    
+    # Create the pending payment record so it displays in history
+    new_payment = Payment(
+        profile_id=profile.id,
+        tax_type=tariff_code or plan_type,
+        amount=price_val,
+        period=payment_period,
+        status="pending",
+        payment_type="subscription",
+        plan_type=plan_type,
+        payment_period=payment_period,
+        liqpay_order_id=invoice_number
+    )
+    db.add(new_payment)
+    db.commit()
+    
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": make_content_disposition(f"Invoice_{invoice_number}.pdf"),
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
+@app.get("/api/payments/{payment_id}/pdf")
+def download_payment_pdf(payment_id: int, db: Session = Depends(get_db)):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Платіж не знайдено")
+        
+    profile = db.query(Profile).filter(Profile.id == payment.profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профіль не знайдено")
+        
+    invoice_number = f"UT-SUB-{profile.id}-{payment.id:04d}"
+    
+    pdf_bytes = generate_subscription_invoice_pdf(
+        profile=profile,
+        plan_type=payment.plan_type or "business",
+        payment_period=payment.period or "monthly",
+        amount=payment.amount,
+        invoice_number=invoice_number,
+        date_val=payment.created_at or datetime.utcnow(),
+        tariff_code=payment.tax_type
+    )
+    
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": make_content_disposition(f"Invoice_{invoice_number}.pdf"),
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
 
 @app.post("/api/auth/send-password-to-email")
 def send_password_to_email(req: SendPasswordRequest, db: Session = Depends(get_db)):
@@ -21745,6 +22928,26 @@ class SignBoardProtocolRequest(BaseModel):
     password: Optional[str] = None
     certificate_id: Optional[int] = None
 
+class CreateMeetingRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    questions: List[str]
+
+class SignMeetingProtocolRequest(BaseModel):
+    password: Optional[str] = None
+    certificate_id: Optional[int] = None
+
+class QuestionVoteItem(BaseModel):
+    question_id: int
+    vote_value: str # yes, no, abstain
+
+class ResidentVoteRequest(BaseModel):
+    votes: List[QuestionVoteItem]
+    signature_data: Optional[str] = None
+    is_signed: Optional[bool] = False
+
 def verify_board_access(
     authorization: Optional[str] = Header(None),
     token_query: Optional[str] = Query(None, alias="token"),
@@ -22339,6 +23542,1168 @@ def unpost_readings(
         "message": f"Проводку показів за {month:02d}.{year} успішно скасовано",
         "unposted_count": unposted_count
     }
+
+
+# --- General Meetings (Загальні збори) Endpoints ---
+
+@app.get("/api/meetings")
+def get_meetings(auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    meetings = db.query(GeneralMeeting).filter(GeneralMeeting.profile_id == profile_id).order_by(GeneralMeeting.id.desc()).all()
+    
+    total_area = sum((m.flat_area or m.area or 0.0) for m in db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id, UnitOrMember.role != "tenant").all())
+    
+    res = []
+    for m in meetings:
+        questions = db.query(MeetingQuestion).filter(MeetingQuestion.meeting_id == m.id).all()
+        q_list = []
+        
+        # Calculate vote stats for each question
+        for q in questions:
+            answers = db.query(MeetingVoteAnswer).filter(MeetingVoteAnswer.question_id == q.id).all()
+            yes_area = 0.0
+            no_area = 0.0
+            abstain_area = 0.0
+            
+            for ans in answers:
+                vote = db.query(MeetingVote).filter(MeetingVote.id == ans.vote_id).first()
+                if vote:
+                    v_member = db.query(UnitOrMember).filter(UnitOrMember.id == vote.member_id).first()
+                    if v_member and v_member.role != "tenant":
+                        area = v_member.flat_area or v_member.area or 0.0
+                        if ans.vote_value == "yes":
+                            yes_area += area
+                        elif ans.vote_value == "no":
+                            no_area += area
+                        elif ans.vote_value == "abstain":
+                            abstain_area += area
+            
+            q_list.append({
+                "id": q.id,
+                "question_text": q.question_text,
+                "yes_area": round(yes_area, 2),
+                "no_area": round(no_area, 2),
+                "abstain_area": round(abstain_area, 2),
+                "yes_percent": round(yes_area / total_area * 100, 2) if total_area > 0 else 0.0,
+                "no_percent": round(no_area / total_area * 100, 2) if total_area > 0 else 0.0,
+                "abstain_percent": round(abstain_area / total_area * 100, 2) if total_area > 0 else 0.0
+            })
+            
+        votes_count = db.query(MeetingVote).filter(MeetingVote.meeting_id == m.id).count()
+        voted_area_sum = sum(
+            (db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first().flat_area or 
+             db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first().area or 0.0)
+            for v in db.query(MeetingVote).filter(MeetingVote.meeting_id == m.id).all()
+            if db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first() and
+            db.query(UnitOrMember).filter(UnitOrMember.id == v.member_id).first().role != "tenant"
+        )
+        
+        res.append({
+            "id": m.id,
+            "title": m.title,
+            "description": m.description,
+            "status": m.status,
+            "start_date": m.start_date.strftime('%Y-%m-%d') if m.start_date else None,
+            "end_date": m.end_date.strftime('%Y-%m-%d') if m.end_date else None,
+            "created_at": m.created_at.isoformat(),
+            "updated_at": m.updated_at.isoformat(),
+            "ai_protocol": m.ai_protocol,
+            "is_signed": m.is_signed,
+            "signature_text": m.signature_text,
+            "document_id": m.document_id,
+            "questions": q_list,
+            "stats": {
+                "votes_count": votes_count,
+                "total_area": round(total_area, 2),
+                "voted_area": round(voted_area_sum, 2),
+                "quorum_percent": round(voted_area_sum / total_area * 100, 2) if total_area > 0 else 0.0
+            }
+        })
+    return res
+
+@app.post("/api/meetings")
+def create_meeting(req: CreateMeetingRequest, auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    if not auth["is_chairman"]:
+        raise HTTPException(status_code=403, detail="Тільки голова правління може створювати загальні збори")
+        
+    start_dt = None
+    end_dt = None
+    if req.start_date:
+        start_dt = datetime.strptime(req.start_date, '%Y-%m-%d')
+    if req.end_date:
+        end_dt = datetime.strptime(req.end_date, '%Y-%m-%d')
+        
+    meeting = GeneralMeeting(
+        profile_id=profile_id,
+        title=req.title.strip(),
+        description=req.description.strip() if req.description else "",
+        status="discussion",
+        start_date=start_dt,
+        end_date=end_dt
+    )
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+    
+    for q_text in req.questions:
+        if q_text.strip():
+            q = MeetingQuestion(meeting_id=meeting.id, question_text=q_text.strip())
+            db.add(q)
+            
+    db.commit()
+    return {"status": "success", "id": meeting.id}
+
+@app.post("/api/meetings/{meeting_id}/start-voting")
+def start_meeting_voting(meeting_id: int, auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    if not auth["is_chairman"]:
+        raise HTTPException(status_code=403, detail="Тільки голова правління може запускати голосування")
+        
+    meeting = db.query(GeneralMeeting).filter(GeneralMeeting.id == meeting_id, GeneralMeeting.profile_id == profile_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Збори не знайдено")
+        
+    if meeting.status != "discussion":
+        raise HTTPException(status_code=400, detail="Голосування можна запустити тільки з етапу обговорення")
+        
+    meeting.status = "voting"
+    meeting.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success"}
+
+@app.post("/api/meetings/{meeting_id}/end-voting")
+async def end_meeting_voting(meeting_id: int, auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    if not auth["is_chairman"]:
+        raise HTTPException(status_code=403, detail="Тільки голова правління може завершувати голосування")
+        
+    meeting = db.query(GeneralMeeting).filter(GeneralMeeting.id == meeting_id, GeneralMeeting.profile_id == profile_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Збори не знайдено")
+        
+    if meeting.status != "voting":
+        raise HTTPException(status_code=400, detail="Тільки активне голосування можна завершити")
+        
+    total_area = sum((m.flat_area or m.area or 0.0) for m in db.query(UnitOrMember).filter(UnitOrMember.profile_id == profile_id, UnitOrMember.role != "tenant").all())
+    
+    # Compile results for AI protocol
+    questions = db.query(MeetingQuestion).filter(MeetingQuestion.meeting_id == meeting_id).all()
+    questions_summary = []
+    
+    for q in questions:
+        answers = db.query(MeetingVoteAnswer).filter(MeetingVoteAnswer.question_id == q.id).all()
+        yes_area = 0.0
+        no_area = 0.0
+        abstain_area = 0.0
+        
+        for ans in answers:
+            vote = db.query(MeetingVote).filter(MeetingVote.id == ans.vote_id).first()
+            if vote:
+                v_member = db.query(UnitOrMember).filter(UnitOrMember.id == vote.member_id).first()
+                if v_member and v_member.role != "tenant":
+                    area = v_member.flat_area or v_member.area or 0.0
+                    if ans.vote_value == "yes":
+                        yes_area += area
+                    elif ans.vote_value == "no":
+                        no_area += area
+                    elif ans.vote_value == "abstain":
+                        abstain_area += area
+                        
+        yes_pct = (yes_area / total_area * 100) if total_area > 0 else 0.0
+        no_pct = (no_area / total_area * 100) if total_area > 0 else 0.0
+        abstain_pct = (abstain_area / total_area * 100) if total_area > 0 else 0.0
+        
+        questions_summary.append({
+            "question_text": q.question_text,
+            "yes_area": yes_area,
+            "no_area": no_area,
+            "abstain_area": abstain_area,
+            "yes_percent": round(yes_pct, 2),
+            "no_percent": round(no_pct, 2),
+            "abstain_percent": round(abstain_pct, 2)
+        })
+        
+    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    profile_name = profile.name if profile else "ОСББ"
+    
+    from services.ai_service import ai_service
+    protocol_text = await ai_service.generate_general_meeting_minutes(
+        meeting_title=meeting.title,
+        meeting_description=meeting.description or "",
+        questions_with_votes=questions_summary,
+        profile_name=profile_name
+    )
+    
+    meeting.status = "completed"
+    meeting.ai_protocol = protocol_text
+    meeting.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"status": "success", "protocol": protocol_text}
+
+@app.post("/api/meetings/{meeting_id}/sign")
+def sign_meeting_protocol(meeting_id: int, req: SignMeetingProtocolRequest, auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    member = auth["member"]
+    profile_id = auth["profile_id"]
+    if not auth["is_chairman"]:
+        raise HTTPException(status_code=403, detail="Тільки голова правління може підписувати протокол")
+        
+    meeting = db.query(GeneralMeeting).filter(GeneralMeeting.id == meeting_id, GeneralMeeting.profile_id == profile_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Збори не знайдено")
+        
+    if meeting.status != "completed":
+        raise HTTPException(status_code=400, detail="Можна підписувати лише завершені збори")
+        
+    if meeting.is_signed:
+        raise HTTPException(status_code=400, detail="Протокол вже підписано")
+        
+    sig_metadata = f"Підпис КЕП Голови зборів: {member.owner_name}\nДата підпису: {datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')}"
+    if req.certificate_id:
+        cert = db.query(Certificate).filter(Certificate.id == req.certificate_id, Certificate.profile_id == profile_id).first()
+        if cert:
+            sig_metadata += f"\nСертифікат: {cert.cert_owner_name}, Серійний №: {cert.cert_serial}"
+            
+    signed_protocol = (meeting.ai_protocol or "") + f"\n\n=========================================\n{sig_metadata}\n========================================="
+    
+    meeting.is_signed = True
+    meeting.signature_text = sig_metadata
+    
+    # Save as public document
+    doc = ProfileDocument(
+        profile_id=profile_id,
+        filename=f"Протокол_загальних_зборів_{meeting_id}.txt",
+        content_type="text/plain",
+        file_content=signed_protocol.encode('utf-8'),
+        is_public_to_residents=True,
+        document_type="report",
+        description=f"Офіційний підписаний протокол загальних зборів: {meeting.title}"
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    
+    meeting.document_id = doc.id
+    db.commit()
+    
+    return {"status": "success", "document_id": doc.id}
+
+@app.delete("/api/meetings/{meeting_id}")
+def delete_meeting(meeting_id: int, auth: dict = Depends(verify_board_access), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    if not auth["is_chairman"]:
+        raise HTTPException(status_code=403, detail="Тільки голова правління може видаляти загальні збори")
+        
+    meeting = db.query(GeneralMeeting).filter(GeneralMeeting.id == meeting_id, GeneralMeeting.profile_id == profile_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Збори не знайдено")
+        
+    db.delete(meeting)
+    db.commit()
+    return {"status": "success"}
+
+
+# --- Resident Cabinet General Meetings (Загальні збори) Endpoints ---
+
+@app.get("/api/member/meetings")
+def get_member_meetings(auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    member_id = auth["member_id"]
+    
+    meetings = db.query(GeneralMeeting).filter(GeneralMeeting.profile_id == profile_id).order_by(GeneralMeeting.id.desc()).all()
+    
+    res = []
+    for m in meetings:
+        questions = db.query(MeetingQuestion).filter(MeetingQuestion.meeting_id == m.id).all()
+        
+        # Check if the member has already voted
+        own_vote = db.query(MeetingVote).filter(MeetingVote.meeting_id == m.id, MeetingVote.member_id == member_id).first()
+        own_vote_answers = {}
+        if own_vote:
+            answers = db.query(MeetingVoteAnswer).filter(MeetingVoteAnswer.vote_id == own_vote.id).all()
+            for ans in answers:
+                own_vote_answers[ans.question_id] = ans.vote_value
+                
+        q_list = []
+        for q in questions:
+            q_list.append({
+                "id": q.id,
+                "question_text": q.question_text,
+                "own_vote": own_vote_answers.get(q.id)
+            })
+            
+        res.append({
+            "id": m.id,
+            "title": m.title,
+            "description": m.description,
+            "status": m.status,
+            "start_date": m.start_date.strftime('%Y-%m-%d') if m.start_date else None,
+            "end_date": m.end_date.strftime('%Y-%m-%d') if m.end_date else None,
+            "is_signed": m.is_signed,
+            "document_id": m.document_id,
+            "has_voted": own_vote is not None,
+            "questions": q_list
+        })
+    return res
+
+@app.post("/api/member/meetings/{meeting_id}/vote")
+def vote_member_meeting(meeting_id: int, req: ResidentVoteRequest, auth: dict = Depends(verify_member_token), db: Session = Depends(get_db)):
+    profile_id = auth["profile_id"]
+    member_id = auth["member_id"]
+    
+    member = db.query(UnitOrMember).filter(UnitOrMember.id == member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Співвласника не знайдено")
+    if member.role == "tenant":
+        raise HTTPException(status_code=403, detail="Тільки власники майна мають право голосу на загальних зборах")
+        
+    meeting = db.query(GeneralMeeting).filter(GeneralMeeting.id == meeting_id, GeneralMeeting.profile_id == profile_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Збори не знайдено")
+        
+    if meeting.status != "voting":
+        raise HTTPException(status_code=400, detail="Голосування неактивне")
+        
+    existing = db.query(MeetingVote).filter(MeetingVote.meeting_id == meeting_id, MeetingVote.member_id == member_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Ви вже проголосували на цих загальних зборах")
+        
+    # Record the vote
+    vote = MeetingVote(
+        meeting_id=meeting_id,
+        member_id=member_id,
+        is_signed=req.is_signed,
+        signature_data=req.signature_data
+    )
+    db.add(vote)
+    db.commit()
+    db.refresh(vote)
+    
+    for vote_item in req.votes:
+        if vote_item.vote_value not in ["yes", "no", "abstain"]:
+            raise HTTPException(status_code=400, detail="Некоректний варіант голосу")
+            
+        answer = MeetingVoteAnswer(
+            vote_id=vote.id,
+            question_id=vote_item.question_id,
+            vote_value=vote_item.vote_value
+        )
+        db.add(answer)
+        
+    db.commit()
+    return {"status": "success"}
+
+
+# ==================== CONSULTING DASHBOARD API ====================
+
+@app.get("/api/auth/user-by-telegram")
+def get_user_by_telegram(telegram_id: str, db: Session = Depends(get_db)):
+    """Get user_id by telegram_id for frontend authentication."""
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user_id": user.id, "account_type": user.account_type}
+
+def require_consulting_account(user_id: Optional[int], db: Session) -> User:
+    """Middleware to verify user has consulting account type."""
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.account_type != "consulting" or not user.consulting_company_id:
+        raise HTTPException(status_code=403, detail="Access denied: not a consulting account")
+    
+    return user
+
+class ConsultingDashboardRequest(BaseModel):
+    filter_type: str = "all"  # all, my_clients, needs_attention
+    search_query: str = ""
+
+@app.get("/api/consulting/dashboard")
+def get_consulting_dashboard(
+    filter_type: str = "all",
+    search_query: str = "",
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get consulting dashboard with client matrix.
+    Returns list of clients with bank, tax, and report statuses.
+    """
+    user = require_consulting_account(user_id, db)
+    
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Consulting company not found")
+    
+    # Get client assignments based on user role
+    if user.is_consulting_owner:
+        # Owner sees all clients
+        assignments = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.consulting_company_id == consulting_company.id
+        ).all()
+    else:
+        # Manager sees only assigned clients
+        assignments = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.consulting_company_id == consulting_company.id,
+            ConsultingClientAssignment.assigned_accountant_id == user_id
+        ).all()
+    
+    # Build client matrix
+    clients = []
+    for assignment in assignments:
+        profile = assignment.client_profile
+        if not profile:
+            continue
+        
+        # Apply search filter
+        if search_query:
+            search_lower = search_query.lower()
+            if (search_query not in profile.name.lower() and 
+                search_query not in (profile.tax_id or "")):
+                continue
+        
+        # Get bank status
+        bank_status = get_bank_status(profile.id, db)
+        
+        # Get tax status
+        tax_status = get_tax_status(profile.id, db)
+        
+        # Get report status
+        report_status = get_report_status(profile.id, db)
+        
+        # Get assigned accountant info
+        accountant = None
+        if assignment.assigned_accountant_id:
+            acc_user = db.query(User).filter(User.id == assignment.assigned_accountant_id).first()
+            if acc_user:
+                accountant = {
+                    "id": acc_user.id,
+                    "name": acc_user.email or acc_user.phone or "Unknown"
+                }
+        
+        # Determine if needs attention
+        needs_attention = (
+            bank_status["status"] == "error" or
+            tax_status["status"] == "debt" or
+            report_status["status"] == "overdue"
+        )
+        
+        # Apply filter
+        if filter_type == "my_clients" and not user.is_consulting_owner:
+            continue  # Already filtered by assignment query
+        if filter_type == "needs_attention" and not needs_attention:
+            continue
+        
+        clients.append({
+            "profile_id": profile.id,
+            "name": profile.name,
+            "type": profile.type,
+            "tax_id": profile.tax_id,
+            "tax_system": profile.tax_system,
+            "accountant": accountant,
+            "bank_status": bank_status,
+            "tax_status": tax_status,
+            "report_status": report_status,
+            "needs_attention": needs_attention,
+            "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None
+        })
+    
+    return {
+        "consulting_company": {
+            "id": consulting_company.id,
+            "name": consulting_company.company_name,
+            "free_slots": consulting_company.free_fop_slots_included,
+            "partner_discount": consulting_company.partner_discount_percentage
+        },
+        "user_role": "owner" if user.is_consulting_owner else "manager",
+        "clients": clients,
+        "total_clients": len(clients),
+        "needs_attention_count": sum(1 for c in clients if c["needs_attention"])
+    }
+
+
+def get_bank_status(profile_id: int, db: Session) -> dict:
+    """Get bank synchronization status for a profile."""
+    from api.main import BankConnection, BankStatement
+    
+    # Check if bank connection exists
+    connection = db.query(BankConnection).filter(
+        BankConnection.profile_id == profile_id
+    ).first()
+    
+    if not connection:
+        return {"status": "not_connected", "label": "Не підключено", "color": "gray"}
+    
+    # Check latest statement
+    latest_statement = db.query(BankStatement).filter(
+        BankStatement.profile_id == profile_id
+    ).order_by(BankStatement.date.desc()).first()
+    
+    if not latest_statement:
+        return {"status": "no_statements", "label": "Немає виписок", "color": "red"}
+    
+    # Check if statement is recent (within 7 days)
+    from datetime import datetime, timedelta
+    days_since = (datetime.now() - latest_statement.date).days
+    
+    if days_since > 7:
+        return {"status": "outdated", "label": "Потрібен імпорт", "color": "red"}
+    
+    return {"status": "synced", "label": "Синхронізовано", "color": "green"}
+
+
+def get_tax_status(profile_id: int, db: Session) -> dict:
+    """Get tax payment status for a profile."""
+    from api.main import DPSSettlement
+    
+    # Get latest DPS settlement
+    latest_settlement = db.query(DPSSettlement).filter(
+        DPSSettlement.profile_id == profile_id
+    ).order_by(DPSSettlement.recorded_at.desc()).first()
+    
+    if not latest_settlement:
+        return {"status": "no_data", "label": "Немає даних", "color": "gray"}
+    
+    # Check total debt
+    total_debt = db.query(func.sum(DPSSettlement.debt)).filter(
+        DPSSettlement.profile_id == profile_id,
+        DPSSettlement.recorded_at == latest_settlement.recorded_at
+    ).scalar() or 0.0
+    
+    if total_debt > 0:
+        return {"status": "debt", "label": "Борг!", "color": "red", "amount": total_debt}
+    
+    # Check if there are accrued amounts (salary calculation needed)
+    total_accrued = db.query(func.sum(DPSSettlement.accrued)).filter(
+        DPSSettlement.profile_id == profile_id,
+        DPSSettlement.recorded_at == latest_settlement.recorded_at
+    ).scalar() or 0.0
+    
+    if total_accrued > 0:
+        return {"status": "calculation", "label": "Розрахунок зарплати", "color": "yellow"}
+    
+    return {"status": "paid", "label": "Сплачено", "color": "green"}
+
+
+def get_report_status(profile_id: int, db: Session) -> dict:
+    """Get report submission status for a profile."""
+    from api.main import GeneratedReport
+    
+    # Get latest report
+    latest_report = db.query(GeneratedReport).filter(
+        GeneratedReport.profile_id == profile_id
+    ).order_by(GeneratedReport.generated_at.desc()).first()
+    
+    if not latest_report:
+        return {"status": "not_submitted", "label": "Не відправлено", "color": "red"}
+    
+    # Check if report is recent (within current quarter)
+    from datetime import datetime
+    now = datetime.now()
+    current_quarter = (now.month - 1) // 3 + 1
+    report_quarter = (latest_report.generated_at.month - 1) // 3 + 1
+    
+    if report_quarter == current_quarter and latest_report.generated_at.year == now.year:
+        if latest_report.status == "accepted":
+            return {"status": "accepted", "label": f"Прийнято (Кв.{current_quarter})", "color": "green"}
+        elif latest_report.status == "pending":
+            return {"status": "pending", "label": "На перевірці", "color": "yellow"}
+    
+    # Check deadline (next quarter start)
+    next_quarter_start = datetime(now.year, ((now.month - 1) // 3 + 1) * 3 + 1, 1)
+    days_until_deadline = (next_quarter_start - now).days
+    
+    if days_until_deadline <= 3:
+        return {"status": "overdue", "label": f"Дедлайн через {days_until_deadline} дні", "color": "red"}
+    
+    return {"status": "upcoming", "label": f"Дедлайн через {days_until_deadline} днів", "color": "yellow"}
+
+
+@app.post("/api/consulting/assign-accountant")
+def assign_accountant_to_client(
+    profile_id: int,
+    accountant_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Assign an accountant to a client profile."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied: only owners can assign accountants")
+    
+    # Check if assignment exists
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == profile_id
+    ).first()
+    
+    if assignment:
+        assignment.assigned_accountant_id = accountant_id
+    else:
+        # Create new assignment
+        consulting_company_id = user.consulting_company_id
+        db.add(ConsultingClientAssignment(
+            consulting_company_id=consulting_company_id,
+            assigned_profile_id=profile_id,
+            assigned_accountant_id=accountant_id
+        ))
+    
+    db.commit()
+    return {"status": "success"}
+
+
+@app.get("/api/consulting/team")
+def get_consulting_team(
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get team members of the consulting company."""
+    user = require_consulting_account(user_id, db)
+    
+    # Get all team members
+    team = db.query(User).filter(
+        User.consulting_company_id == user.consulting_company_id
+    ).all()
+    
+    members = []
+    for member in team:
+        # Count assigned clients
+        client_count = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.assigned_accountant_id == member.id
+        ).count()
+        
+        members.append({
+            "id": member.id,
+            "email": member.email,
+            "phone": member.phone,
+            "role": "owner" if member.is_consulting_owner else "manager",
+            "client_count": client_count
+        })
+    
+    return {"team": members}
+
+
+@app.post("/api/consulting/add-team-member")
+def add_team_member(
+    email: str = Form(...),
+    phone: str = Form(None),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Add a new team member to the consulting company."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied: only owners can add team members")
+    
+    # Check if user already exists
+    existing_user = db.query(User).filter(
+        (User.email == email) | (User.phone == phone)
+    ).first()
+    
+    if existing_user:
+        # Update existing user
+        existing_user.consulting_company_id = user.consulting_company_id
+        existing_user.account_type = "consulting"
+        existing_user.is_consulting_owner = False
+    else:
+        # Create new user
+        new_user = User(
+            email=email,
+            phone=phone,
+            consulting_company_id=user.consulting_company_id,
+            account_type="consulting",
+            is_consulting_owner=False,
+            role="manager"
+        )
+        db.add(new_user)
+    
+    db.commit()
+    return {"status": "success"}
+
+
+@app.get("/api/consulting/billing")
+def get_consulting_billing(
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get billing information for the consulting company."""
+    user = require_consulting_account(user_id, db)
+    
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Consulting company not found")
+    
+    # Count total clients
+    total_clients = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.consulting_company_id == consulting_company.id
+    ).count()
+    
+    # Count free slots used
+    free_slots_used = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.consulting_company_id == consulting_company.id,
+        ConsultingClientAssignment.is_free_slot == True
+    ).count()
+    
+    # Calculate billing
+    free_slots = consulting_company.free_fop_slots_included
+    paid_slots = max(0, total_clients - free_slots)
+    partner_discount = consulting_company.partner_discount_percentage
+    
+    # Simple pricing (adjust as needed)
+    base_price_per_slot = 100  # UAH per month
+    discounted_price = base_price_per_slot * (1 - partner_discount / 100)
+    monthly_cost = paid_slots * discounted_price
+    
+    return {
+        "consulting_company": {
+            "name": consulting_company.company_name,
+            "free_slots": free_slots,
+            "partner_discount": partner_discount
+        },
+        "usage": {
+            "total_clients": total_clients,
+            "free_slots_used": free_slots_used,
+            "free_slots_remaining": free_slots - free_slots_used,
+            "paid_slots": paid_slots
+        },
+        "billing": {
+            "base_price_per_slot": base_price_per_slot,
+            "discounted_price": round(discounted_price, 2),
+            "monthly_cost": round(monthly_cost, 2)
+        }
+    }
+
+
+# ==================== MARKETPLACE API ====================
+
+@app.get("/api/marketplace/catalog")
+def get_marketplace_catalog(db: Session = Depends(get_db)):
+    """
+    Get marketplace catalog of consulting companies and their service offers.
+    Available for independent FOPs.
+    """
+    # Get all consulting companies listed in marketplace
+    consulting_companies = db.query(ConsultingCompany).filter(
+        ConsultingCompany.is_active == True
+    ).all()
+    
+    catalog = []
+    for company in consulting_companies:
+        # Get owner user for marketplace listing info
+        owner = db.query(User).filter(
+            User.consulting_company_id == company.id,
+            User.is_consulting_owner == True
+        ).first()
+        
+        if not owner or not owner.is_listed_in_marketplace:
+            continue
+        
+        # Get active service offers
+        offers = db.query(ConsultingServiceOffer).filter(
+            ConsultingServiceOffer.consulting_company_id == company.id,
+            ConsultingServiceOffer.is_active == True
+        ).all()
+        
+        catalog.append({
+            "consulting_company_id": company.id,
+            "company_name": company.company_name,
+            "owner_info": {
+                "public_bio": owner.public_bio_uk,
+                "contact_email": owner.email,
+                "contact_phone": owner.phone
+            },
+            "offers": [
+                {
+                    "id": offer.id,
+                    "title": offer.title_uk,
+                    "description": offer.description_uk,
+                    "price": offer.price_uah,
+                    "target_type": offer.target_type
+                }
+                for offer in offers
+            ],
+            "free_slots": company.free_fop_slots_included,
+            "partner_discount": company.partner_discount_percentage
+        })
+    
+    return {"catalog": catalog}
+
+
+@app.post("/api/marketplace/checkout")
+def create_marketplace_checkout(
+    service_offer_id: int,
+    client_profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Initiate LiqPay checkout for a FOP client buying a service package.
+    """
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Verify user owns the client profile
+    profile = db.query(Profile).filter(Profile.id == client_profile_id).first()
+    if not profile or profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get service offer
+    offer = db.query(ConsultingServiceOffer).filter(
+        ConsultingServiceOffer.id == service_offer_id,
+        ConsultingServiceOffer.is_active == True
+    ).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Service offer not found")
+    
+    # Create pending order
+    order = ConsultingMarketplaceOrder(
+        client_profile_id=client_profile_id,
+        service_offer_id=service_offer_id,
+        amount=offer.price_uah,
+        status="pending"
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    
+    # TODO: Integrate with LiqPay API
+    # For now, return mock checkout data
+    return {
+        "order_id": order.id,
+        "amount": offer.price_uah,
+        "liqpay_checkout_url": f"https://liqpay.com/checkout/{order.id}",  # Mock URL
+        "status": "pending"
+    }
+
+
+@app.post("/api/marketplace/liqpay-callback")
+def liqpay_callback(
+    order_id: int = Form(...),
+    status: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Webhook handler for LiqPay payment callback.
+    On success: switch order to 'paid', deduct 10% UniTax commission, assign client to consulting firm.
+    """
+    order = db.query(ConsultingMarketplaceOrder).filter(
+        ConsultingMarketplaceOrder.id == order_id
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if status == "success":
+        order.status = "paid"
+        
+        # Calculate UniTax 10% commission
+        unitax_commission = order.amount * 0.10
+        consulting_payout = order.amount - unitax_commission
+        
+        # Get service offer to find consulting company
+        offer = db.query(ConsultingServiceOffer).filter(
+            ConsultingServiceOffer.id == order.service_offer_id
+        ).first()
+        
+        if offer:
+            # Create client assignment
+            existing_assignment = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.assigned_profile_id == order.client_profile_id
+            ).first()
+            
+            if not existing_assignment:
+                db.add(ConsultingClientAssignment(
+                    consulting_company_id=offer.consulting_company_id,
+                    assigned_profile_id=order.client_profile_id,
+                    is_free_slot=False,
+                    discount_applied=0.0
+                ))
+        
+        db.commit()
+        
+        return {
+            "status": "success",
+            "order_id": order.id,
+            "unitax_commission": unitax_commission,
+            "consulting_payout": consulting_payout
+        }
+    else:
+        order.status = "failed"
+        db.commit()
+        return {"status": "failed", "order_id": order.id}
+
+
+# ==================== CONSULTING MARKETPLACE MANAGEMENT API ====================
+
+@app.get("/api/consulting/marketplace/offers")
+def get_consulting_marketplace_offers(
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get service offers for the consulting company (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    offers = db.query(ConsultingServiceOffer).filter(
+        ConsultingServiceOffer.consulting_company_id == user.consulting_company_id
+    ).all()
+    
+    return {
+        "offers": [
+            {
+                "id": offer.id,
+                "title": offer.title_uk,
+                "description": offer.description_uk,
+                "price": offer.price_uah,
+                "target_type": offer.target_type,
+                "is_active": offer.is_active
+            }
+            for offer in offers
+        ]
+    }
+
+
+@app.post("/api/consulting/marketplace/offers")
+def create_consulting_marketplace_offer(
+    title_uk: str = Form(...),
+    description_uk: str = Form(None),
+    price_uah: float = Form(...),
+    target_type: str = Form("fop"),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Create a new service offer (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    offer = ConsultingServiceOffer(
+        consulting_company_id=user.consulting_company_id,
+        title_uk=title_uk,
+        description_uk=description_uk,
+        price_uah=price_uah,
+        target_type=target_type
+    )
+    db.add(offer)
+    db.commit()
+    db.refresh(offer)
+    
+    return {"status": "success", "offer_id": offer.id}
+
+
+@app.put("/api/consulting/marketplace/offers/{offer_id}")
+def update_consulting_marketplace_offer(
+    offer_id: int,
+    title_uk: str = Form(None),
+    description_uk: str = Form(None),
+    price_uah: float = Form(None),
+    target_type: str = Form(None),
+    is_active: bool = Form(None),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Update a service offer (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    offer = db.query(ConsultingServiceOffer).filter(
+        ConsultingServiceOffer.id == offer_id,
+        ConsultingServiceOffer.consulting_company_id == user.consulting_company_id
+    ).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    
+    if title_uk is not None:
+        offer.title_uk = title_uk
+    if description_uk is not None:
+        offer.description_uk = description_uk
+    if price_uah is not None:
+        offer.price_uah = price_uah
+    if target_type is not None:
+        offer.target_type = target_type
+    if is_active is not None:
+        offer.is_active = is_active
+    
+    db.commit()
+    return {"status": "success"}
+
+
+@app.post("/api/consulting/seed-test-data")
+def seed_consulting_test_data(db: Session = Depends(get_db)):
+    """Створення тестових даних для консалтинг дашборду"""
+    try:
+        # 1. Знайдемо або створимо консалтинг компанію
+        consulting_company = db.query(ConsultingCompany).first()
+        if not consulting_company:
+            consulting_company = ConsultingCompany(
+                company_name="Тестова Консалтинг Компанія",
+                is_active=True,
+                free_fop_slots_included=5,
+                partner_discount_percentage=10.0
+            )
+            db.add(consulting_company)
+            db.commit()
+            db.refresh(consulting_company)
+        
+        # 2. Знайдемо або створимо користувача-власника
+        owner = db.query(User).filter(User.account_type == "consulting").first()
+        if not owner:
+            # Створимо тестового власника
+            owner = User(
+                email="owner@consulting.com",
+                hashed_password="test_hash",
+                account_type="consulting",
+                consulting_company_id=consulting_company.id,
+                is_consulting_owner=True
+            )
+            db.add(owner)
+            db.commit()
+            db.refresh(owner)
+        else:
+            # Оновимо існуючого користувача
+            owner.account_type = "consulting"
+            owner.consulting_company_id = consulting_company.id
+            owner.is_consulting_owner = True
+            db.commit()
+        
+        # 3. Створимо бухгалтерів
+        accountant1 = db.query(User).filter(User.email == "accountant1@consulting.com").first()
+        if not accountant1:
+            accountant1 = User(
+                email="accountant1@consulting.com",
+                hashed_password="test_hash",
+                account_type="consulting",
+                consulting_company_id=consulting_company.id,
+                is_consulting_owner=False
+            )
+            db.add(accountant1)
+            db.commit()
+            db.refresh(accountant1)
+        
+        accountant2 = db.query(User).filter(User.email == "accountant2@consulting.com").first()
+        if not accountant2:
+            accountant2 = User(
+                email="accountant2@consulting.com",
+                hashed_password="test_hash",
+                account_type="consulting",
+                consulting_company_id=consulting_company.id,
+                is_consulting_owner=False
+            )
+            db.add(accountant2)
+            db.commit()
+            db.refresh(accountant2)
+        
+        # 4. Створимо тестові профілі клієнтів
+        client_profiles = []
+        for i in range(1, 11):
+            profile = db.query(Profile).filter(Profile.name == f"Тестовий Клієнт {i}").first()
+            if not profile:
+                profile = Profile(
+                    user_id=owner.id,  # тимчасово прив'яжемо до власника
+                    type="fop",
+                    name=f"Тестовий Клієнт {i}",
+                    tax_id=f"1234567890{i}",
+                    tax_system="fop_ep",
+                    group=3,
+                    rate=5,
+                    has_employees=False,
+                    is_vat_payer=False,
+                    reg_date=date.today() - timedelta(days=random.randint(30, 365))
+                )
+                db.add(profile)
+                db.commit()
+                db.refresh(profile)
+            client_profiles.append(profile)
+        
+        # 5. Створимо прив'язки клієнтів до консалтинг компанії
+        for i, profile in enumerate(client_profiles):
+            # Перевіримо чи існує прив'язка
+            existing = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.assigned_profile_id == profile.id
+            ).first()
+            
+            if not existing:
+                # Призначимо бухгалтерів (чергово)
+                accountant_id = accountant1.id if i % 2 == 0 else accountant2.id
+                
+                assignment = ConsultingClientAssignment(
+                    consulting_company_id=consulting_company.id,
+                    assigned_profile_id=profile.id,
+                    assigned_accountant_id=accountant_id,
+                    assigned_at=datetime.now() - timedelta(days=random.randint(1, 30)),
+                    is_free_slot=True if i < 3 else False
+                )
+                db.add(assignment)
+                db.commit()
+        
+        return {
+            "status": "success",
+            "consulting_company_id": consulting_company.id,
+            "owner_id": owner.id,
+            "accountant1_id": accountant1.id,
+            "accountant2_id": accountant2.id,
+            "clients_count": len(client_profiles)
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/consulting/marketplace/offers/{offer_id}")
+def delete_consulting_marketplace_offer(
+    offer_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Delete a service offer (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    offer = db.query(ConsultingServiceOffer).filter(
+        ConsultingServiceOffer.id == offer_id,
+        ConsultingServiceOffer.consulting_company_id == user.consulting_company_id
+    ).first()
+    
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    
+    db.delete(offer)
+    db.commit()
+    return {"status": "success"}
+
+
+@app.put("/api/consulting/marketplace/listing")
+def update_consulting_marketplace_listing(
+    is_listed: bool = Form(...),
+    public_bio_uk: str = Form(None),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Update marketplace listing status and bio (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    user.is_listed_in_marketplace = is_listed
+    if public_bio_uk is not None:
+        user.public_bio_uk = public_bio_uk
+    
+    db.commit()
+    return {"status": "success"}
 
 
 if __name__ == "__main__":
