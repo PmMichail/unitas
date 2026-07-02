@@ -405,7 +405,7 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
 - **Profiles screen**: Disabled inputs and segmented toggles for Profile Type (FOP vs Company), Tax System, Non-Profit Subtypes, and Tax Groups/Rates inside the profile editor popup of [profiles.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/profiles.tsx) whenever `editingProfile` is not null. This enforces the rule that users cannot switch tax groups/categories on existing profiles inside the app.
 
 ### 5. Telegram Bot Registry Cleanup
-- **Bot Actions**: Removed the "+ Додати підприємство" (Add company) keyboard layout, message filter registration, and click event callbacks inside [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py) to prevent organization registration actions from the Telegram interface.
+- **Bot Actions**: Removed the "+ Додати підприємство" (Add company) keyboard layout, message filter registration, and click event callbacks inside [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py) to prevent organization registration actions from the Telegram interface. Added a click interceptor in `handle_menu_click` to automatically capture any cached "➕ Додати підприємство" button clicks on the client-side and force-update the user's keyboard with the new layout (completely removing the obsolete button).
 
 ### 6. Build Information
 - **EAS Production Build 1.0.0 (10)**: Completed production builds successfully:
