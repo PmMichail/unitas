@@ -2644,6 +2644,27 @@ def on_startup():
 async def health_check():
     return {"status": "ok", "service": "unitas-backend"}
 
+@app.post("/api/migrate/add-consulting-field")
+def migrate_consulting_field(db: Session = Depends(get_db)):
+    """Додати поле is_consulting_company в таблицю profiles"""
+    try:
+        # Перевіримо, чи існує поле
+        from sqlalchemy import inspect
+        inspector = inspect(db.bind)
+        columns = [col['name'] for col in inspector.get_columns('profiles')]
+        
+        if 'is_consulting_company' in columns:
+            return {"status": "success", "message": "Поле is_consulting_company вже існує"}
+        
+        # Додамо поле
+        db.execute("ALTER TABLE profiles ADD COLUMN is_consulting_company BOOLEAN DEFAULT FALSE")
+        db.commit()
+        
+        return {"status": "success", "message": "Поле is_consulting_company успішно додано"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
 
 # Tariff Management Endpoints
 @app.get("/api/tariffs")
