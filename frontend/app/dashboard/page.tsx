@@ -113,6 +113,12 @@ export default function Dashboard() {
                   String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("llc") ||
                   String(dashboardData?.name || selectedProfile?.name || "").toLowerCase().includes("товариство") ||
                   dashboardData?.type === "company" || selectedProfile?.type === "company");
+  const isOSBBOrST = selectedProfile?.organization_subtype === "osbb" || 
+                     selectedProfile?.organization_subtype === "st" || 
+                     selectedProfile?.tax_system === "non_profit" || 
+                     selectedProfile?.organization_subtype === "cooperative" || 
+                     selectedProfile?.organization_subtype === "go" || 
+                     selectedProfile?.organization_subtype === "bf";
   // Period Selection States
   const [periodType, setPeriodType] = useState<string>("all");
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
@@ -845,21 +851,14 @@ export default function Dashboard() {
             >
               Маркетплейс
             </Link>
-            {/* Кнопка Консалтинг показується тільки для консалтингових компаній */}
-            {isConsultingUser ? (
+            {/* Кнопка Консалтинг показується тільки для зареєстрованих консалтингових компаній, які не є неприбутковими організаціями */}
+            {isConsultingUser && !isOSBBOrST && (
               <Link 
                 href="/consulting/dashboard" 
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
               >
                 Консалтинг
               </Link>
-            ) : (
-              <button
-                onClick={handleSetupConsultingCompany}
-                className="px-4 py-2 rounded-lg text-sm font-semibold text-indigo-400 hover:text-indigo-300 transition-all duration-200"
-              >
-                Зареєструватися як консалтинг
-              </button>
             )}
           </nav>
 
