@@ -808,12 +808,15 @@ export default function Dashboard() {
             >
               Маркетплейс
             </Link>
-            <Link 
-              href="/consulting/dashboard" 
-              className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
-            >
-              Консалтинг
-            </Link>
+            {/* Кнопка Консалтинг показується тільки для консалтинг профілів */}
+            {selectedProfile?.name?.toLowerCase().includes('консалтинг') && (
+              <Link 
+                href="/consulting/dashboard" 
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
+              >
+                Консалтинг
+              </Link>
+            )}
           </nav>
 
           <div className="flex items-center space-x-3">
