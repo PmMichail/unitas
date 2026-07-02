@@ -367,6 +367,9 @@ class Profile(Base):
     organization_subtype = Column(String, nullable=True) # 'osbb', 'st', 'go', 'bf', 'jbk'
     non_profit_code = Column(String, nullable=True) # e.g. '0046'
     
+    # Consulting company field
+    is_consulting_company = Column(Boolean, default=False) # чи є профіль консалтинговою компанією
+    
     # Multi-tenant payment fields for OSBB/ST
     mono_api_token = Column(String(255), nullable=True) # Monobank API token for this specific OSBB
     liqpay_public_key = Column(String(255), nullable=True) # LiqPay Public Key for this specific OSBB
@@ -24736,14 +24739,19 @@ def check_consulting_status(user_id: int = None, db: Session = Depends(get_db)):
         is_consulting = user.consulting_company_id is not None
         is_owner = user.is_consulting_owner or False
         
+        # Перевіряємо, чи є хоча б один профіль користувача консалтинговою компанією
+        profile = db.query(Profile).filter(Profile.user_id == user.id).first()
+        has_consulting_profile = profile and profile.is_consulting_company if profile else False
+        
         return {
             "is_consulting": is_consulting,
             "is_owner": is_owner,
+            "has_consulting_profile": has_consulting_profile,
             "consulting_company_id": user.consulting_company_id
         }
     except Exception as e:
         print(f"Error checking consulting status: {e}")
-        return {"is_consulting": False, "is_owner": False}
+        return {"is_consulting": False, "is_owner": False, "has_consulting_profile": False}
 
 @app.post("/api/consulting/setup-company")
 def setup_consulting_company(db: Session = Depends(get_db)):
@@ -24776,19 +24784,31 @@ def setup_consulting_company(db: Session = Depends(get_db)):
         
         print(f"Знайдено користувача з ID: {owner.id}")
         
-        # Оновимо користувача без використання account_type (якої може не бути в базі)
+        # 3. Налаштуємо перший профіль користувача як консалтинговий
+        profile = db.query(Profile).filter(Profile.user_id == owner.id).first()
+        if not profile:
+            print("Помилка: профіль користувача не знайдено")
+            raise HTTPException(status_code=404, detail="No profile found for user")
+        
+        print(f"Знайдено профіль з ID: {profile.id}, назва: {profile.name}")
+        
+        # Оновимо користувача та профіль
         try:
             print(f"Оновлення користувача: consulting_company_id={consulting_company.id}, is_consulting_owner=True")
             owner.consulting_company_id = consulting_company.id
             owner.is_consulting_owner = True
+            
+            print(f"Оновлення профілю: is_consulting_company=True")
+            profile.is_consulting_company = True
+            
             db.commit()
-            print("Користувач успішно оновлений")
+            print("Користувач та профіль успішно оновлені")
         except Exception as e:
-            print(f"Error updating user: {e}")
+            print(f"Error updating user/profile: {e}")
             import traceback
             traceback.print_exc()
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to update user/profile: {str(e)}")
         
         return {
             "status": "success",
