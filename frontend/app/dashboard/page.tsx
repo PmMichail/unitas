@@ -530,6 +530,28 @@ export default function Dashboard() {
     }
   };
 
+  // Налаштування консалтинг компанії
+  const handleSetupConsultingCompany = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/consulting/setup-company`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        // Після успішного налаштування оновимо статус
+        await fetchConsultingStatus();
+        // Перенаправимо на консалтинг дашборд
+        window.location.href = '/consulting/dashboard';
+      } else {
+        alert('Помилка при налаштуванні компанії: ' + (data.message || 'Невідома помилка'));
+      }
+    } catch (err) {
+      console.error("Error setting up consulting company:", err);
+      alert('Помилка при налаштуванні компанії');
+    }
+  };
+
   useEffect(() => {
     fetchLegislationData();
     fetchStatements();
@@ -824,13 +846,20 @@ export default function Dashboard() {
               Маркетплейс
             </Link>
             {/* Кнопка Консалтинг показується тільки для консалтингових компаній */}
-            {isConsultingUser && (
+            {isConsultingUser ? (
               <Link 
                 href="/consulting/dashboard" 
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
               >
                 Консалтинг
               </Link>
+            ) : (
+              <button
+                onClick={handleSetupConsultingCompany}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-indigo-400 hover:text-indigo-300 transition-all duration-200"
+              >
+                Зареєструватися як консалтинг
+              </button>
             )}
           </nav>
 
