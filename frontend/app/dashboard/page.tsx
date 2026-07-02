@@ -101,6 +101,7 @@ export default function Dashboard() {
   const [newAnnTitle, setNewAnnTitle] = useState("");
   const [newAnnContent, setNewAnnContent] = useState("");
   const [newAnnPinned, setNewAnnPinned] = useState(false);
+  const [isConsultingUser, setIsConsultingUser] = useState(false);
 
   const simplifiedSystems = ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"];
   const isSimplified = simplifiedSystems.includes((dashboardData?.tax_system || selectedProfile?.tax_system || "").toLowerCase());
@@ -516,10 +517,23 @@ export default function Dashboard() {
     }
   };
 
+  // Перевірка консалтинг статусу користувача
+  const fetchConsultingStatus = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/consulting/check-status`);
+      const data = await response.json();
+      setIsConsultingUser(data.is_consulting || false);
+    } catch (err) {
+      console.error("Error checking consulting status:", err);
+      setIsConsultingUser(false);
+    }
+  };
+
   useEffect(() => {
     fetchLegislationData();
     fetchStatements();
     fetchModerationCount();
+    fetchConsultingStatus();
   }, [companyId]);
 
   useEffect(() => {
@@ -808,8 +822,8 @@ export default function Dashboard() {
             >
               Маркетплейс
             </Link>
-            {/* Кнопка Консалтинг показується тільки для консалтинг профілів */}
-            {selectedProfile?.name?.toLowerCase().includes('консалтинг') && (
+            {/* Кнопка Консалтинг показується тільки для користувачів з консалтинг статусом */}
+            {isConsultingUser && (
               <Link 
                 href="/consulting/dashboard" 
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
