@@ -14473,7 +14473,7 @@ def send_invoice_api(
         all_atts = get_all_attachments_for_invoice(inv, act, profile, db)
         for filename, content in all_atts:
             is_invoice_file = "invoice" in filename.lower() or "contract" in filename.lower() or "document" in filename.lower()
-            is_act_file = "act" in filename.lower() or "waybill" in filename.lower()
+            is_act_file = ("act" in filename.lower() and "contract" not in filename.lower()) or "waybill" in filename.lower()
             
             if is_invoice_file and getattr(req, "include_invoice", True) is False:
                 continue
@@ -24707,6 +24707,45 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             "accountant1_id": accountant1.id,
             "accountant2_id": accountant2.id,
             "clients_count": len(client_profiles)
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/consulting/setup-company")
+def setup_consulting_company(db: Session = Depends(get_db)):
+    """Налаштування консалтинг компанії без створення клієнтів"""
+    try:
+        # 1. Знайдемо або створимо консалтинг компанію
+        consulting_company = db.query(ConsultingCompany).first()
+        if not consulting_company:
+            consulting_company = ConsultingCompany(
+                company_name="Консалтинг Компанія",
+                is_active=True,
+                free_fop_slots_included=5,
+                partner_discount_percentage=10.0
+            )
+            db.add(consulting_company)
+            db.commit()
+            db.refresh(consulting_company)
+        
+        # 2. Налаштуємо першого користувача як власника
+        owner = db.query(User).first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="No users found in database")
+        
+        # Оновимо користувача
+        owner.account_type = "consulting"
+        owner.consulting_company_id = consulting_company.id
+        owner.is_consulting_owner = True
+        db.commit()
+        
+        return {
+            "status": "success",
+            "consulting_company_id": consulting_company.id,
+            "owner_id": owner.id,
+            "message": "Консалтинг компанія успішно налаштована"
         }
     except Exception as e:
         db.rollback()
