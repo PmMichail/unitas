@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Check, Crown, User, Building2, Briefcase, Loader2, CreditCard, MessageCircle } from "lucide-react";
+import { Check, Crown, User, Building2, Briefcase, Loader2, CreditCard, MessageCircle, ArrowRight } from "lucide-react";
 
 export default function TariffsPage() {
   const [tariffs, setTariffs] = useState<any[]>([]);
@@ -17,7 +17,7 @@ export default function TariffsPage() {
   useEffect(() => {
     const fetchTariffs = async () => {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs`);
+        const response = await fetch("https://unitas-backend.fly.dev/api/tariffs");
         const data = await response.json();
         setTariffs(data || []);
       } catch (error) {
@@ -176,68 +176,71 @@ export default function TariffsPage() {
         </div>
 
         {/* Tariffs Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {tariffs.map((tariff) => (
             <div
               key={tariff.code}
-              className={`p-6 rounded-3xl border transition-all duration-300 relative overflow-hidden ${
+              className={`group relative p-4 bg-white dark:bg-slate-950/30 border-2 transition-all duration-300 rounded-3xl flex flex-col justify-between overflow-hidden ${
                 tariff.is_coming_soon
-                  ? "bg-slate-900/40 border-slate-800 opacity-60"
-                  : "bg-slate-900/60 border-slate-800 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/10"
+                  ? "border-slate-200 dark:border-white/10 opacity-60"
+                  : "border-slate-200 dark:border-white/10 hover:border-indigo-500 dark:hover:border-indigo-500 hover:scale-[1.03] hover:-translate-y-1.5 shadow-sm hover:shadow-2xl hover:shadow-indigo-500/10 dark:hover:shadow-indigo-500/15"
               }`}
             >
+              {/* Decorative Glow Layer */}
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-3xl pointer-events-none" />
+              
               {tariff.is_coming_soon && (
-                <div className="absolute top-4 right-4 bg-amber-500/20 text-amber-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                <div className="absolute top-4 right-4 bg-amber-500/20 text-amber-400 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider z-10">
                   Скоро
                 </div>
               )}
-
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-indigo-500/20 rounded-xl text-indigo-400">
-                  {getTariffIcon(tariff.code)}
+              
+              <div className="relative space-y-3">
+                <div className="flex justify-between items-center">
+                  <div className="w-10 h-10 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-white/5 rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform duration-300">
+                    💼
+                  </div>
+                  {!tariff.is_coming_soon && (
+                    <div className="w-4 h-4 rounded-full border-2 border-emerald-500 flex items-center justify-center">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">{tariff.name_uk}</h3>
-                  <p className="text-xs text-slate-500 uppercase tracking-wider">{tariff.code}</p>
+                <div className="space-y-1 text-left">
+                  <h3 className="font-extrabold text-slate-800 dark:text-white text-sm group-hover:text-indigo-650 dark:group-hover:text-indigo-400 transition-colors">
+                    {tariff.name_uk}
+                  </h3>
+                  <p className="text-slate-500 dark:text-slate-450 text-[10px] leading-relaxed line-clamp-2">
+                    {tariff.description}
+                  </p>
+                </div>
+                <div className="pt-1">
+                  <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                    {tariff.monthly_price} грн
+                  </div>
+                  <p className="text-[9px] text-slate-400 dark:text-slate-500">на місяць</p>
                 </div>
               </div>
 
-              <div className="mb-6">
-                <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-extrabold text-white">{getPeriodPrice(tariff)}</span>
-                  <span className="text-sm text-slate-400">грн / {getPeriodText()}</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  {tariff.monthly_price} грн/місяць
-                </p>
+              <div className="relative pt-3">
+                <button
+                  disabled={tariff.is_coming_soon}
+                  className={`w-full py-2 rounded-xl text-[10px] font-bold text-center transition-all shadow-md flex items-center justify-center gap-1.5 ${
+                    tariff.is_coming_soon
+                      ? "bg-slate-200 dark:bg-slate-800 text-slate-500 cursor-not-allowed"
+                      : "bg-gradient-to-r from-indigo-500 to-indigo-650 hover:from-indigo-400 hover:to-indigo-550 text-white shadow-indigo-600/10 hover:scale-[1.01]"
+                  }`}
+                >
+                  {tariff.is_coming_soon ? (
+                    <span>Скоро доступно</span>
+                  ) : (
+                    <>
+                      <span>Створити профіль</span>
+                      <ArrowRight className="w-2.5 h-2.5" />
+                    </>
+                  )}
+                </button>
               </div>
-
-              <ul className="space-y-3 mb-6">
-                {getTariffFeatures(tariff.code).map((feature, index) => (
-                  <li key={index} className="flex items-center gap-2 text-sm text-slate-300">
-                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <button
-                disabled={tariff.is_coming_soon}
-                className={`w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${
-                  tariff.is_coming_soon
-                    ? "bg-slate-800 text-slate-500 cursor-not-allowed"
-                    : "bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white shadow-lg shadow-indigo-600/20 hover:scale-[1.02]"
-                }`}
-              >
-                {tariff.is_coming_soon ? (
-                  <span>Скоро доступно</span>
-                ) : (
-                  <>
-                    <User className="w-4 h-4" />
-                    <span>Додати профіль</span>
-                  </>
-                )}
-              </button>
             </div>
           ))}
         </div>

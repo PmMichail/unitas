@@ -1012,7 +1012,7 @@ export default function DashboardScreen() {
                 onPress={() => router.push('/invoices')}
               >
                 <FileText size={20} color={colors.primary} />
-                <Text style={[styles.actionBoxText, { color: colors.text }]}>Рахунки та Акти</Text>
+                <Text style={[styles.actionBoxText, { color: colors.text }]}>Контрагентам</Text>
               </Pressable>
 
               <Pressable
@@ -1042,22 +1042,27 @@ export default function DashboardScreen() {
               />
             </Card>
 
-            {/* Website Redirect Card */}
-            <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 16 }]}>Веб-версія UniTax</Text>
+            {/* Popular News Card */}
+            <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 16 }]}>Популярні новини</Text>
             <Card style={[styles.aiCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <View style={styles.aiCardHeader}>
-                <Globe size={18} color={colors.primary} style={styles.aiIcon} />
-                <Text style={[styles.aiCardTitle, { color: colors.text }]}>Офіційний веб-сайт</Text>
+                <FileText size={18} color={colors.primary} style={styles.aiIcon} />
+                <Text style={[styles.aiCardTitle, { color: colors.text }]}>Останні податкові новини</Text>
               </View>
-              <Text style={[styles.aiCardBody, { color: colors.textMuted }]}>
-                Повний кабінет, імпорт банківських виписок, формування звітів, створення інвойсів та правові документи на unitax.pro.
-              </Text>
-              <Button
-                title="Перейти на unitax.pro"
-                onPress={() => Linking.openURL('https://unitax.pro')}
-                variant="outline"
-                style={styles.aiCardBtn}
-              />
+              <View style={{ marginTop: 8, gap: 12 }}>
+                <View style={{ borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: 8 }}>
+                  <Text style={{ fontWeight: 'bold', fontSize: 13, color: colors.text, marginBottom: 2 }}>Нові терміни подачі декларацій</Text>
+                  <Text style={{ fontSize: 11, color: colors.textMuted }}>ДПС оновила розклад звітності на поточний квартал. Перевірте дати у вашому календарі.</Text>
+                </View>
+                <View style={{ borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: 8 }}>
+                  <Text style={{ fontWeight: 'bold', fontSize: 13, color: colors.text, marginBottom: 2 }}>Зміни в сплаті військового збору</Text>
+                  <Text style={{ fontSize: 11, color: colors.textMuted }}>Набирають чинності нові правила нарахування військового збору для ФОП 3-ї групи.</Text>
+                </View>
+                <View>
+                  <Text style={{ fontWeight: 'bold', fontSize: 13, color: colors.text, marginBottom: 2 }}>Оновлення кабінету платника</Text>
+                  <Text style={{ fontSize: 11, color: colors.textMuted }}>Додано нові шаблони звітів для спрощеної системи оподаткування.</Text>
+                </View>
+              </View>
             </Card>
           </View>
         )}
@@ -1422,15 +1427,6 @@ export default function DashboardScreen() {
                   </View>
                 </Pressable>
               )}
-            />
-            <Button
-              title="Додати новий профіль"
-              onPress={() => {
-                setProfileModalVisible(false);
-                router.push('/profiles');
-              }}
-              variant="outline"
-              style={styles.modalAddBtn}
             />
           </View>
         </Pressable>
@@ -2382,18 +2378,20 @@ export default function DashboardScreen() {
                     marginBottom: 12,
                   }}>
                     <Text style={{ color: isDark ? '#fef08a' : '#854d0e', fontSize: 12, fontWeight: '700', lineHeight: 16 }}>
-                      ⚠️ {selectedBank === 'monobank' ? 'monobank' : 'А-Банк'} не підтримує автоматичні посилання для сплати на довільний IBAN. Будь ласка, скопіюйте реквізити вище для ручної оплати у вашому банку або сплатіть карткою через Mono Pay нижче.
+                      ⚠️ {selectedBank === 'monobank' ? 'monobank' : 'А-Банк'} не підтримує автоматичні посилання для сплати на довільний IBAN. Будь ласка, скопіюйте реквізити вище для ручної оплати у вашому банку{Platform.OS === 'ios' ? '.' : ' або сплатіть карткою через Mono Pay нижче.'}
                     </Text>
                   </View>
                 )}
 
-                <Button
-                  title="Сплатити карткою (Mono Pay)"
-                  onPress={handleMonoPayPayment}
-                  isLoading={payingMonoPay}
-                  variant={selectedBank === 'privat24' ? 'outline' : 'primary'}
-                  style={{ marginBottom: 10 }}
-                />
+                {Platform.OS !== 'ios' && (
+                  <Button
+                    title="Сплатити карткою (Mono Pay)"
+                    onPress={handleMonoPayPayment}
+                    isLoading={payingMonoPay}
+                    variant={selectedBank === 'privat24' ? 'outline' : 'primary'}
+                    style={{ marginBottom: 10 }}
+                  />
+                )}
 
                 <Button
                   title="Підтвердити оплату вручну"

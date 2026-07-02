@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -64,9 +65,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="invoices"
         options={{
-          title: isResident ? 'Опитування' : 'Рахунки',
-          headerTitle: isResident ? 'Опитування та голосування' : 'Рахунки (Сформувати та відправити)',
-          tabBarLabel: isResident ? 'Опитування' : 'Рахунки',
+          title: isResident ? 'Опитування' : 'Контрагентам',
+          headerTitle: isResident ? 'Опитування та голосування' : 'Контрагентам (Рахунки та Акти)',
+          tabBarLabel: isResident ? 'Опитування' : 'Контрагентам',
           tabBarIcon: ({ color, size }) => isResident ? <BarChart3 size={size} color={color} /> : <FileText size={size} color={color} />,
         }}
       />
@@ -77,6 +78,7 @@ export default function TabLayout() {
           headerTitle: isResident ? 'Технічна підтримка та заявки' : 'Облік мешканців та внесків',
           tabBarLabel: isResident ? 'Заявки' : 'Білінг',
           tabBarIcon: ({ color, size }) => isResident ? <MessageSquare size={size} color={color} /> : <Users size={size} color={color} />,
+          href: undefined,
         }}
       />
       <Tabs.Screen

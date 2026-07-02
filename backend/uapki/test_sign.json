@@ -37,11 +37,9 @@
       "method": "SIGN",
       "parameters": {
         "signParams": {
-          "signatureFormat": "CAdES-T",
+          "signatureFormat": "CMS",
           "detachedData": true,
           "includeCert": true,
-          "includeTime": true,
-          "tspUrl": "http://acsk.privatbank.ua/services/tsp/",
           "digestAlgo": "1.2.804.2.1.1.1.1.2.1"
         },
         "dataTbs": [

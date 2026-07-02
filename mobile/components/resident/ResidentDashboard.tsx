@@ -67,7 +67,7 @@ export default function ResidentDashboard() {
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Modal selector state
-  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | 'billing_history' | 'board' | null>(null);
+  const [activeModal, setActiveModal] = useState<'documents' | 'security' | 'bookings' | 'services' | 'smart_home' | 'contacts' | 'billing_history' | 'board' | 'meetings' | null>(null);
 
   // 1. Documents Modal states
   const [documents, setDocuments] = useState<any[]>([]);
@@ -127,12 +127,33 @@ export default function ResidentDashboard() {
   const [signCertId, setSignCertId] = useState<number | null>(null);
   const [signPassword, setSignPassword] = useState('');
   const [certificates, setCertificates] = useState<any[]>([]);
+  const [announcements, setAnnouncements] = useState<any[]>([]);
+
+  // Meetings Modal states
+  const [meetings, setMeetings] = useState<any[]>([]);
+  const [loadingMeetings, setLoadingMeetings] = useState(false);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, Record<number, string>>>({});
+  const [votingMeetingId, setVotingMeetingId] = useState<number | null>(null);
+  const [showMockSignature, setShowMockSignature] = useState<'diia' | 'privat' | null>(null);
+  const [votingPassword, setVotingPassword] = useState('');
+  const [isCastingVote, setIsCastingVote] = useState(false);
 
   const loadDashboardData = async () => {
     if (!memberToken) return;
     try {
       const response = await api.getMemberDashboard(memberToken);
       setData(response);
+      
+      if (response?.profile?.id) {
+        try {
+          const anns = await api.getAnnouncements(response.profile.id);
+          if (Array.isArray(anns)) {
+            setAnnouncements(anns);
+          }
+        } catch (annErr) {
+          console.error("Error loading mobile announcements:", annErr);
+        }
+      }
       
       if (response?.meters) {
         const initialMeterInputs: Record<number, string> = {};
@@ -564,6 +585,53 @@ export default function ResidentDashboard() {
     }
   };
 
+  // --- 8. GENERAL MEETINGS ACTIONS ---
+  const fetchMeetingsInternal = async () => {
+    try {
+      setLoadingMeetings(true);
+      const list = await api.getMemberMeetings(memberToken!);
+      setMeetings(list || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMeetings(false);
+    }
+  };
+
+  const openMeetingsModal = async () => {
+    setActiveModal('meetings');
+    await fetchMeetingsInternal();
+  };
+
+  const handleCastMeetingVote = async (meetingId: number, method: 'kep' | 'diia' | 'privat') => {
+    const answers = selectedAnswers[meetingId] || {};
+    if (method === 'kep' && !votingPassword) {
+      Alert.alert('Помилка', 'Будь ласка, введіть пароль для підпису.');
+      return;
+    }
+
+    try {
+      setIsCastingVote(true);
+      const signatureInfo = {
+        method,
+        timestamp: new Date().toISOString(),
+        cert_serial: method === 'kep' ? 'UA-85472910-KEP' : `UA-${method.toUpperCase()}-MOCK`,
+        cert_owner: 'Співвласник ОСББ',
+      };
+
+      await api.voteMemberMeeting(memberToken!, meetingId, answers, signatureInfo);
+      Alert.alert('Успішно', 'Ваш підписаний голос успішно зараховано.');
+      setVotingMeetingId(null);
+      setVotingPassword('');
+      setShowMockSignature(null);
+      await fetchMeetingsInternal();
+    } catch (e: any) {
+      Alert.alert('Помилка', e.message || 'Не вдалося проголосувати.');
+    } finally {
+      setIsCastingVote(false);
+    }
+  };
+
   const handleCreateIssue = async () => {
     if (!newIssueTitle.trim()) {
       Alert.alert('Помилка', 'Введіть тему питання');
@@ -760,6 +828,30 @@ export default function ResidentDashboard() {
           </View>
         </Card>
 
+        {/* Announcements section */}
+        {announcements.length > 0 && (
+          <Card style={[styles.announcementsCard, { backgroundColor: isDark ? 'rgba(30, 41, 59, 0.45)' : 'rgba(255, 255, 255, 0.8)', borderColor: colors.primaryMuted, borderWidth: 1 }]}>
+            <View style={styles.announcementsHeader}>
+              <Text style={[styles.announcementsTitle, { color: colors.primary }]}>📢 ВАЖЛИВІ ОГОЛОШЕННЯ</Text>
+            </View>
+            <View style={styles.announcementsList}>
+              {announcements.map((ann: any) => (
+                <View key={ann.id} style={[styles.announcementItem, { borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)' }]}>
+                  <View style={styles.announcementMeta}>
+                    <Text style={[styles.announcementSubject, { color: colors.text }]} numberOfLines={1}>{ann.title}</Text>
+                    <Text style={[styles.announcementDate, { color: colors.textMuted }]}>
+                      {new Date(ann.created_at).toLocaleDateString('uk-UA')}
+                    </Text>
+                  </View>
+                  <Text style={[styles.announcementContent, { color: colors.textMuted }]}>
+                    {ann.content}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </Card>
+        )}
+
         {/* Balance card */}
         <Card style={[styles.balanceCard, { borderColor: colors.warning, borderWidth: 1.5 }]}>
           <Pressable onPress={openBillingHistory}>
@@ -854,23 +946,25 @@ export default function ResidentDashboard() {
                   />
                   <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.textMuted }}>грн</Text>
                 </View>
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
-                  {data?.profile?.has_monobank && (
-                    <Button
-                      title="Mono Pay"
-                      onPress={handlePayMono}
-                      style={{ flex: 1 }}
-                    />
-                  )}
-                  {data?.profile?.has_liqpay && (
-                    <Button
-                      title="LiqPay"
-                      onPress={handlePayLiqpay}
-                      variant="secondary"
-                      style={{ flex: 1 }}
-                    />
-                  )}
-                </View>
+                {Platform.OS !== 'ios' && (
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                    {data?.profile?.has_monobank && (
+                      <Button
+                        title="Mono Pay"
+                        onPress={handlePayMono}
+                        style={{ flex: 1 }}
+                      />
+                    )}
+                    {data?.profile?.has_liqpay && (
+                      <Button
+                        title="LiqPay"
+                        onPress={handlePayLiqpay}
+                        variant="secondary"
+                        style={{ flex: 1 }}
+                      />
+                    )}
+                  </View>
+                )}
               </View>
             )}
             <View style={{ width: '100%', gap: 8, marginTop: 4 }}>
@@ -991,21 +1085,41 @@ export default function ResidentDashboard() {
             </Pressable>
           </View>
 
-          {/* Row 4 (Board of Directors - Правління) */}
-          {data?.member?.is_board_member && (
-            <View style={styles.gridRow}>
-              <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.primary, borderWidth: 1.2 }]} onPress={openBoardWorkspace}>
-                <View style={[styles.iconCircle, { backgroundColor: 'rgba(99, 102, 241, 0.15)' }]}>
-                  <FolderOpen size={24} color={colors.primary} />
-                </View>
-                <Text style={[styles.gridTitle, { color: colors.text }]}>Правління</Text>
-                <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Голосування & протоколи</Text>
-              </Pressable>
-
-              {/* Empty placeholder item to keep grid alignment */}
-              <View style={[styles.gridItem, { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0 }]} />
-            </View>
-          )}
+          {/* Row 4 (Board & General Meetings) */}
+          <View style={styles.gridRow}>
+            {Boolean(data?.member?.is_board_member || data?.member?.is_board_chairman) ? (
+              <>
+                <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.primary, borderWidth: 1.2 }]} onPress={openBoardWorkspace}>
+                  <View style={[styles.iconCircle, { backgroundColor: 'rgba(99, 102, 241, 0.15)' }]}>
+                    <FolderOpen size={24} color={colors.primary} />
+                  </View>
+                  <Text style={[styles.gridTitle, { color: colors.text }]}>Правління</Text>
+                  <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Голосування & протоколи</Text>
+                </Pressable>
+                
+                <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.success, borderWidth: 1.2 }]} onPress={openMeetingsModal}>
+                  <View style={[styles.iconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+                    <Shield size={24} color={colors.success} />
+                  </View>
+                  <Text style={[styles.gridTitle, { color: colors.text }]}>Загальні збори</Text>
+                  <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Електронне голосування</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Pressable style={[styles.gridItem, { backgroundColor: colors.card, borderColor: colors.success, borderWidth: 1.2 }]} onPress={openMeetingsModal}>
+                  <View style={[styles.iconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+                    <Shield size={24} color={colors.success} />
+                  </View>
+                  <Text style={[styles.gridTitle, { color: colors.text }]}>Загальні збори</Text>
+                  <Text style={[styles.gridSubtitle, { color: colors.textMuted }]}>Електронне голосування</Text>
+                </Pressable>
+                
+                {/* Empty placeholder item to keep grid alignment */}
+                <View style={[styles.gridItem, { backgroundColor: 'transparent', borderColor: 'transparent', borderWidth: 0 }]} />
+              </>
+            )}
+          </View>
         </View>
 
         {/* Meter readings header */}
@@ -1646,6 +1760,284 @@ export default function ResidentDashboard() {
       </Modal>
 
       {/* ========================================================================= */}
+      {/* 8. GENERAL MEETINGS MODAL OVERLAY */}
+      {/* ========================================================================= */}
+      <Modal visible={activeModal === 'meetings'} animationType="slide" transparent={true} onRequestClose={() => setActiveModal(null)}>
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalOverlayHeader, { backgroundColor: colors.background }]}>
+            <Text style={[styles.modalHeaderTitle, { color: colors.text }]}>🏛️ Загальні збори та голосування</Text>
+            <Pressable style={styles.closeBtn} onPress={() => setActiveModal(null)}>
+              <X size={24} color={colors.text} />
+            </Pressable>
+          </View>
+
+          <View style={[styles.modalBody, { backgroundColor: colors.background, padding: 16 }]}>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingBottom: 32 }}
+              refreshControl={
+                <RefreshControl refreshing={loadingMeetings} onRefresh={fetchMeetingsInternal} tintColor={colors.primary} />
+              }
+            >
+              {loadingMeetings ? (
+                <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 24 }} />
+              ) : meetings.length === 0 ? (
+                <View style={[styles.center, { marginTop: 40 }]}>
+                  <Shield size={48} color={colors.textMuted} />
+                  <Text style={[styles.emptyText, { color: colors.textMuted, marginTop: 12, textAlign: 'center' }]}>
+                    Наразі немає активних або завершених загальних зборів.
+                  </Text>
+                </View>
+              ) : (
+                meetings.map((meeting) => (
+                  <Card key={meeting.id} style={[styles.surveyCard, { marginBottom: 16 }]}>
+                    <View style={styles.badgeRow}>
+                      <View
+                        style={[
+                          styles.meetingStatusBadge,
+                          {
+                            backgroundColor:
+                              meeting.status === 'discussion'
+                                ? '#e0f2fe'
+                                : meeting.status === 'voting'
+                                ? '#fef3c7'
+                                : '#d1fae5',
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.meetingStatusBadgeText,
+                            {
+                              color:
+                                meeting.status === 'discussion'
+                                  ? '#0369a1'
+                                  : meeting.status === 'voting'
+                                  ? '#b45309'
+                                  : '#047857',
+                            },
+                          ]}
+                        >
+                          {meeting.status === 'discussion'
+                            ? 'Обговорення'
+                            : meeting.status === 'voting'
+                            ? 'Голосування'
+                            : 'Завершено'}
+                        </Text>
+                      </View>
+                      {meeting.has_voted && (
+                        <Text style={[styles.votedBadgeText, { color: colors.success }]}>
+                          ✓ Ваш голос зараховано
+                        </Text>
+                      )}
+                    </View>
+
+                    <Text style={[styles.surveyTitle, { color: colors.text, marginTop: 8 }]}>{meeting.title}</Text>
+                    {meeting.description ? (
+                      <Text style={[styles.surveyDesc, { color: colors.textMuted }]}>{meeting.description}</Text>
+                    ) : null}
+
+                    {meeting.start_date && (
+                      <Text style={[styles.dateText, { color: colors.textMuted }]}>
+                        📅 {meeting.start_date} — {meeting.end_date}
+                      </Text>
+                    )}
+
+                    {/* Voting fields for active meeting */}
+                    {meeting.status === 'voting' && !meeting.has_voted ? (
+                      <View style={styles.meetingQuestionsContainer}>
+                        {meeting.questions.map((q: any, qIdx: number) => (
+                          <View key={q.id} style={[styles.questionBox, { backgroundColor: colors.inputBg }]}>
+                            <Text style={[styles.questionText, { color: colors.text }]}>
+                              {qIdx + 1}. {q.question_text}
+                            </Text>
+                            <View style={styles.voteContainer}>
+                              {['yes', 'no', 'abstain'].map((val) => {
+                                const isActive = selectedAnswers[meeting.id]?.[q.id] === val;
+                                return (
+                                  <Pressable
+                                    key={val}
+                                    style={[
+                                      styles.voteButton,
+                                      { backgroundColor: colors.background, borderColor: colors.cardBorder },
+                                      isActive && { backgroundColor: colors.primary, borderColor: colors.primary }
+                                    ]}
+                                    onPress={() => {
+                                      setSelectedAnswers(prev => {
+                                        const meetingAns = prev[meeting.id] || {};
+                                        return {
+                                          ...prev,
+                                          [meeting.id]: {
+                                            ...meetingAns,
+                                            [q.id]: val
+                                          }
+                                        };
+                                      });
+                                    }}
+                                  >
+                                    <Text
+                                      style={[
+                                        styles.voteButtonText,
+                                        { color: colors.text },
+                                        isActive && { color: '#ffffff', fontWeight: 'bold' }
+                                      ]}
+                                    >
+                                      {val === 'yes' ? 'За' : val === 'no' ? 'Проти' : 'Утримався'}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        ))}
+
+                        <Button
+                          title="Накласти підпис та проголосувати"
+                          onPress={() => {
+                            const answers = selectedAnswers[meeting.id] || {};
+                            if (Object.keys(answers).length < meeting.questions.length) {
+                              Alert.alert('Увага', 'Будь ласка, оберіть відповіді на всі питання порядку денного.');
+                              return;
+                            }
+                            setVotingMeetingId(meeting.id);
+                          }}
+                          style={{ marginTop: 12 }}
+                        />
+                      </View>
+                    ) : meeting.status === 'voting' && meeting.has_voted ? (
+                      <View style={styles.votedBadge}>
+                        <Check size={16} color={colors.success} />
+                        <Text style={[styles.votedBadgeText, { color: colors.success, fontSize: 13 }]}>
+                          Ви успішно проголосували з накладанням ЕЦП.
+                        </Text>
+                      </View>
+                    ) : meeting.status === 'completed' ? (
+                      <View style={[styles.questionBox, { backgroundColor: colors.inputBg, marginTop: 12 }]}>
+                        <Text style={[styles.questionText, { color: colors.text, fontWeight: 'bold' }]}>
+                          📄 Збори завершено. Протокол підписано та опубліковано.
+                        </Text>
+                        <Text style={[styles.surveyDesc, { color: colors.textMuted, marginTop: 4, marginBottom: 0 }]}>
+                          Ознайомитись з протоколом можна у вкладці "Документи".
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Card>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+
+        {/* Signature Selector Modal inside Meetings Overlay */}
+        <Modal
+          visible={votingMeetingId !== null}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => {
+            setVotingMeetingId(null);
+            setVotingPassword('');
+            setShowMockSignature(null);
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContainerInside, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>Цифровий підпис</Text>
+                <Pressable
+                  onPress={() => {
+                    setVotingMeetingId(null);
+                    setVotingPassword('');
+                    setShowMockSignature(null);
+                  }}
+                >
+                  <X size={20} color={colors.text} />
+                </Pressable>
+              </View>
+
+              {!showMockSignature ? (
+                <View style={styles.modalBody}>
+                  <Text style={[styles.modalLabel, { color: colors.textMuted }]}>
+                    Оберіть метод підтвердження особи та підписання бюлетеня:
+                  </Text>
+
+                  <Pressable
+                    style={[styles.signatureOption, { backgroundColor: colors.inputBg }]}
+                    onPress={() => setShowMockSignature('diia')}
+                  >
+                    <Text style={[styles.optionTitle, { color: colors.text }]}>Дія.Підпис</Text>
+                    <Text style={[styles.optionDesc, { color: colors.textMuted }]}>Авторизація через державний додаток Дія</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.signatureOption, { backgroundColor: colors.inputBg }]}
+                    onPress={() => setShowMockSignature('privat')}
+                  >
+                    <Text style={[styles.optionTitle, { color: colors.text }]}>Приват24 / PrivatID</Text>
+                    <Text style={[styles.optionDesc, { color: colors.textMuted }]}>Підтвердження за допомогою OTP коду</Text>
+                  </Pressable>
+
+                  <View style={[styles.divider, { backgroundColor: colors.cardBorder }]} />
+
+                  <Text style={[styles.modalLabel, { color: colors.text, fontWeight: 'bold', marginTop: 12 }]}>
+                    Або введіть пароль для власного КЕП
+                  </Text>
+                  <TextInput
+                    secureTextEntry
+                    placeholder="Пароль КЕП сертифіката..."
+                    placeholderTextColor={colors.textMuted}
+                    value={votingPassword}
+                    onChangeText={setVotingPassword}
+                    style={[styles.textInput, { backgroundColor: colors.inputBg, color: colors.text, borderColor: colors.cardBorder }]}
+                  />
+
+                  <Button
+                    title={isCastingVote ? "Підписання..." : "Підписати КЕП"}
+                    onPress={() => handleCastMeetingVote(votingMeetingId!, 'kep')}
+                    disabled={isCastingVote}
+                    style={{ marginTop: 12 }}
+                  />
+                </View>
+              ) : showMockSignature === 'diia' ? (
+                <View style={styles.modalBody}>
+                  <View style={styles.qrSimulator}>
+                    <Text style={{ fontSize: 24, fontWeight: 'black', color: '#000000' }}>Дія</Text>
+                    <Text style={{ fontSize: 10, color: '#666666', marginTop: 4 }}>QR-код авторизації</Text>
+                  </View>
+                  <Text style={[styles.optionDesc, { color: colors.textMuted, textAlign: 'center', marginVertical: 12 }]}>
+                    Зіскануйте QR-код або перейдіть у додаток Дія для підтвердження підпису.
+                  </Text>
+                  <Button
+                    title={isCastingVote ? "Перевірка..." : "Імітувати успішне підписання Дія.Підпис"}
+                    onPress={() => handleCastMeetingVote(votingMeetingId!, 'diia')}
+                    disabled={isCastingVote}
+                  />
+                </View>
+              ) : (
+                <View style={styles.modalBody}>
+                  <Text style={[styles.modalLabel, { color: colors.textMuted }]}>
+                    Вам надіслано одноразовий SMS-код у додаток Privat24:
+                  </Text>
+                  <TextInput
+                    keyboardType="numeric"
+                    placeholder="Код із повідомлення (напр. 1938)"
+                    placeholderTextColor={colors.textMuted}
+                    style={[styles.textInput, { backgroundColor: colors.inputBg, color: colors.text, borderColor: colors.cardBorder, textAlign: 'center', fontSize: 18, fontWeight: 'bold' }]}
+                    defaultValue="1938"
+                  />
+                  <Button
+                    title={isCastingVote ? "Підтвердження..." : "Імітувати верифікацію Приват24"}
+                    onPress={() => handleCastMeetingVote(votingMeetingId!, 'privat')}
+                    disabled={isCastingVote}
+                    style={{ marginTop: 12 }}
+                  />
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
+      </Modal>
+
+      {/* ========================================================================= */}
       {/* 7. BOARD OF DIRECTORS MODAL OVERLAY */}
       {/* ========================================================================= */}
       <Modal visible={activeModal === 'board'} animationType="slide" transparent={true} onRequestClose={() => setActiveModal(null)}>
@@ -1914,6 +2306,45 @@ const styles = StyleSheet.create({
   },
   mainContent: {
     padding: 16,
+  },
+  announcementsCard: {
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  announcementsHeader: {
+    marginBottom: 12,
+  },
+  announcementsTitle: {
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  announcementsList: {
+    gap: 12,
+  },
+  announcementItem: {
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+  },
+  announcementMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  announcementSubject: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  announcementDate: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  announcementContent: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   headerBanner: {
     width: '100%',
@@ -2697,5 +3128,145 @@ const styles = StyleSheet.create({
   contactPhone: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  surveyCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  surveyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  surveyDesc: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 16,
+  },
+  dateText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  meetingStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  meetingStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  meetingQuestionsContainer: {
+    marginTop: 12,
+    gap: 12,
+  },
+  questionBox: {
+    padding: 12,
+    borderRadius: 12,
+  },
+  questionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  voteContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  voteButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voteButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  votedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    gap: 6,
+  },
+  votedBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContainerInside: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  modalLabel: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  signatureOption: {
+    padding: 14,
+    borderRadius: 14,
+    gap: 4,
+    marginBottom: 8,
+  },
+  optionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  optionDesc: {
+    fontSize: 11,
+  },
+  divider: {
+    height: 1,
+    marginVertical: 4,
+  },
+  textInput: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    fontSize: 13,
+  },
+  qrSimulator: {
+    width: 140,
+    height: 140,
+    backgroundColor: '#ffffff',
+    alignSelf: 'center',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

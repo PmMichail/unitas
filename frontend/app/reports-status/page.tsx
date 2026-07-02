@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useApp } from "@/context/AppContext";
 import { taxCabinetApi } from "@/lib/api";
 import {
@@ -11,8 +11,11 @@ import {
   Calendar,
   Layers,
   Key,
-  Info,
-  ExternalLink
+  Upload,
+  Lock,
+  FileKey,
+  X,
+  ShieldAlert,
 } from "lucide-react";
 
 export default function ReportsStatusPage() {
@@ -20,45 +23,38 @@ export default function ReportsStatusPage() {
   const activeProfileId = selectedProfile?.id;
 
   const [reportsData, setReportsData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [isTokenSet, setIsTokenSet] = useState(false);
-  const [token, setToken] = useState("");
-  const [instructions, setInstructions] = useState<any>(null);
   const [successMsg, setSuccessMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const fetchTokenStatus = async () => {
+  // JKS state
+  const [hasJks, setHasJks] = useState(false);
+  const [jksUpdatedAt, setJksUpdatedAt] = useState<string | null>(null);
+  const [jksFile, setJksFile] = useState<File | null>(null);
+  const [jksPassword, setJksPassword] = useState("");
+  const [uploadingJks, setUploadingJks] = useState(false);
+  const jksInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchJksStatus = async () => {
     if (!activeProfileId) return;
-    setLoading(true);
     try {
-      const res = await taxCabinetApi.getTokenStatus(activeProfileId);
-      setIsTokenSet(res.configured || res.has_token);
-    } catch (err) {
-      console.error("Failed to fetch token status:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchInstructions = async () => {
-    try {
-      const res = await taxCabinetApi.getInstructions();
-      setInstructions(res);
-    } catch (err) {
-      console.error("Failed to fetch instructions:", err);
-    }
+      const res = await taxCabinetApi.getJksStatus(activeProfileId);
+      setHasJks(res.has_jks);
+      setJksUpdatedAt(res.updated_at);
+    } catch {}
   };
 
   useEffect(() => {
-    fetchTokenStatus();
-    fetchInstructions();
+    fetchJksStatus();
     setReportsData(null);
     setSuccessMsg("");
+    setErrorMsg("");
   }, [activeProfileId]);
 
   const checkReports = async () => {
     if (!activeProfileId) return;
     setChecking(true);
+    setErrorMsg("");
     try {
       const data = await taxCabinetApi.checkReports(activeProfileId);
       setReportsData(data);
@@ -70,20 +66,37 @@ export default function ReportsStatusPage() {
     }
   };
 
-  const saveToken = async (e: React.FormEvent) => {
+  const handleJksUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeProfileId || !token.trim()) return;
-    setLoading(true);
+    if (!activeProfileId || !jksFile || !jksPassword) return;
+    setUploadingJks(true);
+    setErrorMsg("");
     try {
-      await taxCabinetApi.setToken(activeProfileId, token.trim());
-      setIsTokenSet(true);
-      setSuccessMsg("Токен ДПС успішно збережено!");
-      setTimeout(() => setSuccessMsg(""), 4000);
-    } catch (err) {
-      console.error("Failed to save token:", err);
+      const res = await taxCabinetApi.uploadJks(activeProfileId, jksFile, jksPassword);
+      setHasJks(true);
+      setJksFile(null);
+      setJksPassword("");
+      if (jksInputRef.current) jksInputRef.current.value = "";
+      setSuccessMsg(res.message || "JKS ключ успішно збережено!");
+      setTimeout(() => setSuccessMsg(""), 5000);
+      checkReports();
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.detail || "Не вдалося завантажити JKS ключ.");
     } finally {
-      setLoading(false);
+      setUploadingJks(false);
     }
+  };
+
+  const handleDeleteJks = async () => {
+    if (!activeProfileId || !confirm("Видалити збережений JKS ключ ДПС?")) return;
+    try {
+      await taxCabinetApi.deleteJks(activeProfileId);
+      setHasJks(false);
+      setJksUpdatedAt(null);
+      setReportsData(null);
+      setSuccessMsg("JKS ключ видалено.");
+      setTimeout(() => setSuccessMsg(""), 4000);
+    } catch {}
   };
 
   return (
@@ -99,73 +112,40 @@ export default function ReportsStatusPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Column: Token settings if not set, or refresh actions */}
-        <div className="lg:col-span-1 p-6 rounded-2xl glass-panel space-y-6 flex flex-col justify-between">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-4">
-              <Key className="w-4 h-4 text-indigo-500" />
-              Доступ до кабінету ДПС
+        {/* Left Column: JKS auth */}
+        <div className="lg:col-span-1 space-y-4">
+          {successMsg && (
+            <div className="p-3 text-xs bg-emerald-950/20 text-emerald-400 border border-emerald-500/20 rounded-xl font-bold flex items-center gap-2">
+              <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+              {successMsg}
+            </div>
+          )}
+          {errorMsg && (
+            <div className="p-3 text-xs bg-red-950/20 text-red-400 border border-red-500/20 rounded-xl font-bold flex items-center gap-2">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
+
+          <div className="p-6 rounded-2xl glass-panel space-y-4">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <FileKey className="w-4 h-4 text-indigo-500" />
+              КЕП-ключ (JKS) для ДПС
             </h3>
 
-            {loading ? (
-              <div className="py-8 text-center">
-                <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500"></div>
-              </div>
-            ) : !isTokenSet ? (
-              <div className="space-y-4">
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Для моніторингу подачі звітів необхідно ввести токен відкритої частини Електронного кабінету.
-                </p>
-
-                {instructions && (
-                  <div className="bg-slate-950/20 border border-slate-200 dark:border-slate-800/40 p-4 rounded-xl space-y-2">
-                    <h4 className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1">
-                      <Info className="w-3.5 h-3.5" />
-                      Як отримати токен
-                    </h4>
-                    <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400 font-medium">
-                      {instructions.steps.slice(0, 7).map((step: string, i: number) => (
-                        <li key={i} className="leading-tight">{step}</li>
-                      ))}
-                    </ol>
-                    <a
-                      href="https://cabinet.tax.gov.ua"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-indigo-500 hover:text-indigo-400 flex items-center gap-1 mt-3 font-semibold transition-colors"
-                    >
-                      Перейти до Електронного кабінету
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                )}
-
-                <form onSubmit={saveToken} className="space-y-2 pt-2">
-                  <input
-                    type="password"
-                    placeholder="Вставте токен доступу ДПС"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    required
-                  />
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg glow-button"
-                  >
-                    Підключити кабінет
-                  </button>
-                </form>
-              </div>
-            ) : (
+            {hasJks ? (
               <div className="space-y-4">
                 <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-950/10 text-emerald-400 text-xs font-bold flex items-center gap-2">
-                  <CheckCircle className="w-4 h-4" />
-                  API ДПС підключено
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <div>
+                    <div>КЕП підключено — запит активний</div>
+                    {jksUpdatedAt && (
+                      <div className="text-[10px] font-normal opacity-70 mt-0.5">
+                        Оновлено: {new Date(jksUpdatedAt).toLocaleString("uk-UA")}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-400">
-                  Система готова зчитати статус звітів з Електронного кабінету за поточний звітний рік.
-                </p>
 
                 <button
                   onClick={checkReports}
@@ -173,26 +153,76 @@ export default function ReportsStatusPage() {
                   className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5"
                 >
                   {checking ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Перевіряємо звіти...
-                    </>
+                    <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Перевіряємо...</>
                   ) : (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Перевірити статус звітів
-                    </>
+                    <><RefreshCw className="w-3.5 h-3.5" />Перевірити статус звітів</>
                   )}
                 </button>
+
+                <button
+                  onClick={handleDeleteJks}
+                  className="w-full py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-red-500 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Видалити JKS ключ
+                </button>
               </div>
+            ) : (
+              <form onSubmit={handleJksUpload} className="space-y-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Завантажте JKS-файл вашого КЕП для автоматичного підпису запитів до API ДПС.
+                </p>
+
+                <div
+                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-4 text-center cursor-pointer hover:border-indigo-400 transition-colors"
+                  onClick={() => jksInputRef.current?.click()}
+                >
+                  {jksFile ? (
+                    <div className="text-xs text-indigo-400 font-semibold flex items-center justify-center gap-2">
+                      <Key className="w-4 h-4" />
+                      {jksFile.name}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-400 font-semibold">
+                      <Upload className="w-5 h-5 mx-auto mb-1 opacity-50" />
+                      Клацніть щоб обрати .jks файл
+                    </div>
+                  )}
+                  <input
+                    ref={jksInputRef}
+                    type="file"
+                    accept=".jks,.dat,.pfx,.p12"
+                    className="hidden"
+                    onChange={(e) => setJksFile(e.target.files?.[0] ?? null)}
+                  />
+                </div>
+
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="password"
+                    placeholder="Пароль до JKS файлу"
+                    className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    value={jksPassword}
+                    onChange={(e) => setJksPassword(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={uploadingJks || !jksFile || !jksPassword}
+                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5"
+                >
+                  {uploadingJks ? (
+                    <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Перевіряємо ключ...</>
+                  ) : (
+                    <><FileKey className="w-3.5 h-3.5" />Зберегти та підключити</>
+                  )}
+                </button>
+              </form>
             )}
           </div>
-
-          {successMsg && (
-            <div className="p-3 text-xs bg-emerald-950/20 text-emerald-400 border border-emerald-500/20 rounded-xl font-bold animate-pulse mt-4">
-              {successMsg}
-            </div>
-          )}
         </div>
 
         {/* Right Column: Reports Status */}
@@ -208,10 +238,22 @@ export default function ReportsStatusPage() {
             </div>
           ) : reportsData ? (
             (reportsData.error || !Array.isArray(reportsData.reports)) ? (
+              reportsData.error?.includes("КЕП") || reportsData.error?.includes("Немає") || reportsData.error?.includes("ключ") ? (
+                <div className="py-12 flex flex-col items-center gap-4 text-center">
+                  <FileKey className="w-10 h-10 text-indigo-400 opacity-60" />
+                  <div>
+                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-1">Дані відсутні</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs">
+                      Завантажте JKS-файл КЕП у лівій панелі для автоматичного запиту статусу звітів до ДПС.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="p-4 rounded-xl border border-red-500/20 bg-red-950/10 text-red-400 text-xs font-bold flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 shrink-0" />
                 {reportsData.error || "Отримано некоректні дані про звіти від сервера."}
               </div>
+              )
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">
                 {/* Consolidation banner */}

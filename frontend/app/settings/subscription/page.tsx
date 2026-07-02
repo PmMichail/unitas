@@ -24,7 +24,7 @@ import {
 
 
 export default function SubscriptionPage() {
-  const { selectedProfile, refreshProfiles } = useApp();
+  const { selectedProfile, refreshProfiles, telegramId } = useApp();
   const [subscription, setSubscription] = useState<any>(null);
   const [prices, setPrices] = useState({ monthly: 299, half_yearly: 1499, yearly: 2999 });
   const [usage, setUsage] = useState({ used: 0, limit: 5 });
@@ -68,12 +68,82 @@ export default function SubscriptionPage() {
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [invoiceSuccess, setInvoiceSuccess] = useState<string | null>(null);
 
+  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
+
   const handleOpenInvoiceModal = () => {
     const savedEmail = localStorage.getItem("notify_email") || "";
-    setInvoiceEmail(savedEmail);
+    const emailToUse = savedEmail || (telegramId && telegramId.includes("@") ? telegramId : "");
+    setInvoiceEmail(emailToUse);
     setInvoiceError(null);
     setInvoiceSuccess(null);
     setShowInvoiceModal(true);
+  };
+
+  const getCalculatedPrice = () => {
+    if (!selectedTariff) return 0;
+    let monthlyTotal = selectedTariff.monthly_price;
+    if (selectedProfile?.tax_system === "non_profit" && enableResidentModule) {
+      const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+      if (residentTariff) {
+        monthlyTotal += residentTariff.base_resident_price || 0;
+        selectedResidentTiers.forEach(tierIndex => {
+          if (residentTariff.additional_resident_tiers && residentTariff.additional_resident_tiers[tierIndex]) {
+            monthlyTotal += residentTariff.additional_resident_tiers[tierIndex].price;
+          }
+        });
+      }
+    }
+    
+    let total = monthlyTotal;
+    if (selectedPeriod === "half_yearly") {
+      const basePrice = monthlyTotal * 6;
+      const discount = selectedTariff.half_yearly_discount || 0;
+      total = Math.round(basePrice * (1 - discount / 100));
+    } else if (selectedPeriod === "yearly") {
+      const basePrice = monthlyTotal * 12;
+      const discount = selectedTariff.yearly_discount || 0;
+      total = Math.round(basePrice * (1 - discount / 100));
+    }
+    return total;
+  };
+
+  const handleDownloadInvoice = async () => {
+    if (!selectedProfile) return;
+    setDownloadingInvoice(true);
+    setInvoiceError(null);
+    setInvoiceSuccess(null);
+    try {
+      const amount = getCalculatedPrice();
+      const tariff_code = selectedTariff?.code;
+      const blob = await api.downloadSubscriptionInvoicePDF({
+        profile_id: selectedProfile.id,
+        plan_type: "business",
+        payment_period: selectedPeriod,
+        amount,
+        tariff_code
+      });
+      
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Invoice_${selectedProfile.id}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setInvoiceSuccess("Рахунок успішно згенеровано та завантажено!");
+      fetchPaymentsHistory();
+      setTimeout(() => {
+        setShowInvoiceModal(false);
+        setInvoiceSuccess(null);
+      }, 3000);
+    } catch (e: any) {
+      console.error(e);
+      setInvoiceError("Не вдалося завантажити рахунок");
+    } finally {
+      setDownloadingInvoice(false);
+    }
   };
 
   const handleSendInvoice = async () => {
@@ -85,11 +155,15 @@ export default function SubscriptionPage() {
     setSendingInvoice(true);
     setInvoiceError(null);
     try {
+      const amount = getCalculatedPrice();
+      const tariff_code = selectedTariff?.code;
       await api.sendSubscriptionInvoice({
         profile_id: selectedProfile.id,
         plan_type: "business",
         payment_period: selectedPeriod,
-        email: invoiceEmail
+        email: invoiceEmail,
+        amount,
+        tariff_code
       });
       setInvoiceSuccess("Рахунок успішно надіслано на вашу пошту! Також ви можете переглянути його в історії счетов.");
       setTimeout(() => {
@@ -952,6 +1026,16 @@ export default function SubscriptionPage() {
                     </>
                   )}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenInvoiceModal}
+                  disabled={loading}
+                  className="w-full mt-2 py-3 rounded-xl text-xs font-bold transition-all border border-slate-800 hover:bg-slate-900/50 text-slate-350 hover:text-white flex items-center justify-center gap-2"
+                >
+                  <Mail className="w-4 h-4" />
+                  <span>Надіслати рахунок на e-mail</span>
+                </button>
               </div>
             )}
 
@@ -1228,6 +1312,33 @@ export default function SubscriptionPage() {
                                 <ExternalLink className="w-3 h-3" />
                               </button>
                             )}
+                            
+                            {isSub && (
+                              <button
+                                onClick={async () => {
+                                  setLoading(true);
+                                  try {
+                                    const blob = await api.downloadPaymentPDF(p.id);
+                                    const url = window.URL.createObjectURL(blob);
+                                    const link = document.createElement('a');
+                                    link.href = url;
+                                    link.setAttribute('download', `Invoice_${p.liqpay_order_id || p.id}.pdf`);
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    link.remove();
+                                    window.URL.revokeObjectURL(url);
+                                  } catch (err) {
+                                    alert("Не вдалося завантажити рахунок");
+                                  } finally {
+                                    setLoading(false);
+                                  }
+                                }}
+                                className="text-indigo-400 hover:text-indigo-300 flex items-center gap-0.5 font-bold hover:underline cursor-pointer ml-3"
+                              >
+                                <span>Рахунок (PDF)</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </button>
+                            )}
                           </div>
                         ) : (
                           "Внутрішній рахунок"
@@ -1270,13 +1381,9 @@ export default function SubscriptionPage() {
             <p className="text-xs text-slate-400 leading-relaxed mb-6">
               Ми згенеруємо PDF-рахунок для оплати безконтактним переказом за реквізитами ФОП на суму{" "}
               <span className="font-bold text-white">
-                {selectedPeriod === "monthly" 
-                  ? prices.monthly 
-                  : selectedPeriod === "half_yearly" 
-                    ? prices.half_yearly 
-                    : prices.yearly} грн
+                {getCalculatedPrice()} грн
               </span>{" "}
-              ({selectedPeriod === "monthly" ? "місячний" : selectedPeriod === "half_yearly" ? "піврічний" : "річний"} тариф Business) та надішлемо його на вашу електронну адресу.
+              ({selectedPeriod === "monthly" ? "місячний" : selectedPeriod === "half_yearly" ? "піврічний" : "річний"} тариф {selectedTariff?.name_uk || "Business"}) та надішлемо його на вашу електронну адресу.
             </p>
 
             <div className="space-y-4">
@@ -1307,13 +1414,28 @@ export default function SubscriptionPage() {
                 </div>
               )}
 
-              <div className="flex gap-3 pt-2">
+              <div className="flex gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowInvoiceModal(false)}
-                  className="flex-1 py-3 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-400 hover:text-white text-xs font-bold rounded-2xl transition-all"
+                  className="px-3 py-3 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-400 hover:text-white text-xs font-bold rounded-2xl transition-all"
                 >
                   Скасувати
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadInvoice}
+                  disabled={downloadingInvoice}
+                  className="flex-1 py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-white text-xs font-bold rounded-2xl transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {downloadingInvoice ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <>
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Завантажити PDF</span>
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"

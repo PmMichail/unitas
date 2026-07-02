@@ -130,7 +130,7 @@ export default function BillingPage() {
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState("");
   const [balanceFilter, setBalanceFilter] = useState<"all" | "debt" | "prepaid">("all");
-  const [activeTab, setActiveTab] = useState<"members" | "contractors" | "payments" | "meters" | "moderation" | "resident_cabinet" | "board">("members");
+  const [activeTab, setActiveTab] = useState<"members" | "contractors" | "payments" | "meters" | "moderation" | "resident_cabinet" | "board" | "meetings">("members");
 
   // Board Workspace State
   const [boardIssues, setBoardIssues] = useState<any[]>([]);
@@ -144,6 +144,19 @@ export default function BillingPage() {
   const [selectedCertId, setSelectedCertId] = useState<number | null>(null);
   const [isSigning, setIsSigning] = useState(false);
   const [isPublishingIssueId, setIsPublishingIssueId] = useState<number | null>(null);
+
+  // General Meetings State
+  const [meetings, setMeetings] = useState<any[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [isCreatingMeeting, setIsCreatingMeeting] = useState(false);
+  const [newMeetingTitle, setNewMeetingTitle] = useState("");
+  const [newMeetingDesc, setNewMeetingDesc] = useState("");
+  const [newMeetingStartDate, setNewMeetingStartDate] = useState("");
+  const [newMeetingEndDate, setNewMeetingEndDate] = useState("");
+  const [newMeetingQuestions, setNewMeetingQuestions] = useState<string[]>([""]);
+  const [signingMeetingId, setSigningMeetingId] = useState<number | null>(null);
+  const [signingMeetingPassword, setSigningMeetingPassword] = useState("");
+  const [isSigningMeeting, setIsSigningMeeting] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1002,6 +1015,113 @@ export default function BillingPage() {
     }
   };
 
+  // --- GENERAL MEETINGS OPERATIONS ---
+
+  const fetchMeetings = async () => {
+    if (!selectedProfile) return;
+    setMeetingsLoading(true);
+    try {
+      const data = await api.getMeetings("AdminSecret2026", selectedProfile.id);
+      if (Array.isArray(data)) {
+        setMeetings(data);
+      }
+    } catch (err) {
+      console.error("Error fetching meetings:", err);
+    } finally {
+      setMeetingsLoading(false);
+    }
+  };
+
+  const handleCreateMeeting = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!newMeetingTitle.trim()) return;
+    const questions = newMeetingQuestions.filter(q => q.trim() !== "");
+    if (questions.length === 0) {
+      showToast("Додайте хоча б одне питання для голосування", "error");
+      return;
+    }
+    try {
+      await api.createMeeting("AdminSecret2026", {
+        title: newMeetingTitle,
+        description: newMeetingDesc,
+        start_date: newMeetingStartDate || undefined,
+        end_date: newMeetingEndDate || undefined,
+        questions
+      }, selectedProfile.id);
+      setNewMeetingTitle("");
+      setNewMeetingDesc("");
+      setNewMeetingStartDate("");
+      setNewMeetingEndDate("");
+      setNewMeetingQuestions([""]);
+      setIsCreatingMeeting(false);
+      showToast("Загальні збори створено");
+      fetchMeetings();
+    } catch (err) {
+      console.error("Error creating meeting:", err);
+      showToast("Помилка створення загальних зборів", "error");
+    }
+  };
+
+  const handleStartMeetingVoting = async (meetingId: number) => {
+    if (!selectedProfile) return;
+    try {
+      await api.startMeetingVoting("AdminSecret2026", meetingId, selectedProfile.id);
+      showToast("Голосування розпочато");
+      fetchMeetings();
+    } catch (err) {
+      console.error("Error starting meeting voting:", err);
+      showToast("Помилка старту голосування", "error");
+    }
+  };
+
+  const handleEndMeetingVoting = async (meetingId: number) => {
+    if (!selectedProfile) return;
+    try {
+      await api.endMeetingVoting("AdminSecret2026", meetingId, selectedProfile.id);
+      showToast("Голосування завершено, протокол сформовано");
+      fetchMeetings();
+    } catch (err) {
+      console.error("Error ending meeting voting:", err);
+      showToast("Помилка завершення голосування", "error");
+    }
+  };
+
+  const handleSignMeetingProtocol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile || !signingMeetingId) return;
+    setIsSigningMeeting(true);
+    try {
+      await api.signMeetingProtocol("AdminSecret2026", signingMeetingId, {
+        certificate_id: selectedCertId || undefined,
+        password: signingMeetingPassword
+      }, selectedProfile.id);
+      setSigningMeetingId(null);
+      setSigningMeetingPassword("");
+      showToast("Протокол успішно підписано КЕП!");
+      fetchMeetings();
+    } catch (err: any) {
+      console.error("Error signing meeting protocol:", err);
+      showToast(err.response?.data?.detail || "Помилка при підписанні протоколу", "error");
+    } finally {
+      setIsSigningMeeting(false);
+    }
+  };
+
+  const handleDeleteMeeting = async (meetingId: number) => {
+    if (!selectedProfile) return;
+    if (confirm("Ви впевнені, що хочете видалити ці загальні збори?")) {
+      try {
+        await api.deleteMeeting("AdminSecret2026", meetingId, selectedProfile.id);
+        showToast("Загальні збори видалено");
+        fetchMeetings();
+      } catch (err) {
+        console.error("Error deleting meeting:", err);
+        showToast("Помилка видалення загальних зборів", "error");
+      }
+    }
+  };
+
   const fetchRCContacts = async () => {
     if (!selectedProfile) return;
     setIsContactsLoading(true);
@@ -1330,6 +1450,9 @@ export default function BillingPage() {
   useEffect(() => {
     if (activeTab === "board") {
       fetchBoardIssues();
+      fetchCertificates();
+    } else if (activeTab === "meetings") {
+      fetchMeetings();
       fetchCertificates();
     } else if (activeTab === "resident_cabinet") {
       if (rcSubTab === "announcements") {
@@ -2313,6 +2436,16 @@ export default function BillingPage() {
               Правління ({boardIssues.length})
             </button>
             <button
+              onClick={() => setActiveTab("meetings")}
+              className={`flex-1 md:flex-initial flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
+                activeTab === "meetings"
+                  ? "bg-indigo-600 text-white shadow-md"
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-250"
+              }`}
+            >
+              Загальні збори ({meetings.length})
+            </button>
+            <button
               onClick={() => setActiveTab("resident_cabinet")}
               className={`flex-1 md:flex-initial flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 activeTab === "resident_cabinet"
@@ -2814,6 +2947,374 @@ export default function BillingPage() {
                         >
                           <Send size={14} /> {isPublishingIssueId === issue.id ? "Публікація..." : "Опублікувати у публічні документи"}
                         </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* General Meetings Tab */}
+        {activeTab === "meetings" && (
+          <div className="space-y-6">
+            <div className="glass-panel rounded-3xl p-6 border border-slate-200 dark:border-slate-800/60 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  🗳️ Загальні збори співвласників
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Організація та проведення загальних зборів ОСББ/СТ, електронне голосування з КЕП та автоматичне формування протоколів.
+                </p>
+              </div>
+              {!isCreatingMeeting && (
+                <button
+                  onClick={() => setIsCreatingMeeting(true)}
+                  className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-3 transition-all active:scale-95 shadow-lg shadow-indigo-600/10"
+                >
+                  <Plus size={16} /> Створити загальні збори
+                </button>
+              )}
+            </div>
+
+            {/* Create Meeting Form */}
+            {isCreatingMeeting && (
+              <div className="glass-panel rounded-3xl p-6 border border-indigo-500/20 dark:border-indigo-500/10 bg-slate-50/50 dark:bg-slate-955/40 shadow-xl">
+                <h3 className="text-base font-bold text-slate-850 dark:text-white mb-4">Нові загальні збори</h3>
+                <form onSubmit={handleCreateMeeting} className="space-y-4">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Назва зборів</label>
+                      <input
+                        type="text"
+                        required
+                        value={newMeetingTitle}
+                        onChange={(e) => setNewMeetingTitle(e.target.value)}
+                        placeholder="Наприклад: Річні загальні збори ОСББ 2026"
+                        className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Початок</label>
+                        <input
+                          type="date"
+                          value={newMeetingStartDate}
+                          onChange={(e) => setNewMeetingStartDate(e.target.value)}
+                          className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Кінець</label>
+                        <input
+                          type="date"
+                          value={newMeetingEndDate}
+                          onChange={(e) => setNewMeetingEndDate(e.target.value)}
+                          className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1.5">Порядок денний / Опис</label>
+                    <textarea
+                      rows={3}
+                      value={newMeetingDesc}
+                      onChange={(e) => setNewMeetingDesc(e.target.value)}
+                      placeholder="Опишіть порядок денний та мету проведення загальних зборів..."
+                      className="w-full px-4 py-2.5 text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Питання порядку денного для голосування</label>
+                    {newMeetingQuestions.map((q, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <span className="text-xs font-bold text-slate-400 w-5">{idx + 1}.</span>
+                        <input
+                          type="text"
+                          required
+                          value={q}
+                          onChange={(e) => {
+                            const updated = [...newMeetingQuestions];
+                            updated[idx] = e.target.value;
+                            setNewMeetingQuestions(updated);
+                          }}
+                          placeholder="Текст питання (наприклад: Затвердити кошторис утримання будинку на 2026 рік)"
+                          className="flex-1 px-4 py-2.5 text-sm bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                        />
+                        {newMeetingQuestions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = newMeetingQuestions.filter((_, i) => i !== idx);
+                              setNewMeetingQuestions(updated);
+                            }}
+                            className="p-2.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setNewMeetingQuestions([...newMeetingQuestions, ""])}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-500 flex items-center gap-1 mt-1"
+                    >
+                      <Plus size={14} /> Додати ще одне питання
+                    </button>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      className="flex-1 py-3 text-sm font-semibold bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl transition"
+                    >
+                      Створити збори
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreatingMeeting(false);
+                        setNewMeetingTitle("");
+                        setNewMeetingDesc("");
+                        setNewMeetingQuestions([""]);
+                      }}
+                      className="flex-1 py-3 text-sm font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 rounded-xl transition"
+                    >
+                      Скасувати
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Meetings List */}
+            {meetingsLoading ? (
+              <div className="py-12 text-center text-slate-400">Завантаження зборів...</div>
+            ) : meetings.length === 0 ? (
+              <div className="rounded-3xl glass-panel p-12 text-center text-slate-500 font-semibold border border-slate-100 dark:border-slate-800/40">
+                Загальні збори ще не створювались.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {meetings.map((meeting) => (
+                  <div
+                    key={meeting.id}
+                    className="rounded-3xl glass-panel p-6 shadow-sm border border-slate-200 dark:border-slate-850/60 bg-slate-50/20 dark:bg-[#0f172a]/40 space-y-6"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                            meeting.status === "discussion"
+                              ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                              : meeting.status === "voting"
+                              ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                              : meeting.is_signed
+                              ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                              : "bg-green-500/10 text-green-500 border-green-500/20"
+                          }`}
+                        >
+                          {meeting.status === "discussion"
+                            ? "Обговорення"
+                            : meeting.status === "voting"
+                            ? "Голосування"
+                            : meeting.is_signed
+                            ? "Підписано КЕП"
+                            : "Завершено (Очікує підпису)"}
+                        </span>
+                        {meeting.start_date && meeting.end_date && (
+                          <span className="text-xs text-slate-500 dark:text-slate-450">
+                            📅 {meeting.start_date} — {meeting.end_date}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleDeleteMeeting(meeting.id)}
+                        className="p-1.5 text-rose-500 hover:bg-rose-500/10 rounded-lg transition"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-extrabold text-slate-900 dark:text-white">{meeting.title}</h3>
+                      {meeting.description && (
+                        <p className="text-xs text-slate-650 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                          {meeting.description}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Quorum and voter turnout card */}
+                    {meeting.status !== "discussion" && (
+                      <div className="p-4 rounded-2xl bg-indigo-500/5 dark:bg-indigo-950/10 border border-indigo-500/10 space-y-3">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                          <span className="flex items-center gap-1.5">
+                            📊 Явка співвласників (кворум):
+                          </span>
+                          <span className={`${meeting.stats.quorum_percent >= 50 ? "text-emerald-500" : "text-amber-500"}`}>
+                            {meeting.stats.voted_area} / {meeting.stats.total_area} кв.м ({meeting.stats.quorum_percent}%)
+                          </span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              meeting.stats.quorum_percent >= 50 ? "bg-emerald-600" : "bg-indigo-600"
+                            }`}
+                            style={{ width: `${Math.min(100, meeting.stats.quorum_percent)}%` }}
+                          />
+                        </div>
+                        <div className="text-[10px] text-slate-400 uppercase font-semibold">
+                          {meeting.stats.quorum_percent >= 50 ? "✅ Кворум зібрано (більше 50%)" : "⚠️ Кворуму немає (потрібно не менше 50% площі)"}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Questions & Vote Breakdown */}
+                    <div className="space-y-4">
+                      <h4 className="text-xs font-black uppercase text-slate-400 tracking-wider">Питання порядку денного</h4>
+                      <div className="grid gap-3">
+                        {meeting.questions.map((q: any, idx: number) => (
+                          <div key={q.id} className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/60 space-y-3 shadow-sm">
+                            <div className="text-sm font-bold text-slate-800 dark:text-white flex gap-2">
+                              <span>{idx + 1}.</span>
+                              <span>{q.question_text}</span>
+                            </div>
+                            {meeting.status !== "discussion" && (
+                              <div className="grid grid-cols-3 gap-3 pt-1 text-xs">
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-slate-500 uppercase font-semibold mb-1">
+                                    <span>За</span>
+                                    <span>{q.yes_percent}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-emerald-500" style={{ width: `${q.yes_percent}%` }} />
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 block mt-1">{q.yes_area} кв.м</span>
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-slate-500 uppercase font-semibold mb-1">
+                                    <span>Проти</span>
+                                    <span>{q.no_percent}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-rose-500" style={{ width: `${q.no_percent}%` }} />
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 block mt-1">{q.no_area} кв.м</span>
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-slate-500 uppercase font-semibold mb-1">
+                                    <span>Утрималися</span>
+                                    <span>{q.abstain_percent}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-slate-400" style={{ width: `${q.abstain_percent}%` }} />
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 block mt-1">{q.abstain_area} кв.м</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Actions Panel */}
+                    <div className="flex flex-wrap gap-3 pt-2">
+                      {meeting.status === "discussion" && (
+                        <button
+                          onClick={() => handleStartMeetingVoting(meeting.id)}
+                          className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                        >
+                          Розпочати голосування мешканців
+                        </button>
+                      )}
+                      
+                      {meeting.status === "voting" && (
+                        <button
+                          onClick={() => handleEndMeetingVoting(meeting.id)}
+                          className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"
+                        >
+                          Завершити голосування та створити протокол AI
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Sign Protocol Block */}
+                    {meeting.status === "completed" && !meeting.is_signed && (
+                      <div className="pt-4 border-t border-slate-200 dark:border-slate-800/40">
+                        {signingMeetingId === meeting.id ? (
+                          <form onSubmit={handleSignMeetingProtocol} className="space-y-3 p-4 rounded-2xl bg-indigo-50/20 dark:bg-indigo-950/20 border border-indigo-500/20 dark:border-indigo-500/10">
+                            <h4 className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase">Підписання протоколу загальних зборів КЕП</h4>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 dark:text-slate-400 mb-1">Оберіть сертифікат</label>
+                              <select
+                                value={selectedCertId || ""}
+                                onChange={(e) => setSelectedCertId(Number(e.target.value))}
+                                className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300"
+                              >
+                                {certificates.map((c) => (
+                                  <option key={c.id} value={c.id}>{c.cert_owner_name} ({c.cert_serial})</option>
+                                ))}
+                                {certificates.length === 0 && (
+                                  <option value="">Немає сертифікатів КЕП</option>
+                                )}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 dark:text-slate-400 mb-1">Пароль захисту КЕП</label>
+                              <input
+                                type="password"
+                                required
+                                value={signingMeetingPassword}
+                                onChange={(e) => setSigningMeetingPassword(e.target.value)}
+                                placeholder="Введіть пароль ключа..."
+                                className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300 focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="submit"
+                                disabled={isSigningMeeting}
+                                className="flex-1 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition"
+                              >
+                                {isSigningMeeting ? "Підписання..." : "Підписати протокол"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSigningMeetingId(null)}
+                                className="px-3 py-2 text-xs font-semibold border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg text-slate-500 dark:text-slate-400 transition"
+                              >
+                                Скасувати
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setSigningMeetingId(meeting.id);
+                              if (certificates.length > 0 && !selectedCertId) {
+                                setSelectedCertId(certificates[0].id);
+                              }
+                            }}
+                            className="w-full py-2.5 rounded-xl bg-indigo-500/5 hover:bg-indigo-600 border border-indigo-500/20 text-indigo-600 hover:text-white text-xs font-bold transition flex items-center justify-center gap-1.5"
+                          >
+                            <ShieldAlert size={14} /> Підписати протокол загальних зборів КЕП
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    
+                    {meeting.is_signed && meeting.document_id && (
+                      <div className="pt-4 border-t border-slate-200 dark:border-slate-800/40 flex items-center justify-between text-xs">
+                        <span className="font-semibold text-emerald-600 flex items-center gap-1">
+                          ✅ Протокол успішно підписано КЕП та опубліковано для мешканців
+                        </span>
                       </div>
                     )}
                   </div>

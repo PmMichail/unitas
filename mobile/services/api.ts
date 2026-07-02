@@ -700,6 +700,11 @@ export const api = {
     return response.data;
   },
 
+  getAnnouncements: async (profileId: number) => {
+    const response = await client.get(`/api/profiles/${profileId}/announcements`);
+    return response.data;
+  },
+
   getMemberBillingHistory: async (token: string) => {
     const response = await client.get(`/api/member/billing/history`, { headers: { Authorization: `Bearer ${token}` } });
     return response.data;
@@ -729,6 +734,20 @@ export const api = {
   voteMemberSurvey: async (token: string, surveyId: number, data: { vote: string; comment?: string }) => {
     const formData = toFormData(data);
     const response = await client.post(`/api/member/surveys/${surveyId}/vote`, formData, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  getMemberMeetings: async (token: string) => {
+    const response = await client.get(`/api/member/meetings`, { headers: { Authorization: `Bearer ${token}` } });
+    return response.data;
+  },
+
+  voteMemberMeeting: async (token: string, meetingId: number, answers: any, signatureInfo?: any) => {
+    const response = await client.post(
+      `/api/member/meetings/${meetingId}/vote`,
+      { answers, signature_info: signatureInfo },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     return response.data;
   },
 

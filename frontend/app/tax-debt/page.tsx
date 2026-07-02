@@ -1,21 +1,22 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useApp } from "@/context/AppContext";
 import { taxCabinetApi } from "@/lib/api";
 import {
   AlertCircle,
   CheckCircle,
   RefreshCw,
-  ExternalLink,
   ShieldAlert,
-  Info,
   Building,
   Key,
   DollarSign,
   Calendar,
   Upload,
-  Trash2
+  Trash2,
+  Lock,
+  FileKey,
+  X,
 } from "lucide-react";
 
 export default function TaxDebtPage() {
@@ -25,34 +26,29 @@ export default function TaxDebtPage() {
   const [debtInfo, setDebtInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [token, setToken] = useState("");
-  const [isTokenSet, setIsTokenSet] = useState(false);
-  const [instructions, setInstructions] = useState<any>(null);
   const [successMsg, setSuccessMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
   const [uploadingStatement, setUploadingStatement] = useState(false);
   const [statements, setStatements] = useState<any[]>([]);
   const [loadingStatements, setLoadingStatements] = useState(false);
 
-  const fetchTokenStatus = async () => {
-    if (!activeProfileId) return;
-    setLoading(true);
-    try {
-      const res = await taxCabinetApi.getTokenStatus(activeProfileId);
-      setIsTokenSet(res.has_token);
-    } catch (err) {
-      console.error("Failed to fetch token status:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // JKS state
+  const [hasJks, setHasJks] = useState(false);
+  const [jksUpdatedAt, setJksUpdatedAt] = useState<string | null>(null);
+  const [jksFile, setJksFile] = useState<File | null>(null);
+  const [jksPassword, setJksPassword] = useState("");
+  const [certFile, setCertFile] = useState<File | null>(null);
+  const [uploadingJks, setUploadingJks] = useState(false);
+  const jksInputRef = useRef<HTMLInputElement>(null);
+  const certInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchInstructions = async () => {
+  const fetchJksStatus = async () => {
+    if (!activeProfileId) return;
     try {
-      const res = await taxCabinetApi.getInstructions();
-      setInstructions(res);
-    } catch (err) {
-      console.error("Failed to load instructions:", err);
-    }
+      const res = await taxCabinetApi.getJksStatus(activeProfileId);
+      setHasJks(res.has_jks);
+      setJksUpdatedAt(res.updated_at);
+    } catch {}
   };
 
   const fetchStatements = async () => {
@@ -69,16 +65,17 @@ export default function TaxDebtPage() {
   };
 
   useEffect(() => {
-    fetchTokenStatus();
-    fetchInstructions();
+    fetchJksStatus();
     fetchStatements();
     setDebtInfo(null);
     setSuccessMsg("");
+    setErrorMsg("");
   }, [activeProfileId]);
 
   const checkDebt = async () => {
     if (!activeProfileId) return;
     setChecking(true);
+    setErrorMsg("");
     try {
       const data = await taxCabinetApi.fetchDetailedDpsData(activeProfileId);
       setDebtInfo(data);
@@ -90,20 +87,39 @@ export default function TaxDebtPage() {
     }
   };
 
-  const saveToken = async (e: React.FormEvent) => {
+  const handleJksUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeProfileId || !token.trim()) return;
-    setLoading(true);
+    if (!activeProfileId || !jksFile || !jksPassword) return;
+    setUploadingJks(true);
+    setErrorMsg("");
     try {
-      await taxCabinetApi.setToken(activeProfileId, token.trim());
-      setIsTokenSet(true);
-      setSuccessMsg("Токен ДПС успішно збережено!");
-      setTimeout(() => setSuccessMsg(""), 4000);
-    } catch (err) {
-      console.error("Failed to save token:", err);
+      const res = await taxCabinetApi.uploadJks(activeProfileId, jksFile, jksPassword, certFile);
+      setHasJks(true);
+      setJksFile(null);
+      setCertFile(null);
+      setJksPassword("");
+      if (jksInputRef.current) jksInputRef.current.value = "";
+      if (certInputRef.current) certInputRef.current.value = "";
+      setSuccessMsg(res.message || "JKS ключ успішно збережено!");
+      setTimeout(() => setSuccessMsg(""), 5000);
+      checkDebt();
+    } catch (err: any) {
+      setErrorMsg(err.response?.data?.detail || "Не вдалося завантажити JKS ключ.");
     } finally {
-      setLoading(false);
+      setUploadingJks(false);
     }
+  };
+
+  const handleDeleteJks = async () => {
+    if (!activeProfileId || !confirm("Видалити збережений JKS ключ ДПС?")) return;
+    try {
+      await taxCabinetApi.deleteJks(activeProfileId);
+      setHasJks(false);
+      setJksUpdatedAt(null);
+      setDebtInfo(null);
+      setSuccessMsg("JKS ключ видалено.");
+      setTimeout(() => setSuccessMsg(""), 4000);
+    } catch {}
   };
 
   const uploadDpsStatement = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -117,7 +133,6 @@ export default function TaxDebtPage() {
       fetchStatements();
       setTimeout(() => setSuccessMsg(""), 5000);
     } catch (err: any) {
-      console.error("Failed to upload DPS statement:", err);
       setDebtInfo({ error: err.response?.data?.detail || "Не вдалося розпізнати виписку ДПС." });
     } finally {
       setUploadingStatement(false);
@@ -127,15 +142,14 @@ export default function TaxDebtPage() {
 
   const deleteStatement = async (recordedAt: string) => {
     if (!activeProfileId) return;
-    if (!confirm(`Ви впевнені, що хочете видалити виписку від ${recordedAt}?`)) return;
+    if (!confirm(`Видалити виписку від ${recordedAt}?`)) return;
     try {
       await taxCabinetApi.deleteDpsStatement(activeProfileId, recordedAt);
       setSuccessMsg("Виписку успішно видалено!");
       setTimeout(() => setSuccessMsg(""), 4000);
       fetchStatements();
       checkDebt();
-    } catch (err) {
-      console.error("Failed to delete statement:", err);
+    } catch {
       alert("Не вдалося видалити виписку.");
     }
   };
@@ -153,127 +167,163 @@ export default function TaxDebtPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Column: API connection & Statement List */}
+        {/* Left Column: JKS auth & Statement List */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="p-6 rounded-2xl glass-panel space-y-6 flex flex-col justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mb-4">
-                <Key className="w-4 h-4 text-indigo-500" />
-                Підключення API ДПС
-              </h3>
+          {/* Success / Error messages */}
+          {successMsg && (
+            <div className="p-3 text-xs bg-emerald-950/20 text-emerald-400 border border-emerald-500/20 rounded-xl font-bold flex items-center gap-2">
+              <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+              {successMsg}
+            </div>
+          )}
+          {errorMsg && (
+            <div className="p-3 text-xs bg-red-950/20 text-red-400 border border-red-500/20 rounded-xl font-bold flex items-center gap-2">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
 
-              {loading ? (
-                <div className="py-8 text-center">
-                  <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500"></div>
+          {/* JKS KEP upload card */}
+          <div className="p-6 rounded-2xl glass-panel space-y-4">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <FileKey className="w-4 h-4 text-indigo-500" />
+              КЕП-ключ (JKS) для ДПС
+            </h3>
+
+            {hasJks ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-950/10 text-emerald-400 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" />
+                  <div>
+                    <div>КЕП підключено — автоматичний запит активний</div>
+                    {jksUpdatedAt && (
+                      <div className="text-[10px] font-normal opacity-70 mt-0.5">
+                        Оновлено: {new Date(jksUpdatedAt).toLocaleString("uk-UA")}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              ) : !isTokenSet ? (
-                <div className="space-y-4">
-                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Для перевірки стану розрахунків та наявності податкового боргу необхідно ввести токен відкритої частини Електронного кабінету.
-                  </p>
 
-                  {instructions && (
-                    <div className="bg-slate-950/20 border border-slate-200 dark:border-slate-800/40 p-4 rounded-xl space-y-2">
-                      <h4 className="text-[10px] uppercase font-bold text-indigo-400 flex items-center gap-1">
-                        <Info className="w-3.5 h-3.5" />
-                        Покрокова інструкція
-                      </h4>
-                      <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400 font-medium">
-                        {instructions.steps.map((step: string, i: number) => (
-                          <li key={i} className="leading-tight">{step}</li>
-                        ))}
-                      </ol>
-                      <a
-                        href="https://cabinet.tax.gov.ua"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-indigo-500 hover:text-indigo-400 flex items-center gap-1 mt-3 font-semibold transition-colors"
-                      >
-                        Перейти до Електронного кабінету
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
+                <button
+                  onClick={checkDebt}
+                  disabled={checking || !activeProfileId}
+                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5"
+                >
+                  {checking ? (
+                    <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Запитуємо ДПС...</>
+                  ) : (
+                    <><RefreshCw className="w-3.5 h-3.5" />Перевірити борг через ДПС API</>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleDeleteJks}
+                  className="w-full py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-red-500 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Видалити JKS ключ
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleJksUpload} className="space-y-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Завантажте JKS-файл вашого КЕП (електронний підпис із ДПС / АЦСК). Ключ використовується для автоматичного підпису запитів до API ДПС.
+                </p>
+
+                <div
+                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-4 text-center cursor-pointer hover:border-indigo-400 transition-colors"
+                  onClick={() => jksInputRef.current?.click()}
+                >
+                  {jksFile ? (
+                    <div className="text-xs text-indigo-400 font-semibold flex items-center justify-center gap-2">
+                      <Key className="w-4 h-4" />
+                      {jksFile.name}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-400 font-semibold">
+                      <Upload className="w-5 h-5 mx-auto mb-1 opacity-50" />
+                      Клацніть щоб обрати .jks/.dat файл
                     </div>
                   )}
-
-                  <form onSubmit={saveToken} className="space-y-2 pt-2">
-                    <input
-                      type="password"
-                      placeholder="Вставте токен доступу ДПС"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none"
-                      value={token}
-                      onChange={(e) => setToken(e.target.value)}
-                      required
-                    />
-                    <button
-                      type="submit"
-                      className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg glow-button"
-                    >
-                      Підключити API
-                    </button>
-                  </form>
+                  <input
+                    ref={jksInputRef}
+                    type="file"
+                    accept=".jks,.dat,.pfx,.p12"
+                    className="hidden"
+                    onChange={(e) => setJksFile(e.target.files?.[0] ?? null)}
+                  />
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-950/10 text-emerald-400 text-xs font-bold flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4" />
-                    API ДПС успішно підключено
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Ви можете в будь-який момент перевірити наявність боргу. Запити кешуються на 24 години для уникнення блокування.
-                  </p>
 
-                  <button
-                    onClick={checkDebt}
-                    disabled={checking || !activeProfileId}
-                    className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5"
-                  >
-                    {checking ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Запитуємо ДПС...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Перевірити наявність боргу
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-
-              <div className="pt-5 mt-5 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Якщо автоматичний запит ДПС не працює, експортуйте файл з Електронного кабінету: <b>Стан розрахунків з бюджетом</b> → Excel/PDF/TXT.
-                </div>
-                <label className={`w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5 cursor-pointer ${uploadingStatement || !activeProfileId ? "opacity-50 pointer-events-none" : ""}`}>
-                  {uploadingStatement ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Розпізнаємо виписку...
-                    </>
+                {/* Optional .cer certificate upload */}
+                <div
+                  className="border border-slate-200 dark:border-slate-800 rounded-xl p-3 text-center cursor-pointer hover:border-indigo-400 transition-colors"
+                  onClick={() => certInputRef.current?.click()}
+                >
+                  {certFile ? (
+                    <div className="text-xs text-emerald-400 font-semibold flex items-center justify-center gap-2">
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      {certFile.name}
+                    </div>
                   ) : (
-                    <>
-                      <Upload className="w-3.5 h-3.5" />
-                      Завантажити виписку ДПС
-                    </>
+                    <div className="text-[10px] text-slate-400 font-semibold">
+                      + Додати .cer сертифікат (опціонально для IIT ключів)
+                    </div>
                   )}
                   <input
+                    ref={certInputRef}
                     type="file"
-                    accept=".xlsx,.xls,.pdf,.txt,.csv"
+                    accept=".cer,.crt,.pem"
                     className="hidden"
-                    disabled={uploadingStatement || !activeProfileId}
-                    onChange={uploadDpsStatement}
+                    onChange={(e) => setCertFile(e.target.files?.[0] ?? null)}
                   />
-                </label>
-              </div>
-            </div>
+                </div>
 
-            {successMsg && (
-              <div className="p-3 text-xs bg-emerald-950/20 text-emerald-400 border border-emerald-500/20 rounded-xl font-bold animate-pulse mt-4">
-                {successMsg}
-              </div>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="password"
+                    placeholder="Пароль до JKS файлу"
+                    className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    value={jksPassword}
+                    onChange={(e) => setJksPassword(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={uploadingJks || !jksFile || !jksPassword}
+                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg disabled:opacity-50 glow-button flex items-center justify-center gap-1.5"
+                >
+                  {uploadingJks ? (
+                    <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Перевіряємо ключ...</>
+                  ) : (
+                    <><FileKey className="w-3.5 h-3.5" />Зберегти та підключити</>
+                  )}
+                </button>
+              </form>
             )}
+
+            {/* Manual statement fallback */}
+            <div className="pt-4 mt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Або завантажте виписку вручну з кабінету ДПС: <b>Стан розрахунків</b> → Excel/PDF/TXT.
+              </div>
+              <label className={`w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-lg flex items-center justify-center gap-1.5 cursor-pointer ${uploadingStatement || !activeProfileId ? "opacity-50 pointer-events-none" : ""}`}>
+                {uploadingStatement ? (
+                  <><RefreshCw className="w-3.5 h-3.5 animate-spin" />Розпізнаємо...</>
+                ) : (
+                  <><Upload className="w-3.5 h-3.5" />Завантажити виписку ДПС</>
+                )}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.pdf,.txt,.csv"
+                  className="hidden"
+                  disabled={uploadingStatement || !activeProfileId}
+                  onChange={uploadDpsStatement}
+                />
+              </label>
+            </div>
           </div>
 
           {/* Uploaded statements list */}
@@ -335,12 +385,24 @@ export default function TaxDebtPage() {
             </div>
           ) : debtInfo ? (
             (debtInfo.error || typeof debtInfo.has_debt === "undefined") ? (
+              debtInfo.error?.includes("Немає даних") || debtInfo.error?.includes("КЕП") ? (
+                <div className="py-12 flex flex-col items-center gap-4 text-center">
+                  <FileKey className="w-10 h-10 text-indigo-400 opacity-60" />
+                  <div>
+                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-1">Дані відсутні</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs">
+                      Завантажте JKS-файл КЕП у лівій панелі для автоматичного запиту до ДПС, або завантажте виписку вручну.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="p-4 rounded-xl border border-red-500/20 bg-red-950/10 text-red-400 text-xs flex items-center gap-2">
                 <ShieldAlert className="w-5 h-5 shrink-0" />
                 <div>
                   <span className="font-bold">Помилка підключення:</span> {debtInfo.error || "Отримано некоректну відповідь від сервера."}
                 </div>
               </div>
+              )
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">
                 {/* Consolidation Banner */}
@@ -454,6 +516,9 @@ export default function TaxDebtPage() {
                             <th className="px-4 py-3 text-right">Сплачено</th>
                             <th className="px-4 py-3 text-right">Переплата</th>
                             <th className="px-4 py-3 text-right">Недоплата</th>
+                            <th className="px-4 py-3 text-center">Статус</th>
+                            <th className="px-4 py-3 text-right">Очікує</th>
+                            <th className="px-4 py-3 text-right">Реальний борг</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -464,11 +529,37 @@ export default function TaxDebtPage() {
                               <td className="px-4 py-3.5 text-right font-medium text-slate-700 dark:text-slate-400">{item.paid.toLocaleString("uk-UA")}</td>
                               <td className="px-4 py-3.5 text-right font-extrabold text-emerald-500">{item.overpayment > 0 ? `+${item.overpayment}` : "0"}</td>
                               <td className="px-4 py-3.5 text-right font-extrabold text-rose-500">{item.underpayment > 0 ? `-${item.underpayment}` : "0"}</td>
+                              <td className="px-4 py-3.5 text-center">
+                                {item.status === "pending" ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/20 text-amber-500 text-[10px] font-bold border border-amber-500/20">
+                                    <RefreshCw className="w-2.5 h-2.5" />
+                                    Очікує
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/20 text-emerald-500 text-[10px] font-bold border border-emerald-500/20">
+                                    <CheckCircle className="w-2.5 h-2.5" />
+                                    Підтверджено
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-medium text-amber-600 dark:text-amber-400">
+                                {item.pending_amount > 0 ? `+${item.pending_amount.toLocaleString("uk-UA")}` : "0"}
+                              </td>
+                              <td className="px-4 py-3.5 text-right font-extrabold text-slate-700 dark:text-slate-300">
+                                {item.effective_debt.toLocaleString("uk-UA")}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
+                    {/* Pending summary */}
+                    {debtInfo.total_pending > 0 && (
+                      <div className="p-3 rounded-xl bg-amber-950/10 border border-amber-500/20 text-amber-500 text-xs flex items-center justify-between">
+                        <span className="font-semibold">Загальна сума платежів, які ДПС ще не побачила:</span>
+                        <span className="font-extrabold">+{debtInfo.total_pending.toLocaleString("uk-UA")} грн</span>
+                      </div>
+                    )}
                   </div>
                 )}
 

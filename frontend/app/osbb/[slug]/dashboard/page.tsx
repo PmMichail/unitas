@@ -59,7 +59,7 @@ export default function ResidentDashboardPage() {
   };
 
   // Navigation state
-  const [activeTab, setActiveTab] = useState<"dashboard" | "surveys" | "tickets" | "contacts" | "security" | "bookings" | "documents" | "board">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "surveys" | "tickets" | "contacts" | "security" | "bookings" | "documents" | "board" | "meetings">("dashboard");
 
   // Board Form State
   const [boardIssues, setBoardIssues] = useState<any[]>([]);
@@ -91,7 +91,7 @@ export default function ResidentDashboardPage() {
     setLoading(true);
     setError("");
     try {
-      const [dash, neighborsResponse, activeSurveys, ticketList, contactList, deviceList, zoneList, bookingList, docList] = await Promise.all([
+      const [dash, neighborsResponse, activeSurveys, ticketList, contactList, deviceList, zoneList, bookingList, docList, meetingList] = await Promise.all([
         api.getMemberDashboard(authToken),
         api.getMemberNeighbors(authToken),
         api.getMemberSurveys(authToken),
@@ -101,8 +101,22 @@ export default function ResidentDashboardPage() {
         api.getMemberRecreationZones(authToken),
         api.getMemberBookings(authToken),
         api.getMemberDocuments(authToken),
+        api.getMemberMeetings(authToken),
       ]);
       setDashboard(dash);
+
+      if (dash?.member?.is_board_member || dash?.member?.is_board_chairman) {
+        try {
+          const [issues, certs] = await Promise.all([
+            api.getBoardIssues(authToken),
+            api.getCertificates(dash.profile.id)
+          ]);
+          setBoardIssues(issues || []);
+          setCertificates(certs || []);
+        } catch (err) {
+          console.error("Error loading board data on load:", err);
+        }
+      }
       
       if (dash?.meters) {
         const initialMeters: Record<number, string> = {};
@@ -136,6 +150,7 @@ export default function ResidentDashboardPage() {
       setRecreationZones(zoneList || []);
       setMyBookings(bookingList || []);
       setDocuments(docList || []);
+      setMemberMeetings(meetingList || []);
     } catch (err: any) {
       if (err.response?.status === 401 || err.response?.status === 403) {
         router.push(`/osbb/${slug}/login`);
@@ -335,14 +350,86 @@ export default function ResidentDashboardPage() {
     }
   };
 
+  // --- RESIDENT MEETINGS STATE ---
+  const [memberMeetings, setMemberMeetings] = useState<any[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, Record<number, string>>>({});
+  const [votingMeetingId, setVotingMeetingId] = useState<number | null>(null);
+  const [votingCertId, setVotingCertId] = useState<number | null>(null);
+  const [votingPassword, setVotingPassword] = useState("");
+  const [isCastingVote, setIsCastingVote] = useState(false);
+  const [showMockSignature, setShowMockSignature] = useState<"diia" | "privat" | null>(null);
+
+  const fetchMemberMeetings = async () => {
+    if (!token) return;
+    setMeetingsLoading(true);
+    try {
+      const res = await api.getMemberMeetings(token);
+      setMemberMeetings(res || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setMeetingsLoading(false);
+    }
+  };
+
+  const handleCastMeetingVote = async (meetingId: number, isSigned: boolean = false, mockType?: "diia" | "privat") => {
+    if (!token) return;
+    const answers = selectedAnswers[meetingId];
+    if (!answers || Object.keys(answers).length === 0) {
+      setError("Оберіть відповіді на всі питання");
+      return;
+    }
+    
+    const votesPayload = Object.entries(answers).map(([qId, val]) => ({
+      question_id: Number(qId),
+      vote_value: val
+    }));
+    
+    setIsCastingVote(true);
+    setMessage("");
+    setError("");
+    
+    try {
+      let signatureData = undefined;
+      if (isSigned) {
+        signatureData = `Підпис: ${mockType ? (mockType === "diia" ? "Дія.Підпис" : "Приват24") : "КЕП"} співвласника ${member?.owner_name || ""}, Дата: ${new Date().toLocaleString("uk-UA")}`;
+      }
+      
+      await api.voteMemberMeeting(token, meetingId, {
+        votes: votesPayload,
+        is_signed: isSigned,
+        signature_data: signatureData
+      });
+      
+      setVotingMeetingId(null);
+      setVotingPassword("");
+      setShowMockSignature(null);
+      // Clean up answers
+      setSelectedAnswers(prev => {
+        const copy = { ...prev };
+        delete copy[meetingId];
+        return copy;
+      });
+      fetchMemberMeetings();
+      setMessage("Ваш голос успішно зараховано!");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Не вдалося проголосувати");
+    } finally {
+      setIsCastingVote(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === "board" && token) {
       fetchBoardIssues();
+    } else if (activeTab === "meetings" && token) {
+      fetchMemberMeetings();
     }
   }, [activeTab, token]);
 
   useEffect(() => {
-    if (activeTab === "board" && dashboard?.profile?.id) {
+    if ((activeTab === "board" || activeTab === "meetings") && dashboard?.profile?.id) {
       fetchCertificates();
     }
   }, [activeTab, dashboard?.profile?.id]);
@@ -724,6 +811,16 @@ export default function ResidentDashboardPage() {
             🗳️ Опитування ({surveys.length})
           </button>
           <button
+            onClick={() => setActiveTab("meetings")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+              activeTab === "meetings"
+                ? "bg-indigo-600 text-white shadow-md"
+                : "text-slate-550 dark:text-slate-400 hover:bg-slate-100 hover:text-slate-900 dark:text-white"
+            }`}
+          >
+            🏛️ Загальні збори ({memberMeetings.length})
+          </button>
+          <button
             onClick={() => setActiveTab("tickets")}
             className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
               activeTab === "tickets"
@@ -773,7 +870,7 @@ export default function ResidentDashboardPage() {
           >
             📂 Документи ({documents.length})
           </button>
-          {dashboard?.member?.is_board_member && (
+          {Boolean(dashboard?.member?.is_board_member || dashboard?.member?.is_board_chairman) && (
             <button
               onClick={() => setActiveTab("board")}
               className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
@@ -785,6 +882,7 @@ export default function ResidentDashboardPage() {
               🏛️ Правління ({boardIssues.length})
             </button>
           )}
+
         </div>
 
         {/* Tab Contents */}
@@ -792,8 +890,52 @@ export default function ResidentDashboardPage() {
           
           {/* Main Dashboard Tab */}
           {activeTab === "dashboard" && (
-            <section className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-3xl glass-panel p-6 shadow-sm">
+            <div className="space-y-4">
+              {/* Active General Meetings Announcement banner */}
+              {memberMeetings.filter(m => m.status === "voting" || m.status === "discussion").map(meeting => (
+                <div key={meeting.id} className="rounded-3xl border border-indigo-200 dark:border-indigo-950 bg-indigo-500/5 dark:bg-indigo-500/10 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                      🏛️ {meeting.status === "voting" ? "Голосування загальних зборів" : "Обговорення загальних зборів"}
+                    </span>
+                    <h3 className="text-base font-bold text-slate-800 dark:text-white mt-1.5">{meeting.title}</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-2xl">{meeting.description || "Порядок денний загальних зборів ОСББ."}</p>
+                    {meeting.end_date && (
+                      <p className="text-[11px] text-slate-400 font-semibold mt-1">📅 Термін: {meeting.start_date || '...'} — {meeting.end_date}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("meetings")}
+                    className="flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3.5 transition-all active:scale-95 whitespace-nowrap shadow-lg shadow-indigo-600/10"
+                  >
+                    Перейти до голосування
+                  </button>
+                </div>
+              ))}
+
+              {/* Active Board Workspace banner */}
+              {(dashboard?.member?.is_board_member || dashboard?.member?.is_board_chairman) &&
+                boardIssues.filter(i => i.status === "voting" || i.status === "discussion").map(issue => (
+                  <div key={issue.id} className="rounded-3xl border border-emerald-250 dark:border-emerald-950 bg-emerald-500/5 dark:bg-emerald-500/10 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                        ⚖️ Робоче питання правління
+                      </span>
+                      <h3 className="text-base font-bold text-slate-800 dark:text-white mt-1.5">{issue.title}</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-2xl">{issue.description || "Обговорення та голосування членів правління ОСББ."}</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab("board")}
+                      className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-5 py-3.5 transition-all active:scale-95 whitespace-nowrap shadow-lg shadow-emerald-600/10"
+                    >
+                      Відкрити робочий простір
+                    </button>
+                  </div>
+                ))
+              }
+
+              <section className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-3xl glass-panel p-6 shadow-sm">
                 <div className="mb-4 flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200 dark:text-white"><Gauge size={20} className="text-indigo-600 dark:text-indigo-400" /> Показання лічильників</div>
                 <div className="space-y-4">
                   {(dashboard?.meters || []).map((meter: any) => (
@@ -858,7 +1000,8 @@ export default function ResidentDashboardPage() {
                 </div>
               </div>
             </section>
-          )}
+          </div>
+        )}
 
           {/* Surveys Tab */}
           {activeTab === "surveys" && (
@@ -904,6 +1047,315 @@ export default function ResidentDashboardPage() {
                 ))}
                 {surveys.length === 0 && <div className="text-sm text-slate-500 dark:text-slate-400 font-semibold py-8 col-span-2 text-center">Активних опитувань немає.</div>}
               </div>
+            </div>
+          )}
+
+          {/* General Meetings (Загальні збори) Tab */}
+          {activeTab === "meetings" && (
+            <div className="rounded-3xl glass-panel p-6 shadow-sm space-y-6">
+              <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200 dark:text-white mb-2">
+                <BarChart3 size={20} className="text-indigo-600" /> Загальні збори та електронне голосування
+              </div>
+              
+              {meetingsLoading ? (
+                <div className="py-12 text-center text-slate-400">Завантаження загальних зборів...</div>
+              ) : memberMeetings.length === 0 ? (
+                <div className="text-sm text-slate-500 dark:text-slate-400 font-semibold py-12 text-center">
+                  Активних або завершених загальних зборів немає.
+                </div>
+              ) : (
+                <div className="grid gap-6">
+                  {memberMeetings.map((meeting) => (
+                    <div
+                      key={meeting.id}
+                      className="rounded-2xl border border-slate-250 dark:border-slate-800 p-5 bg-slate-50 dark:bg-slate-900/10 space-y-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                              meeting.status === "discussion"
+                                ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                                : meeting.status === "voting"
+                                ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                                : meeting.is_signed
+                                ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                                : "bg-green-500/10 text-green-500 border-green-500/20"
+                            }`}
+                          >
+                            {meeting.status === "discussion"
+                              ? "Обговорення"
+                              : meeting.status === "voting"
+                              ? "Голосування"
+                              : meeting.is_signed
+                              ? "Протокол підписано"
+                              : "Голосування завершено"}
+                          </span>
+                          {meeting.start_date && meeting.end_date && (
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              📅 {meeting.start_date} — {meeting.end_date}
+                            </span>
+                          )}
+                        </div>
+                        {meeting.has_voted && (
+                          <span className="text-xs font-black text-emerald-600 flex items-center gap-1">
+                            ✓ Ваш голос зараховано
+                          </span>
+                        )}
+                      </div>
+
+                      <div>
+                        <h3 className="font-extrabold text-slate-900 dark:text-white text-base">{meeting.title}</h3>
+                        {meeting.description && (
+                          <p className="mt-2 text-xs font-medium text-slate-550 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                            {meeting.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Voting form */}
+                      {meeting.status === "voting" && !meeting.has_voted && (
+                        <div className="space-y-4 pt-3 border-t border-slate-200 dark:border-slate-850">
+                          {member?.role === "tenant" ? (
+                            <div className="text-xs text-rose-650 font-semibold flex items-center gap-1">
+                              <AlertCircle size={14} /> Тільки власники квартир/приміщень мають право голосу на загальних зборах.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="space-y-4">
+                                {meeting.questions.map((q: any, qIdx: number) => (
+                                  <div key={q.id} className="p-4 rounded-xl bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-850 space-y-3">
+                                    <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                      {qIdx + 1}. {q.question_text}
+                                    </div>
+                                    <div className="flex gap-2">
+                                      {["yes", "no", "abstain"].map((val) => (
+                                        <button
+                                          key={val}
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedAnswers(prev => {
+                                              const meetingAns = prev[meeting.id] || {};
+                                              return {
+                                                ...prev,
+                                                [meeting.id]: {
+                                                  ...meetingAns,
+                                                  [q.id]: val
+                                                }
+                                              };
+                                            });
+                                          }}
+                                          className={`px-3 py-2 rounded-lg text-xs font-bold transition active:scale-95 flex-1 border ${
+                                            selectedAnswers[meeting.id]?.[q.id] === val
+                                              ? "bg-indigo-650 border-indigo-650 text-white shadow-sm"
+                                              : "bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100"
+                                          }`}
+                                        >
+                                          {val === "yes" ? "За" : val === "no" ? "Проти" : "Утримався"}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="pt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const answers = selectedAnswers[meeting.id] || {};
+                                    if (Object.keys(answers).length < meeting.questions.length) {
+                                      alert("Будь ласка, оберіть відповіді на всі питання порядку денного.");
+                                      return;
+                                    }
+                                    setVotingMeetingId(meeting.id);
+                                    if (certificates.length > 0) {
+                                      setVotingCertId(certificates[0].id);
+                                    }
+                                  }}
+                                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl font-bold text-xs shadow-md shadow-indigo-600/10 transition-all flex items-center justify-center gap-1.5"
+                                >
+                                  <Check size={15} /> Накласти підпис та проголосувати
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Download Protocol */}
+                      {meeting.status === "completed" && meeting.document_id && (
+                        <div className="pt-3 border-t border-slate-250 dark:border-slate-800 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-500">
+                            📄 Протокол підписано Головою зборів
+                          </span>
+                          <button
+                            onClick={() => downloadDocument(meeting.document_id, `Протокол_загальних_зборів_${meeting.id}.txt`)}
+                            className="px-4 py-2 border border-slate-200 dark:border-slate-850 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                          >
+                            <Download size={14} /> Завантажити протокол
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Digital signature modal */}
+              {votingMeetingId !== null && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
+                  <div className="w-full max-w-md rounded-3xl bg-slate-900 border border-slate-800 p-6 space-y-6 shadow-2xl relative">
+                    <button
+                      onClick={() => {
+                        setVotingMeetingId(null);
+                        setVotingPassword("");
+                        setShowMockSignature(null);
+                      }}
+                      className="absolute top-4 right-4 text-slate-500 hover:text-white"
+                    >
+                      <X size={20} />
+                    </button>
+
+                    <div className="text-center space-y-1.5">
+                      <h3 className="text-lg font-extrabold text-white">Вхід та підтвердження голосу</h3>
+                      <p className="text-xs text-slate-400">
+                        Оберіть зручний спосіб ідентифікації та накладання цифрового підпису
+                      </p>
+                    </div>
+
+                    {!showMockSignature ? (
+                      <div className="grid gap-3">
+                        <button
+                          onClick={() => {
+                            if (certificates.length === 0) {
+                              alert("У вас немає завантажених КЕП сертифікатів. Скористайтеся іншим методом або додайте їх у налаштуваннях.");
+                              return;
+                            }
+                            // Process KEP directly in modal
+                            setShowMockSignature(null);
+                          }}
+                          className="flex items-center gap-3 p-4 rounded-2xl bg-indigo-950/20 hover:bg-indigo-950/40 border border-indigo-500/20 text-left transition"
+                        >
+                          <Shield className="text-indigo-500 shrink-0" size={24} />
+                          <div>
+                            <div className="text-xs font-bold text-white">Власний КЕП / ЕЦП</div>
+                            <div className="text-[10px] text-slate-400">Використати сертифікат з вашого профілю</div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => setShowMockSignature("diia")}
+                          className="flex items-center gap-3 p-4 rounded-2xl bg-[#000000]/30 hover:bg-[#000000]/60 border border-slate-800 text-left transition"
+                        >
+                          <span className="text-lg font-black text-white shrink-0 w-6 text-center select-none">Дія</span>
+                          <div>
+                            <div className="text-xs font-bold text-white">Дія.Підпис</div>
+                            <div className="text-[10px] text-slate-400">Сканувати QR-код у додатку Дія</div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => setShowMockSignature("privat")}
+                          className="flex items-center gap-3 p-4 rounded-2xl bg-emerald-950/10 hover:bg-emerald-950/20 border border-emerald-500/10 text-left transition"
+                        >
+                          <span className="text-lg font-black text-emerald-500 shrink-0 w-6 text-center select-none">P24</span>
+                          <div>
+                            <div className="text-xs font-bold text-white">Приват24 / PrivatID</div>
+                            <div className="text-[10px] text-slate-400">Підтвердження через додаток Приват24</div>
+                          </div>
+                        </button>
+                      </div>
+                    ) : showMockSignature === "diia" ? (
+                      <div className="space-y-4 text-center py-2 flex flex-col items-center">
+                        <div className="w-40 h-40 bg-white border border-slate-350 p-2 rounded-2xl flex items-center justify-center">
+                          {/* QR-code mockup */}
+                          <div className="w-full h-full bg-slate-100 flex flex-col items-center justify-center p-2 rounded-xl text-[10px] font-black text-slate-800 uppercase tracking-widest border-2 border-dashed border-slate-300">
+                            <span>Дія.Підпис</span>
+                            <span className="mt-1 text-slate-400">QR-code</span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-400 px-4 leading-relaxed">
+                          Відкрийте сканер у додатку <strong>Дія</strong> та відскануйте цей код для підтвердження голосування
+                        </p>
+                        <button
+                          onClick={() => handleCastMeetingVote(votingMeetingId, true, "diia")}
+                          disabled={isCastingVote}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl font-bold text-xs shadow-md transition"
+                        >
+                          {isCastingVote ? "Підтвердження..." : "Імітувати успішне підписання Дія.Підписом"}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="space-y-3">
+                          <label className="block text-xs font-bold text-slate-400 uppercase">Введіть одноразовий OTP-код із додатка Приват24</label>
+                          <input
+                            type="text"
+                            placeholder="Код із повідомлення..."
+                            defaultValue="1938"
+                            className="w-full px-4 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-white text-center tracking-widest font-black"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 text-center">
+                          Вам надіслано пуш-повідомлення в Privat24 з кодом підтвердження
+                        </p>
+                        <button
+                          onClick={() => handleCastMeetingVote(votingMeetingId, true, "privat")}
+                          disabled={isCastingVote}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs shadow-md transition"
+                        >
+                          {isCastingVote ? "Перевірка..." : "Імітувати успішну верифікацію Приват24"}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Cert / KEP Form if no Diia/Privat selected and certificates exist */}
+                    {!showMockSignature && certificates.length > 0 && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleCastMeetingVote(votingMeetingId, true);
+                        }}
+                        className="space-y-4 pt-4 border-t border-slate-800"
+                      >
+                        <div className="space-y-3 text-left">
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-1">КЕП сертифікат</label>
+                            <select
+                              value={votingCertId || ""}
+                              onChange={(e) => setVotingCertId(Number(e.target.value))}
+                              className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-300 focus:outline-none"
+                            >
+                              {certificates.map((c) => (
+                                <option key={c.id} value={c.id}>{c.cert_owner_name} ({c.cert_serial})</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-1">Пароль захисту ключа</label>
+                            <input
+                              type="password"
+                              required
+                              value={votingPassword}
+                              onChange={(e) => setVotingPassword(e.target.value)}
+                              placeholder="Введіть пароль..."
+                              className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={isCastingVote}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl font-bold text-xs transition"
+                        >
+                          {isCastingVote ? "Підписання..." : "Підписати КЕП та проголосувати"}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

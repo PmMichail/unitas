@@ -887,19 +887,13 @@ export default function ProfilesScreen() {
           <Briefcase size={64} color={colors.textMuted} style={styles.emptyIcon} />
           <Text style={[styles.emptyText, { color: colors.text }]}>Не знайдено створених профілів</Text>
           <Text style={[styles.emptySub, { color: colors.textMuted }]}>
-            Створіть свій перший профіль ФОП або юридичної особи для нарахування податків.
+            Будь ласка, використовуйте веб-версію UniTax для додавання нових профілів ФОП або юридичних осіб.
           </Text>
-          <Button title="Додати профіль" onPress={handleOpenAdd} style={styles.emptyBtn} />
         </View>
       ) : (
         <>
           <View style={styles.topHeader}>
             <Text style={[styles.headerTitle, { color: colors.text }]}>Мої профілі</Text>
-            <Button
-              title="Додати профіль"
-              onPress={handleOpenAdd}
-              style={styles.headerAddBtn}
-            />
           </View>
           <FlatList
             data={profiles}
@@ -1248,9 +1242,10 @@ export default function ProfilesScreen() {
                   />
 
                   {/* Segmented Control for Profile Type */}
-                  <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Тип суб'єкта</Text>
-                  <View style={styles.segmentedContainer}>
+                  <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Тип суб'єкта {editingProfile && "(не можна змінити)"}</Text>
+                  <View style={[styles.segmentedContainer, editingProfile && { opacity: 0.6 }]}>
                     <Pressable
+                      disabled={!!editingProfile}
                       style={[
                         styles.segment,
                         type === 'fop' && { backgroundColor: colors.primary },
@@ -1267,6 +1262,7 @@ export default function ProfilesScreen() {
                       </Text>
                     </Pressable>
                     <Pressable
+                      disabled={!!editingProfile}
                       style={[
                         styles.segment,
                         type === 'company' && { backgroundColor: colors.primary },
@@ -1293,9 +1289,10 @@ export default function ProfilesScreen() {
                   )}
 
                   {/* Segmented Control for Tax System */}
-                  <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Система оподаткування</Text>
-                  <View style={styles.segmentedContainer}>
+                  <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Система оподаткування {editingProfile && "(не можна змінити)"}</Text>
+                  <View style={[styles.segmentedContainer, editingProfile && { opacity: 0.6 }]}>
                     <Pressable
+                      disabled={!!editingProfile}
                       style={[
                         styles.segment,
                         taxSystem === 'single_tax' && { backgroundColor: colors.primary },
@@ -1307,6 +1304,7 @@ export default function ProfilesScreen() {
                       </Text>
                     </Pressable>
                     <Pressable
+                      disabled={!!editingProfile}
                       style={[
                         styles.segment,
                         taxSystem === 'general_tax' && { backgroundColor: colors.primary },
@@ -1319,6 +1317,7 @@ export default function ProfilesScreen() {
                     </Pressable>
                     {type === 'company' && (
                       <Pressable
+                        disabled={!!editingProfile}
                         style={[
                           styles.segment,
                           taxSystem === 'non_profit' && { backgroundColor: colors.primary },
@@ -1336,9 +1335,9 @@ export default function ProfilesScreen() {
                   {taxSystem === 'non_profit' && (
                     <View style={styles.nonProfitContainer}>
                       <Text style={[styles.sectionLabel, { color: colors.textMuted, marginBottom: 8 }]}>
-                        Тип неприбуткової організації
+                        Тип неприбуткової організації {editingProfile && "(не можна змінити)"}
                       </Text>
-                      <View style={styles.subtypesGrid}>
+                      <View style={[styles.subtypesGrid, editingProfile && { opacity: 0.6 }]}>
                         {[
                           { key: 'osbb', label: 'ОСББ', code: '0046' },
                           { key: 'st', label: 'СТ', code: '0044' },
@@ -1348,6 +1347,7 @@ export default function ProfilesScreen() {
                         ].map((item) => (
                           <Pressable
                             key={item.key}
+                            disabled={!!editingProfile}
                             style={[
                               styles.subtypeSegment,
                               organizationSubtype === item.key && { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -1378,6 +1378,8 @@ export default function ProfilesScreen() {
                         onChangeText={setNonProfitCode}
                         keyboardType="number-pad"
                         maxLength={4}
+                        editable={!editingProfile}
+                        style={editingProfile && { opacity: 0.6 }}
                       />
                     </View>
                   )}
@@ -1385,11 +1387,12 @@ export default function ProfilesScreen() {
                   {/* Specific fields for Single Tax FOP */}
                   {type === 'fop' && taxSystem === 'single_tax' && (
                     <>
-                      <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Група єдиного податку</Text>
-                      <View style={styles.segmentedContainer}>
+                      <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Група єдиного податку {editingProfile && "(не можна змінити)"}</Text>
+                      <View style={[styles.segmentedContainer, editingProfile && { opacity: 0.6 }]}>
                         {[1, 2, 3].map((g) => (
                           <Pressable
                             key={g}
+                            disabled={!!editingProfile}
                             style={[
                               styles.segment,
                               group === g && { backgroundColor: colors.primary },
@@ -1418,6 +1421,8 @@ export default function ProfilesScreen() {
                       value={rate.toString()}
                       onChangeText={(val) => setRate(parseFloat(val) || 0)}
                       keyboardType="decimal-pad"
+                      editable={!editingProfile}
+                      style={editingProfile && { opacity: 0.6 }}
                     />
                   )}
 

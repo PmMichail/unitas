@@ -37,6 +37,7 @@ export default function Profiles() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [subscriptions, setSubscriptions] = useState<{ [key: number]: any }>({});
+  const [tariffs, setTariffs] = useState<any[]>([]);
 
   // Subscription wizard states
   const [modalStep, setModalStep] = useState<"details" | "plan" | "period">("details");
@@ -194,17 +195,21 @@ export default function Profiles() {
     }
   };
 
-  // Fetch pricing options
+  // Fetch pricing options and tariffs
   useEffect(() => {
-    const fetchPricing = async () => {
+    const fetchData = async () => {
       try {
-        const prices = await api.getPricing();
+        const [prices, tariffsData] = await Promise.all([
+          api.getPricing(),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs`).then(res => res.json())
+        ]);
         setPricingOptions(prices);
+        setTariffs(tariffsData || []);
       } catch (err) {
-        console.error("Failed to load pricing options:", err);
+        console.error("Failed to load pricing options or tariffs:", err);
       }
     };
-    fetchPricing();
+    fetchData();
   }, []);
 
   const getPriceVal = (period: "monthly" | "half_yearly" | "yearly") => {
@@ -586,7 +591,7 @@ export default function Profiles() {
   };
 
   // Form Fields State
-  const [formType, setFormType] = useState<"fop" | "company">("fop");
+  const [formType, setFormType] = useState<"fop" | "company" | "consulting">("fop");
   const [formName, setFormName] = useState("");
   const [formTaxId, setFormTaxId] = useState("");
   const [formTaxSystem, setFormTaxSystem] = useState("ednuy-3-5%");
@@ -920,16 +925,23 @@ export default function Profiles() {
                   <span 
                     onClick={() => handleOpenSubscriptionModal(profile)}
                     className={`text-xs font-semibold px-2 py-0.5 rounded-lg cursor-pointer hover:scale-[1.03] active:scale-95 transition-all select-none ${
-                      subscriptions[profile.id]?.plan === 'business' 
+                      subscriptions[profile.id]?.tariff_code || subscriptions[profile.id]?.plan === 'business' 
                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-500/20' 
                         : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-700/20'
                     }`}
                   >
-                    {subscriptions[profile.id]?.plan === 'business' ? 'Business' : 'Free'}
+                    {(() => {
+                      const sub = subscriptions[profile.id];
+                      if (sub?.tariff_code) {
+                        const tariff = tariffs.find((t: any) => t.code === sub.tariff_code);
+                        return tariff ? tariff.name_uk : sub.tariff_code;
+                      }
+                      return sub?.plan === 'business' ? 'Business' : 'Free';
+                    })()}
                   </span>
                 </div>
                 
-                {subscriptions[profile.id]?.plan === 'free' && (
+                {subscriptions[profile.id]?.plan === 'free' && !subscriptions[profile.id]?.tariff_code && (
                   <button 
                     onClick={() => handleOpenSubscriptionModal(profile)}
                     className="mt-3 w-full text-xs bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 py-1.5 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-950/50 transition-all font-semibold"
@@ -1202,7 +1214,7 @@ export default function Profiles() {
                       <label className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-bold mb-1.5 block">
                         Тип організації
                       </label>
-                      <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-800">
+                      <div className="grid grid-cols-3 gap-2 bg-slate-50 dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-800">
                         <button
                           type="button"
                           onClick={() => setFormType("fop")}
@@ -1213,7 +1225,7 @@ export default function Profiles() {
                           }`}
                         >
                           <User className="w-3.5 h-3.5" />
-                          ФОП (Фіз. особа)
+                          ФОП
                         </button>
                         <button
                           type="button"
@@ -1225,7 +1237,19 @@ export default function Profiles() {
                           }`}
                         >
                           <Building2 className="w-3.5 h-3.5" />
-                          ТОВ / Юр. особа
+                          ТОВ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormType("consulting")}
+                          className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                            formType === "consulting"
+                              ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/50 dark:border-slate-700/50"
+                              : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                          }`}
+                        >
+                          <Briefcase className="w-3.5 h-3.5" />
+                          Консалтинг
                         </button>
                       </div>
                     </div>

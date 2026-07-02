@@ -344,9 +344,31 @@ class DPSAPI:
             logger.error(f"[DPS FLOW] Complete flow failed: {e}")
             raise Exception(f"Помилка отримання даних ДПС: {str(e)}")
 
+    def _build_jkurwa_signature(self) -> str | None:
+        """Try to build signature using jkurwa (JKS-based). Returns None if no JKS stored."""
+        if not self.db or not self.profile_id:
+            return None
+        try:
+            from api.main import DPSJKSCredential, decrypt_token
+            jks_cred = self.db.query(DPSJKSCredential).filter(
+                DPSJKSCredential.profile_id == self.profile_id
+            ).first()
+            if not jks_cred:
+                return None
+            from services.jkurwa_signer import sign_with_jkurwa
+            password = decrypt_token(jks_cred.password_encrypted)
+            signature = sign_with_jkurwa(bytes(jks_cred.jks_data), password)
+            logger.info(f"[JKURWA] Signature built for profile_id={self.profile_id}, length={len(signature)}")
+            return signature
+        except Exception as e:
+            logger.warning(f"[JKURWA] Signature build failed: {e}")
+            return None
+
     async def _get_private_api_json(self, path: str, params: dict = None) -> Any:
-        cert_record = self._get_active_certificate()
-        auth_signature = self._build_authorization_signature(cert_record)
+        auth_signature = self._build_jkurwa_signature()
+        if not auth_signature:
+            cert_record = self._get_active_certificate()
+            auth_signature = self._build_authorization_signature(cert_record)
         headers = {
             "Authorization": auth_signature,
             "Accept": "application/json",

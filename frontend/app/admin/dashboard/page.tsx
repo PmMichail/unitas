@@ -21,7 +21,8 @@ import {
   Unlock,
   Send,
   MessageSquare,
-  RefreshCw
+  RefreshCw,
+  Plus
 } from "lucide-react";
 
 export default function AdminDashboard() {
@@ -36,7 +37,12 @@ export default function AdminDashboard() {
   const [statsPeriod, setStatsPeriod] = useState<"day" | "week" | "month">("day");
   const [pricing, setPricing] = useState<any[]>([]);
 
-  // Edit pricing states
+  // New Tariff System states
+  const [tariffs, setTariffs] = useState<any[]>([]);
+  const [residentTiers, setResidentTiers] = useState<any[]>([]);
+  const [editingTariff, setEditingTariff] = useState<any>(null);
+
+  // Legacy pricing states (will be removed)
   const [monthlyPriceInput, setMonthlyPriceInput] = useState<string>("299");
   const [halfYearlyPriceInput, setHalfYearlyPriceInput] = useState<string>("1499");
   const [yearlyPriceInput, setYearlyPriceInput] = useState<string>("2999");
@@ -61,6 +67,7 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [planFilter, setPlanFilter] = useState("");
   const [memberModuleFilter, setMemberModuleFilter] = useState("");
+  const [tariffFilter, setTariffFilter] = useState("");
 
   // Loading and Error states
   const [loading, setLoading] = useState(false);
@@ -72,6 +79,7 @@ export default function AdminDashboard() {
   const [editPaymentPeriod, setEditPaymentPeriod] = useState("monthly");
   const [editExpiresAt, setEditExpiresAt] = useState("");
   const [editIsMemberModuleActive, setEditIsMemberModuleActive] = useState(false);
+  const [editTariffCode, setEditTariffCode] = useState("");
 
   // Admin Profile Block & Delete states
   const [blockingProfile, setBlockingProfile] = useState<any | null>(null);
@@ -283,6 +291,77 @@ export default function AdminDashboard() {
     }
   }, [router]);
 
+  const fetchTariffs = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs`);
+      const data = await response.json();
+      setTariffs(data || []);
+      
+      // Initialize resident tiers from data
+      const residentTariff = data?.find((t: any) => t.code === "resident_module");
+      if (residentTariff?.additional_resident_tiers) {
+        setResidentTiers(residentTariff.additional_resident_tiers);
+      }
+    } catch (error) {
+      console.error("Failed to load tariffs:", error);
+    }
+  };
+
+  const updateTariff = async (code: string, updates: any) => {
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      Object.keys(updates).forEach(key => {
+        formData.append(key, updates[key]);
+      });
+      
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs/${code}`, {
+        method: "PUT",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+        fetchTariffs();
+      } else {
+        alert(data.detail || "Помилка оновлення тарифу");
+      }
+    } catch (error) {
+      alert("Помилка оновлення тарифу");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateResidentModule = async () => {
+    setLoading(true);
+    try {
+      const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+      if (!residentTariff) return;
+
+      const formData = new FormData();
+      formData.append("base_resident_count", editingTariff?.base_resident_count || residentTariff.base_resident_count);
+      formData.append("base_resident_price", editingTariff?.base_resident_price || residentTariff.base_resident_price);
+      formData.append("additional_resident_tiers", JSON.stringify(residentTiers));
+      
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs/resident_module`, {
+        method: "PUT",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+        fetchTariffs();
+      } else {
+        alert(data.detail || "Помилка оновлення модуля");
+      }
+    } catch (error) {
+      alert("Помилка оновлення модуля");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Load data based on active tab
   useEffect(() => {
     if (!token) return;
@@ -298,6 +377,7 @@ export default function AdminDashboard() {
           const data = await api.adminGetPayments(token);
           setPayments(data);
         } else if (activeTab === "pricing") {
+          await fetchTariffs();
           const data = await api.getPricing();
           setPricing(data);
           // Set inputs
@@ -347,6 +427,7 @@ export default function AdminDashboard() {
         (u.email || "").toLowerCase().includes(searchQuery.toLowerCase());
       
       const matchesPlan = planFilter ? u.plan === planFilter : true;
+      const matchesTariff = tariffFilter ? u.tariff_code === tariffFilter : true;
       
       let matchesModule = true;
       if (memberModuleFilter === "active") {
@@ -355,7 +436,7 @@ export default function AdminDashboard() {
         matchesModule = !u.is_member_module_active;
       }
       
-      return matchesSearch && matchesPlan && matchesModule;
+      return matchesSearch && matchesPlan && matchesTariff && matchesModule;
     });
   };
 
@@ -490,6 +571,7 @@ export default function AdminDashboard() {
     setEditPaymentPeriod(profile.payment_period || "monthly");
     setEditExpiresAt(profile.expires_at ? profile.expires_at.split(" ")[0] : "");
     setEditIsMemberModuleActive(profile.is_member_module_active || false);
+    setEditTariffCode(profile.tariff_code || "");
   };
 
   // Save customized subscription type/expires_at
@@ -505,7 +587,8 @@ export default function AdminDashboard() {
           plan_type: editPlanType,
           payment_period: editPaymentPeriod,
           expires_at: editExpiresAt || null,
-          is_member_module_active: editIsMemberModuleActive
+          is_member_module_active: editIsMemberModuleActive,
+          tariff_code: editTariffCode
         }, 
         token
       );
@@ -756,13 +839,14 @@ export default function AdminDashboard() {
                     />
                   </div>
                   <select
-                    value={planFilter}
-                    onChange={(e) => setPlanFilter(e.target.value)}
+                    value={tariffFilter}
+                    onChange={(e) => setTariffFilter(e.target.value)}
                     className="px-4 py-2 bg-slate-900/40 border border-slate-800 rounded-xl text-xs focus:outline-none focus:border-indigo-500 font-bold"
                   >
                     <option value="">Всі тарифи</option>
-                    <option value="free">Free</option>
-                    <option value="business">Business</option>
+                    {tariffs.map((t: any) => (
+                      <option key={t.code} value={t.code}>{t.name_uk}</option>
+                    ))}
                   </select>
                   <select
                     value={memberModuleFilter}
@@ -798,30 +882,54 @@ export default function AdminDashboard() {
                           <td className="p-4 text-slate-400 font-semibold">{u.email || "—"}</td>
                           <td className="p-4">
                             <div className="flex flex-col gap-1">
-                              <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
-                                u.plan === "business" 
-                                  ? u.demo_activated
-                                    ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
-                                    : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
-                                  : u.free_status === "downgraded_unpaid"
-                                    ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                                    : "bg-slate-800 text-slate-400"
-                              }`}>
-                                {u.demo_activated 
-                                  ? "business (пробний)" 
-                                  : u.plan === "business"
-                                    ? u.payment_period === "yearly"
-                                      ? "business (річна)"
-                                      : u.payment_period === "half_yearly"
-                                        ? "business (піврічна)"
-                                        : u.payment_period === "monthly"
-                                          ? "business (місячна)"
-                                          : "business"
+                              {u.tariff_code ? (
+                                (() => {
+                                  const tariff = tariffs.find((t: any) => t.code === u.tariff_code);
+                                  return tariff ? (
+                                    <>
+                                      <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                                        tariff.is_coming_soon
+                                          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                          : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                      }`}>
+                                        {tariff.name_uk}
+                                      </span>
+                                      {tariff.is_coming_soon && (
+                                        <span className="text-[9px] text-amber-500">Скоро</span>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded-md font-bold text-[10px] uppercase bg-slate-800 text-slate-400">
+                                      {u.tariff_code}
+                                    </span>
+                                  );
+                                })()
+                              ) : (
+                                <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                                  u.plan === "business" 
+                                    ? u.demo_activated
+                                      ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+                                      : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
                                     : u.free_status === "downgraded_unpaid"
-                                      ? "free (несплата)"
-                                      : u.plan}
-                              </span>
-                              {u.payment_period && u.plan === "business" && (
+                                      ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                      : "bg-slate-800 text-slate-400"
+                                }`}>
+                                  {u.demo_activated 
+                                    ? "business (пробний)" 
+                                    : u.plan === "business"
+                                      ? u.payment_period === "yearly"
+                                        ? "business (річна)"
+                                        : u.payment_period === "half_yearly"
+                                          ? "business (піврічна)"
+                                          : u.payment_period === "monthly"
+                                            ? "business (місячна)"
+                                            : "business"
+                                      : u.free_status === "downgraded_unpaid"
+                                        ? "free (несплата)"
+                                        : u.plan}
+                                </span>
+                              )}
+                              {u.payment_period && u.plan === "business" && !u.tariff_code && (
                                 <span className="text-[9px] text-slate-500">
                                   {u.payment_period === "monthly" ? "1 місяць" : u.payment_period === "half_yearly" ? "6 місяців" : "1 рік"}
                                 </span>
@@ -989,112 +1097,267 @@ export default function AdminDashboard() {
 
             {/* 3. PRICING TAB */}
             {activeTab === "pricing" && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                
-                {/* Monthly Configuration Card */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-indigo-500 font-black uppercase tracking-wider block">Тариф Business</span>
-                    <h3 className="text-lg font-bold text-white">Помісячна оплата (Business Monthly)</h3>
-                    <p className="text-xs text-slate-500">Вартість повного доступу за 30 календарних днів.</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        value={monthlyPriceInput}
-                        onChange={(e) => setMonthlyPriceInput(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
-                      />
-                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / міс</span>
-                    </div>
-                    <button
-                      onClick={() => handleUpdatePrice("monthly", monthlyPriceInput)}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
-                    >
-                      Оновити
-                    </button>
+              <div className="space-y-6">
+                {/* Base Tariffs Grid */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl">
+                  <h2 className="text-xl font-bold mb-4 text-white">Базові тарифи</h2>
+                  <div className="space-y-4">
+                    {tariffs
+                      .filter((t: any) => 
+                        ['fop_1_2', 'fop_3', 'non_profit', 'tov_general_vat', 'tov_ep', 'consulting_partner'].includes(t.code)
+                      )
+                      .map((tariff: any) => (
+                        <div key={tariff.id} className="flex items-center gap-4 p-4 bg-slate-900/30 rounded-xl border border-slate-800">
+                          <div className="flex-1">
+                            <div className="font-semibold text-white">
+                              {tariff.name_uk} ({tariff.code})
+                            </div>
+                            <div className="text-sm text-slate-500">
+                              {tariff.description || "Без опису"}
+                            </div>
+                          </div>
+                          <div className="w-32">
+                            <label className="block text-xs font-semibold mb-1 text-slate-400">
+                              Ціна (грн/міс)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={tariff.monthly_price}
+                              onChange={(e) => {
+                                const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], monthly_price: parseFloat(e.target.value) || 0 } };
+                                setEditingTariff(updated);
+                              }}
+                              min={0}
+                              step={10}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="w-32">
+                            <label className="block text-xs font-semibold mb-1 text-slate-400">
+                              6 міс (грн)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={tariff.half_yearly_price || tariff.monthly_price * 6}
+                              onChange={(e) => {
+                                const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], half_yearly_price: parseFloat(e.target.value) || 0 } };
+                                setEditingTariff(updated);
+                              }}
+                              min={0}
+                              step={10}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="w-32">
+                            <label className="block text-xs font-semibold mb-1 text-slate-400">
+                              Рік (грн)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={tariff.yearly_price || tariff.monthly_price * 12}
+                              onChange={(e) => {
+                                const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], yearly_price: parseFloat(e.target.value) || 0 } };
+                                setEditingTariff(updated);
+                              }}
+                              min={0}
+                              step={10}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <label className="block text-xs font-semibold mb-1 text-slate-400">
+                              Знижка 6 міс (%)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={tariff.half_yearly_discount || 0}
+                              onChange={(e) => {
+                                const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], half_yearly_discount: parseFloat(e.target.value) || 0 } };
+                                setEditingTariff(updated);
+                              }}
+                              min={0}
+                              max={50}
+                              step={1}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <label className="block text-xs font-semibold mb-1 text-slate-400">
+                              Знижка рік (%)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={tariff.yearly_discount || 0}
+                              onChange={(e) => {
+                                const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], yearly_discount: parseFloat(e.target.value) || 0 } };
+                                setEditingTariff(updated);
+                              }}
+                              min={0}
+                              max={50}
+                              step={1}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs font-semibold text-slate-400">
+                              Скоро
+                            </label>
+                            <button
+                              onClick={() => updateTariff(tariff.code, { is_coming_soon: !tariff.is_coming_soon })}
+                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                tariff.is_coming_soon ? "bg-indigo-600" : "bg-slate-700"
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                                  tariff.is_coming_soon ? "translate-x-5" : "translate-x-1"
+                                }`}
+                              />
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => {
+                              const updates: any = { 
+                                monthly_price: parseFloat((document.querySelector(`input[data-code="${tariff.code}"]`) as HTMLInputElement)?.value) || tariff.monthly_price,
+                                half_yearly_price: editingTariff?.[tariff.code]?.half_yearly_price || tariff.half_yearly_price || tariff.monthly_price * 6,
+                                yearly_price: editingTariff?.[tariff.code]?.yearly_price || tariff.yearly_price || tariff.monthly_price * 12,
+                                half_yearly_discount: editingTariff?.[tariff.code]?.half_yearly_discount || tariff.half_yearly_discount || 0,
+                                yearly_discount: editingTariff?.[tariff.code]?.yearly_discount || tariff.yearly_discount || 0
+                              };
+                              updateTariff(tariff.code, updates);
+                            }}
+                            disabled={loading}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                          >
+                            Оновити
+                          </button>
+                        </div>
+                      ))}
                   </div>
                 </div>
 
-                {/* Half-Yearly Configuration Card */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-amber-500 font-black uppercase tracking-wider block">Тариф Business</span>
-                    <h3 className="text-lg font-bold text-white">Піврічна оплата (Business Half-Yearly)</h3>
-                    <p className="text-xs text-slate-500">Вартість повного доступу за 180 календарних днів.</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        value={halfYearlyPriceInput}
-                        onChange={(e) => setHalfYearlyPriceInput(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
-                      />
-                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / 6 міс</span>
-                    </div>
-                    <button
-                      onClick={() => handleUpdatePrice("half_yearly", halfYearlyPriceInput)}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
-                    >
-                      Оновити
-                    </button>
-                  </div>
-                </div>
+                {/* Resident Module Batch Constructor */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl">
+                  <h2 className="text-xl font-bold mb-4 text-white">Модуль кабінету мешканців</h2>
+                  {(() => {
+                    const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+                    if (!residentTariff) return <div className="text-slate-500">Тариф не знайдено</div>;
+                    
+                    return (
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-semibold mb-2 text-slate-300">
+                              Базова кількість об'єктів
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={residentTariff.base_resident_count}
+                              onChange={(e) => setEditingTariff({ ...editingTariff, base_resident_count: parseInt(e.target.value) || 0 })}
+                              className="w-full px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-900 text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-semibold mb-2 text-slate-300">
+                              Базова ціна (грн)
+                            </label>
+                            <input
+                              type="number"
+                              defaultValue={residentTariff.base_resident_price}
+                              onChange={(e) => setEditingTariff({ ...editingTariff, base_resident_price: parseFloat(e.target.value) || 0 })}
+                              className="w-full px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-900 text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
 
-                {/* Yearly Configuration Card */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-emerald-500 font-black uppercase tracking-wider block">Тариф Business</span>
-                    <h3 className="text-lg font-bold text-white">Річна оплата (Business Yearly)</h3>
-                    <p className="text-xs text-slate-500">Вартість повного доступу за 365 календарних днів.</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        value={yearlyPriceInput}
-                        onChange={(e) => setYearlyPriceInput(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
-                      />
-                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / рік</span>
-                    </div>
-                    <button
-                      onClick={() => handleUpdatePrice("yearly", yearlyPriceInput)}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
-                    >
-                      Оновити
-                    </button>
-                  </div>
-                </div>
+                        <div>
+                          <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-semibold text-white">Додаткові пакети</h3>
+                            <button
+                              onClick={() => setResidentTiers([...residentTiers, { name: "Новий пакет", units: 10, price: 50 }])}
+                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Додати крок
+                            </button>
+                          </div>
+                          <div className="space-y-3">
+                            {residentTiers.map((tier, index) => (
+                              <div key={index} className="flex items-center gap-3 p-3 bg-slate-900/30 rounded-lg border border-slate-800">
+                                <div className="flex-1">
+                                  <label className="block text-xs font-semibold mb-1 text-slate-400">
+                                    Назва
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={tier.name}
+                                    onChange={(e) => {
+                                      const updated = [...residentTiers];
+                                      updated[index].name = e.target.value;
+                                      setResidentTiers(updated);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </div>
+                                <div className="w-24">
+                                  <label className="block text-xs font-semibold mb-1 text-slate-400">
+                                    + Об'єктів
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={tier.units}
+                                    onChange={(e) => {
+                                      const updated = [...residentTiers];
+                                      updated[index].units = parseInt(e.target.value) || 0;
+                                      setResidentTiers(updated);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </div>
+                                <div className="w-24">
+                                  <label className="block text-xs font-semibold mb-1 text-slate-400">
+                                    Ціна (грн)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={tier.price}
+                                    onChange={(e) => {
+                                      const updated = [...residentTiers];
+                                      updated[index].price = parseFloat(e.target.value) || 0;
+                                      setResidentTiers(updated);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </div>
+                                <button
+                                  onClick={() => setResidentTiers(residentTiers.filter((_, i) => i !== index))}
+                                  className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-                {/* Resident Cabinet Module Configuration Card */}
-                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl space-y-4">
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-rose-500 font-black uppercase tracking-wider block">Модуль кабінету мешканця</span>
-                    <h3 className="text-lg font-bold text-white">Помісячна оплата (Resident Cabinet)</h3>
-                    <p className="text-xs text-slate-500">Вартість щомісячної підписки на особистий кабінет для мешканців ОСББ.</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        value={residentCabinetPriceInput}
-                        onChange={(e) => setResidentCabinetPriceInput(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl text-sm font-semibold focus:outline-none"
-                      />
-                      <span className="absolute right-4 top-3 text-slate-500 text-xs font-bold">UAH / міс</span>
-                    </div>
-                    <button
-                      onClick={() => handleUpdatePrice("resident_cabinet", residentCabinetPriceInput)}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-indigo-600/10"
-                    >
-                      Оновити
-                    </button>
-                  </div>
+                        <button
+                          onClick={updateResidentModule}
+                          disabled={loading}
+                          className="w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold transition-colors flex items-center justify-center gap-2"
+                        >
+                          {loading ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              Оновлення...
+                            </>
+                          ) : (
+                            "Оновити модуль оплат"
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
-
               </div>
             )}
 
@@ -1571,27 +1834,46 @@ export default function AdminDashboard() {
 
             <form onSubmit={handleSaveSubscription} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Тарифний план</label>
-                {selectedProfileForSub.tax_system === "non_profit" || selectedProfileForSub.organization_subtype === "osbb" || selectedProfileForSub.organization_subtype === "st" ? (
-                  <select
-                    value={editPlanType}
-                    onChange={(e) => setEditPlanType(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
-                  >
-                    <option value="free">Безкоштовно (Free)</option>
-                    <option value="basic">Бізнес (Business) — 299 грн/міс</option>
-                  </select>
-                ) : (
-                  <select
-                    value={editPlanType}
-                    onChange={(e) => setEditPlanType(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
-                  >
-                    <option value="free">Free (Безкоштовно)</option>
-                    <option value="business">Business (Платний)</option>
-                  </select>
-                )}
+                <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Тарифний план (новий)</label>
+                <select
+                  value={editTariffCode}
+                  onChange={(e) => setEditTariffCode(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
+                >
+                  <option value="">Без тарифу (legacy)</option>
+                  {tariffs.map((t: any) => (
+                    <option key={t.code} value={t.code}>
+                      {t.name_uk} - {t.monthly_price} грн/міс
+                      {t.is_coming_soon && " (Скоро)"}
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              {!editTariffCode && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">Legacy тарифний план</label>
+                  {selectedProfileForSub.tax_system === "non_profit" || selectedProfileForSub.organization_subtype === "osbb" || selectedProfileForSub.organization_subtype === "st" ? (
+                    <select
+                      value={editPlanType}
+                      onChange={(e) => setEditPlanType(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
+                    >
+                      <option value="free">Безкоштовно (Free)</option>
+                      <option value="basic">Бізнес (Business) — 299 грн/міс</option>
+                    </select>
+                  ) : (
+                    <select
+                      value={editPlanType}
+                      onChange={(e) => setEditPlanType(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold focus:outline-none text-slate-900 dark:text-white"
+                    >
+                      <option value="free">Free (Безкоштовно)</option>
+                      <option value="business">Business (Платний)</option>
+                    </select>
+                  )}
+                </div>
+              )}
 
               {(editPlanType === "business" || editPlanType === "basic" || editPlanType === "premium") && (
                 <div className="space-y-1.5">

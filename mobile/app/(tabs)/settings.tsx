@@ -246,25 +246,7 @@ export default function SettingsScreen() {
           </View>
         </Card>
 
-        {/* Transition to website Card */}
-        <Card style={styles.card}>
-          <View style={styles.row}>
-            <Globe size={24} color={colors.primary} style={styles.settingIcon} />
-            <View style={styles.textContainer}>
-              <Text style={[styles.infoTitle, { color: colors.text }]}>Веб-сайт UniTax</Text>
-              <Text style={[styles.infoDesc, { color: colors.textMuted, marginBottom: 8 }]}>
-                На нашому веб-сайті доступно більше функцій, включаючи повний кабінет, завантаження звітів, рахунки, акти та правову інформацію.
-              </Text>
-              <Button
-                title="Перейти на unitax.pro"
-                onPress={() => Linking.openURL('https://unitax.pro')}
-                variant="outline"
-                style={{ borderColor: colors.primary }}
-                textStyle={{ color: colors.primary }}
-              />
-            </View>
-          </View>
-        </Card>
+
 
         {/* Logout Button */}
         <Button

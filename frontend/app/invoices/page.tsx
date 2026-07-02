@@ -215,6 +215,7 @@ export default function InvoicesList() {
   const [isSendConfirmOpen, setIsSendConfirmOpen] = useState(false);
   const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
   const [sendIncludeAct, setSendIncludeAct] = useState(true);
+  const [generateOnly, setGenerateOnly] = useState(false);
   const [sendingInvoice, setSendingInvoice] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<number | null>(null);
 
@@ -412,9 +413,10 @@ export default function InvoicesList() {
     }
   };
 
-  const handleOpenSendConfirm = (id: number, includeAct: boolean) => {
+  const handleOpenSendConfirm = (id: number, includeAct: boolean, genOnly: boolean = false) => {
     setTargetInvoiceId(id);
     setSendIncludeAct(includeAct);
+    setGenerateOnly(genOnly);
     setIsSendConfirmOpen(true);
   };
 
@@ -426,8 +428,14 @@ export default function InvoicesList() {
       const dayParam = rec ? rec.send_day : undefined;
       const monthParam = rec ? rec.send_month : undefined;
       
-      await api.sendInvoiceNow(targetInvoiceId, dayParam, monthParam, sendIncludeAct);
-      alert("Рахунок успішно згенеровано та надіслано клієнту!");
+      await api.sendInvoiceNow(targetInvoiceId, dayParam, monthParam, sendIncludeAct, !generateOnly);
+      if (generateOnly) {
+        alert("Рахунок" + (sendIncludeAct ? " та акт" : "") + " успішно згенеровано! Ви перенаправлені до списку рахунків для підписання КЕП.");
+        setActiveTab("list");
+        fetchInvoices();
+      } else {
+        alert("Рахунок успішно згенеровано та надіслано клієнту!");
+      }
       setIsSendConfirmOpen(false);
       fetchRecurringInvoices();
     } catch (err: any) {
@@ -1495,35 +1503,47 @@ export default function InvoicesList() {
                         </div>
                       </div>
                       
-                      <div className="flex gap-2 pt-3.5 border-t border-slate-800/80">
-                        <button
-                          onClick={() => handleOpenSendConfirm(item.id, false)}
-                          className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-450 hover:text-white rounded-lg text-[10px] font-bold transition-all text-center"
-                        >
-                          Надіслати зараз
-                        </button>
-                        {item.include_act && (
+                      <div className="flex flex-col gap-2 pt-3.5 border-t border-slate-800/80">
+                        <div className="flex gap-2 w-full">
                           <button
-                            onClick={() => handleOpenSendConfirm(item.id, true)}
-                            className="flex-[1.2] py-1.5 bg-indigo-650/20 hover:bg-indigo-650/30 border border-indigo-500/20 text-indigo-400 hover:text-indigo-350 rounded-lg text-[10px] font-bold transition-all text-center"
+                            onClick={() => handleOpenSendConfirm(item.id, false, false)}
+                            className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-450 hover:text-white rounded-lg text-[10px] font-bold transition-all text-center"
                           >
-                            Надіслати рахунок + акт
+                            Надіслати зараз
                           </button>
-                        )}
-                        <button
-                          onClick={() => handleEditRecurringInvoice(item)}
-                          className="p-1.5 border border-slate-850 hover:border-indigo-500/20 text-slate-500 hover:text-indigo-405 hover:bg-indigo-500/5 rounded-lg transition-all"
-                          title="Редагувати шаблон"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteRecurringInvoice(item.id)}
-                          className="p-1.5 border border-slate-850 hover:border-rose-500/20 text-slate-500 hover:text-rose-450 hover:bg-rose-500/5 rounded-lg transition-all"
-                          title="Видалити шаблон"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                          {item.include_act && (
+                            <button
+                              onClick={() => handleOpenSendConfirm(item.id, true, false)}
+                              className="flex-[1.2] py-1.5 bg-indigo-650/20 hover:bg-indigo-650/30 border border-indigo-500/20 text-indigo-400 hover:text-indigo-350 rounded-lg text-[10px] font-bold transition-all text-center"
+                            >
+                              Надіслати рахунок + акт
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex gap-2 w-full items-center">
+                          <button
+                            onClick={() => handleOpenSendConfirm(item.id, item.include_act, true)}
+                            className="flex-1 py-1.5 bg-emerald-650/10 hover:bg-emerald-650/20 border border-emerald-500/20 text-emerald-400 hover:text-emerald-350 rounded-lg text-[10px] font-bold transition-all text-center flex items-center justify-center gap-1.5"
+                            title="Згенерувати рахунок та акт в чернетки без надсилання на email, щоб підписати їх КЕП"
+                          >
+                            <Shield className="w-3.5 h-3.5" />
+                            Згенерувати для підпису
+                          </button>
+                          <button
+                            onClick={() => handleEditRecurringInvoice(item)}
+                            className="p-1.5 border border-slate-850 hover:border-indigo-500/20 text-slate-500 hover:text-indigo-405 hover:bg-indigo-500/5 rounded-lg transition-all"
+                            title="Редагувати шаблон"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRecurringInvoice(item.id)}
+                            className="p-1.5 border border-slate-850 hover:border-rose-500/20 text-slate-500 hover:text-rose-450 hover:bg-rose-500/5 rounded-lg transition-all"
+                            title="Видалити шаблон"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1539,9 +1559,14 @@ export default function InvoicesList() {
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
             <div>
-              <h3 className="text-lg font-bold text-slate-100">Підтвердження ручного запуску регулярного платежу</h3>
+              <h3 className="text-lg font-bold text-slate-100">
+                {generateOnly ? "Генерація документів регулярного платежу" : "Підтвердження ручного запуску регулярного платежу"}
+              </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Буде негайно згенеровано та надіслано рахунок (та супутній Акт/Накладну, якщо вибрано) на email клієнта.
+                {generateOnly 
+                  ? "Буде згенеровано рахунок (та супутній Акт/Накладну, якщо вибрано) без відправки клієнту, щоб ви могли спочатку підписати їх КЕП."
+                  : "Буде негайно згенеровано та надіслано рахунок (та супутній Акт/Накладну, якщо вибрано) на email клієнта."
+                }
               </p>
             </div>
 
@@ -1572,10 +1597,10 @@ export default function InvoicesList() {
                 {sendingInvoice ? (
                   <>
                     <Loader2 className="w-4.5 h-4.5 animate-spin" />
-                    <span>Надсилання...</span>
+                    <span>{generateOnly ? "Генерація..." : "Надсилання..."}</span>
                   </>
                 ) : (
-                  <span>Надіслати зараз</span>
+                  <span>{generateOnly ? "Згенерувати" : "Надіслати зараз"}</span>
                 )}
               </button>
             </div>

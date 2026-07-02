@@ -852,12 +852,14 @@ export const api = {
     id: number,
     customDay?: number,
     customMonth?: number,
-    includeAct?: boolean
+    includeAct?: boolean,
+    sendEmail?: boolean
   ) => {
     const data: any = {};
     if (customDay !== undefined && customDay !== null) data.custom_day = customDay;
     if (customMonth !== undefined && customMonth !== null) data.custom_month = customMonth;
     if (includeAct !== undefined && includeAct !== null) data.include_act = includeAct;
+    if (sendEmail !== undefined && sendEmail !== null) data.send_email = sendEmail;
     
     const formData = toFormData(data);
     const response = await client.post(`/api/invoices/send-now/${id}`, formData);
@@ -1041,8 +1043,21 @@ export const api = {
     });
     return response.data;
   },
-  sendSubscriptionInvoice: async (data: { profile_id: number; plan_type: string; payment_period: string; email: string }) => {
+  sendSubscriptionInvoice: async (data: { profile_id: number; plan_type: string; payment_period: string; email: string; amount?: number; tariff_code?: string }) => {
     const response = await client.post("/api/subscriptions/send-invoice", data);
+    return response.data;
+  },
+  downloadSubscriptionInvoicePDF: async (params: { profile_id: number; plan_type: string; payment_period: string; amount?: number; tariff_code?: string }) => {
+    const response = await client.get("/api/subscriptions/download-invoice-pdf", {
+      params,
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+  downloadPaymentPDF: async (paymentId: number) => {
+    const response = await client.get(`/api/payments/${paymentId}/pdf`, {
+      responseType: 'blob'
+    });
     return response.data;
   },
   sendPasswordToEmail: async (email: string) => {
@@ -1408,6 +1423,65 @@ export const api = {
     });
     return response.data;
   },
+  // General Meetings (Загальні збори)
+  getMeetings: async (token?: string, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.get("/api/meetings", {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  createMeeting: async (token: string | undefined, data: { title: string; description?: string; start_date?: string; end_date?: string; questions: string[] }, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post("/api/meetings", data, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  startMeetingVoting: async (token: string | undefined, meetingId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/meetings/${meetingId}/start-voting`, null, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  endMeetingVoting: async (token: string | undefined, meetingId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/meetings/${meetingId}/end-voting`, null, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  signMeetingProtocol: async (token: string | undefined, meetingId: number, data: { password?: string; certificate_id?: number }, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/meetings/${meetingId}/sign`, data, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  deleteMeeting: async (token: string | undefined, meetingId: number, profileId?: number) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.delete(`/api/meetings/${meetingId}`, {
+      headers,
+      params: profileId ? { profile_id: profileId } : undefined
+    });
+    return response.data;
+  },
+  getMemberMeetings: async (token?: string) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.get("/api/member/meetings", { headers });
+    return response.data;
+  },
+  voteMemberMeeting: async (token: string | undefined, meetingId: number, data: { votes: { question_id: number; vote_value: string }[]; signature_data?: string; is_signed?: boolean }) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    const response = await client.post(`/api/member/meetings/${meetingId}/vote`, data, { headers });
+    return response.data;
+  },
   // Announcements
   getAnnouncements: async (profileId: number) => {
     const response = await client.get(`/api/profiles/${profileId}/announcements`);
@@ -1760,7 +1834,28 @@ export const taxCabinetApi = {
   deleteDpsStatement: async (profileId: number, recordedAt: string) => {
     const response = await client.delete(`/api/dps/statements?profile_id=${profileId}&recorded_at=${encodeURIComponent(recordedAt)}`);
     return response.data;
-  }
+  },
+  uploadJks: async (profileId: number, file: File, password: string, certFile?: File) => {
+    const formData = new FormData();
+    formData.append("profile_id", String(profileId));
+    formData.append("password", password);
+    formData.append("file", file);
+    if (certFile) {
+      formData.append("cert_file", certFile);
+    }
+    const response = await client.post("/api/dps/upload-jks", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  },
+  getJksStatus: async (profileId: number) => {
+    const response = await client.get(`/api/dps/jks-status/${profileId}`);
+    return response.data;
+  },
+  deleteJks: async (profileId: number) => {
+    const response = await client.delete(`/api/dps/jks/${profileId}`);
+    return response.data;
+  },
 };
 
 export const legislationApi = {

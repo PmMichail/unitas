@@ -52,7 +52,7 @@ def get_main_menu_keyboard():
     keyboard = [
         ["📊 Дашборд", "📁 Мої дані"],
         ["📤 Завантажити виписку", "🧾 Рахунки"],
-        ["👥 Працівники", "➕ Додати підприємство"],
+        ["👥 Працівники"],
         ["📊 Податковий аналіз", "💵 Сплата податків"],
         ["📥 Експорт даних", "🔏 Підписати документи"],
         ["❓ Допомога"]
@@ -80,21 +80,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Бекенд недоступний або користувача немає
         pass
 
-    keyboard = [
-        [
-            InlineKeyboardButton("ФОП (Фізична особа-підприємець)", callback_data="fop"),
-            InlineKeyboardButton("ТОВ (Підприємство)", callback_data="llc"),
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
-        "👋 Вітаємо в **UniTax** — вашому універсальному податковому AI-асистенті!\n\n"
-        "Давайте проведемо швидке налаштування вашого профілю.\n"
-        "Оберіть ваш тип платника податків:",
-        reply_markup=reply_markup
+        "👋 Вітаємо в **UniTax**!\n\n"
+        "Реєстрація компаній та ФОП здійснюється виключно на нашому веб-сайті **www.unitax.pro**.\n"
+        "Будь ласка, зареєструйтеся на сайті та підключіть цей Telegram-бот у розділі налаштувань вашої компанії."
     )
-    return CHOOSING_TYPE
+    return ConversationHandler.END
 
 async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробка вибору типу платника."""
@@ -926,19 +917,11 @@ async def employees_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_profile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Початок додавання нового профілю."""
-    keyboard = [
-        [
-            InlineKeyboardButton("ФОП (Фізична особа-підприємець)", callback_data="add_p_fop"),
-            InlineKeyboardButton("ТОВ (Підприємство)", callback_data="add_p_llc"),
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "📝 **Додавання нового профілю**\n\n"
-        "Оберіть тип підприємства:",
-        reply_markup=reply_markup
+        "Створення нових профілів компаній або ФОП здійснюється виключно на нашому веб-сайті **www.unitax.pro**."
     )
-    return P_CHOOSING_TYPE
+    return ConversationHandler.END
 
 async def add_profile_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробка вибору типу профілю."""
@@ -2362,8 +2345,7 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await invoices_cmd(update, context)
     elif text == "👥 Працівники":
         await employees_cmd(update, context)
-    elif text == "➕ Додати підприємство":
-        return await add_profile_start(update, context)
+
     elif text == "📊 Податковий аналіз":
         await tax_analysis_cmd(update, context)
     elif text == "💵 Сплата податків":
@@ -3429,8 +3411,7 @@ def main() -> None:
 
     add_profile_conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("add_profile", add_profile_start),
-            MessageHandler(filters.Text(["➕ Додати підприємство"]), add_profile_start)
+            CommandHandler("add_profile", add_profile_start)
         ],
         states={
             P_CHOOSING_TYPE: [CallbackQueryHandler(add_profile_type, pattern="^add_p_")],
@@ -3549,11 +3530,10 @@ def main() -> None:
             "📤 Завантажити виписку", 
             "🧾 Рахунки", 
             "👥 Працівники", 
-            "➕ Додати підприємство",
-            "📊 Податковий аналіз",
-            "💵 Сплата податків",
-            "📥 Експорт даних",
-            "🔏 Підписати документи",
+            "📊 Податковий аналіз", 
+            "💵 Сплата податків", 
+            "📥 Експорт даних", 
+            "🔏 Підписати документи", 
             "❓ Допомога"
         ]), 
         handle_menu_click

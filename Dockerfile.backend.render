@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     fonts-dejavu-core \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
@@ -14,6 +17,10 @@ RUN pip install psycopg2-binary==2.9.9
 
 COPY backend/ .
 RUN ln -s . backend
+
+RUN if [ -f dps-nodejs/package.json ]; then \
+    cd dps-nodejs && npm install --production && echo "[OK] dps-nodejs packages installed"; \
+    fi
 
 EXPOSE 8000
 

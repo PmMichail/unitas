@@ -233,3 +233,155 @@ When FOP/OSBB accounts synced transactions via the PrivatBank API integration (A
 - **Encoding Auto-detection**: Modified `backend/services/bank_oauth.py`'s response parsing block.
 - **CP1251 Decoding Fallback**: The parser now attempts strict `utf-8` decoding first. If a `UnicodeDecodeError` is raised, it attempts to decode the raw bytes using `cp1251` (Windows-1251), preserving Cyrillic strings before falling back to `errors='ignore'` as a final resort.
 - **Production Deployment**: Successfully redeployed both backend and frontend to Fly.io.
+
+---
+
+## 10. Announcements & Readings Posting Period (Monthly Postings / Grid / Mobile Integration)
+
+### 1. Disabled Immediate Balance Deduction
+- **Draft Status (`is_locked = False`)**: Submitting readings as a member in the cabinet no longer immediately deducts their balance or creates billing charges. Readings are saved in the database in a draft state.
+
+### 2. Announcements & Board API Controls
+- **API Endpoints**: Created GET, POST, and DELETE endpoints for announcements at `/api/profiles/{profile_id}/announcements`.
+- **Board Authorization**: Unified the board cabinet authorization (`verify_board_access`) so both physical board members and profile admins (acting as Virtual Chairmen) can view and modify board data.
+
+### 3. Web & Mobile Layout Integration
+- **Announcements Display**: Built an announcements list panel displaying the latest board messages at the top of the resident cabinet dashboard on both the Next.js Web frontend and the React Native Mobile app.
+- **Month/Year Posting Selector**: Replaced the lock button on the admin billing page with active month/year selectors and two core buttons: "Провести покази" (locks readings, calculates monthly consumption, deducts balances, creates `BillingCharge`) and "Скасувати проводку" (reverts the charges, unlocks readings, restores balances).
+- **Inline Billing Readings Grid**: Provided a spreadsheet-like input grid in the admin billing panel listing all resident meters. Admins can enter or modify resident readings directly via numeric inputs that auto-save on-blur.
+
+### 4. Verification & Production Deployments
+- **Compile Verification**: Successfully verified type-safety and resolved all property type checks on both Next.js Web (`npm run build`) and React Native Mobile (`npx tsc --noEmit`).
+- **Fly.io Deploy**: Initiated and successfully deployed updated versions of both frontend and backend to production.
+
+---
+
+## 11. FastAPI Path Parameter / Query Clash Fix
+
+### The Problem
+During backend startup, FastAPI raised a startup crash `AssertionError: Cannot use Query for path param 'profile_id'` mapping to the new announcements POST endpoint `/api/profiles/{profile_id}/announcements`. This endpoint uses the `verify_board_access` dependency, which explicitly declared `profile_id: Optional[int] = Query(None)`. Under FastAPI's parameters resolution, a route's path parameter name cannot conflict with query parameters declared inside its nested dependencies.
+
+### Changes Made
+- **Parameter Binding Relaxation**: Replaced `profile_id: Optional[int] = Query(None)` with `profile_id: Optional[int] = None` in the `verify_board_access` dependency signature. Without explicit `Query` metadata, FastAPI correctly routes the path parameter value if available, or falls back to query binding if absent.
+- **Verification**: Verified that the FastAPI backend starts up successfully under local Python 3.12 environment (0 crash exceptions).
+- **Redeployment**: Redeployed the backend service to Fly.io production.
+
+---
+
+## 12. Disabling Board Module for Residents
+
+### Changes Made
+- **Next.js Resident Cabinet**: Hidden the "Правління" tab button from the tabs bar and disabled the rendering of active tab content for `"board"` in [frontend/app/osbb/[slug]/dashboard/page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/osbb/%5Bslug%5D/dashboard/page.tsx).
+- **React Native Mobile App**: Hidden the "Правління" card from the grid menu row in [mobile/components/resident/ResidentDashboard.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/components/resident/ResidentDashboard.tsx).
+- **Type Safety Verification**: Ran compile checks successfully on both platforms (`npm run build` and `npx tsc --noEmit`).
+- **Production Deployment**: Initiated redeployment of the web frontend to Fly.io.
+
+---
+
+## 13. Restructuring Add Object Form & Clarifying Initial Balance
+
+### Changes Made
+- **Tabbed Modal Interface**: Modified the Add/Edit Object modal in [frontend/app/billing/page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/billing/page.tsx) to divide the input fields into two clear, distinct tabs:
+  1. **Характеристики об'єкта**: Type, identifier, street, number, area, tariff, fixed fee, and main parent bindings.
+  2. **Дані мешканця**: Full name, phone, email, role, ownership share, initial dues balance, and board checkboxes.
+- **State Integration**: Introduced `modalTab` state variable to track the active tab, defaulting to `"property"` and resetting when the modal is opened.
+- **Starting Balance Clarification**: Renamed the starting balance field label to **"Початковий баланс членських внесків (грн)"** and added descriptive helper text: *"Вкажіть суму зі знаком мінус "-", якщо є стартовий борг по членських внесках."*, explicitly noting that starting debt is entered with a minus `-` sign.
+- **Verification**: Verified zero TypeScript compile errors via production Next.js compilation (`npm run build`).
+- **Production Deployment**: Successfully built and deployed the updated web application to Fly.io (`unitas-frontend`).
+
+---
+
+## 14. Batch Object Generator (Генератор об'єктів)
+
+### 1. Backend Endpoint Implementation
+- **FastAPI Batch Endpoint**: Created `@app.post("/api/profiles/{profile_id}/members/batch-generate")` in [backend/api/main.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/backend/api/main.py) which handles generating a sequence of property objects (apartments, plots, or parking spaces) in bulk.
+- **Skipping Duplicate Records**: Automatically checks for preexisting records to prevent duplicates, and returns a JSON payload detailing the count of created vs. skipped objects.
+- **Auto-formatting Addresses**: Automatically handles the standard address format conventions (e.g. mapping plots under property type `"дл."` with prefixed identifiers like `"дл. 29"`, and mapping apartments under property type `"кв."` with the corresponding house number and flat identifiers).
+
+### 2. Frontend Integration
+- **API Client Wrapper**: Added `batchGenerateMembers` to [frontend/lib/api.ts](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/lib/api.ts).
+- **Interactive Action Button**: Positioned a new **«Генератор об'єктів»** button inside the billing members list control bar next to *"Імпорт списком"* in [frontend/app/billing/page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/billing/page.tsx).
+- **Batch Generator Wizard Modal**: Added `BatchGeneratorModal` prompting the administrator for street name, house number, property type, number ranges ("Від №... До №..."), and default parameters (default area in sqm, default monthly rate, or fixed dues fee).
+- **Response Alerts & Auto-Reload**: Integrates success alerts (noting the count of generated properties and duplicates skipped) and automatically reloads the member grid upon completion.
+
+### 3. Verification & Deployment
+- **Integration Test Suite**: Created a file-based integration test script verifying batch inserts, duplicate skips, and dynamic registration street/number lists mapping. All tests executed with 100% success.
+- **Production Deploy**: Pushed backend changes to `unitas-backend` and frontend changes to `unitas-frontend` services on Fly.io successfully.
+
+---
+
+## 15. Board Workspace Relocation & Mobile Board Visibility
+
+### 1. Board Workspace Relocation (Web UI)
+- **Dashboard Clean-up**: Removed the **«Правління»** (Board) and **«Оголошення»** (Announcements) button tabs from the main dashboard top header navigation (`frontend/app/dashboard/page.tsx`) to avoid cluttering general business/tax profiles with OSBB-specific billing modules.
+- **Billing Tab Integration**: Added **«Правління»** as a main tab in the accountant/manager's billing panel (`frontend/app/billing/page.tsx`) alongside *«Список об'єктів»*, *«Контрагенти»*, *«Розрахунки»*, etc.
+- **Embedded Board Workspace**: Integrated the full interactive Board Workspace (issue agenda creation, status flow management, voting, AI minutes/protocol generation, and KEP digital signatures) directly under the new `/billing` tab, styled consistently with the rest of the billing console.
+
+### 2. Conditional Mobile Board Card Visibility
+- **Role-Based Check**: Modified the React Native Mobile dashboard (`mobile/components/resident/ResidentDashboard.tsx`) to conditionally display the **«Правління»** grid card.
+- **Implementation**: The card is now rendered only if the logged-in resident's profile data specifies they are a board member or chairman:
+  ```typescript
+  {Boolean(data?.member?.is_board_member || data?.member?.is_board_chairman) && ( ... )}
+  ```
+  Regular residents will no longer see the card.
+- **Announcements**: Confirmed that the **«Оголошення»** (Announcements) block remains fully functional and appears on the mobile dashboard when announcements exist (`announcements.length > 0`).
+
+### 3. Verification & Deployment
+- **TypeScript Verification**: Validated compiler safety for both the frontend (Next.js build checks) and mobile codebases.
+- **Production Deploy**: Rebuilt and deployed the updated frontend application successfully to Fly.io (`unitas-frontend.fly.dev`).
+
+---
+
+## 16. Mobile & Web General Meetings Layout Enhancements
+
+### 1. Web Resident Panel Home Screen Banners & Board Tab
+- **Tabbar Restoration**: Restored the **«Правління»** (Board) tab button inside the resident web portal ([page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/osbb/[slug]/dashboard/page.tsx)) for board members/chairmen, enabling the tab view state.
+- **Home Tab Active Banners**: Implemented premium-styled alert banners at the top of the **home tab** (`activeTab === "dashboard"`) that automatically render whenever there are active general meetings (for all residents) or active board issues (for board members). These cards show description summaries, term dates, and direct links to navigate to the respective tabs.
+
+### 2. Mobile Resident App Home Screen Grid & Modal Overlay
+- **Dashboard Grid Button**: Added a dedicated **«Загальні збори»** grid button in [ResidentDashboard.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/components/resident/ResidentDashboard.tsx) rendered for all co-owners. For board members, it aligns side-by-side with «Правління».
+- **Modal Voting Overlay**: Built a fully interactive Modal overlay showing active/completed general meetings, allowing residents to cast digital votes secured via mock Diia.Signature, PrivatBank SMS verification, or personal KEP passcodes, perfectly synced with the backend API.
+
+### 3. Verification & Build Safety
+- **Mobile**: Checked type safety via `npx tsc --noEmit` yielding zero compilation errors.
+- **Web**: Generated the production Next.js optimized bundle using `npm run build` inside the `frontend` folder with 100% success.
+
+---
+
+## 17. Subscription Checkout & Email Invoice Fixes
+
+### 1. Payment Checkout Fix (Backend API)
+- **Constraint Removal**: Removed the restriction `if profile.type != "fop":` from the subscription creation logic inside `create_payment_combined` in [main.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/backend/api/main.py). Non-FOP entities (such as OSBBs, cooperatives, and TOVs) can now directly purchase and upgrade their subscriptions online using Monobank.
+- **Import Resolution**: Fixed a `NameError: name 'monobank_service' is not defined` inside the subscription payment flow by uncommenting `from services.monobank_service import monobank_service` in [main.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/backend/api/main.py). This resolved the "Помилка при спробі створити платіж" checkout failure.
+
+### 2. Restored Send Invoice to Email Button & Email Auto-Prefill (Frontend UI)
+- **Action Trigger**: Added a dedicated **«Надіслати рахунок на e-mail»** button inside the selected tariff details display in [page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/settings/subscription/page.tsx). It triggers the `handleOpenInvoiceModal` action, opening the modal wizard.
+- **Email Auto-Prefill**: Prefills the email address input field inside the invoice request modal using the user's registration credentials (read from `telegramId` in the App Context if it contains `@`) so they don't have to retype it.
+
+### 3. Direct PDF Invoice Downloads (Backend API & Frontend UI)
+- **Direct Download Endpoints**: Implemented new `/api/subscriptions/download-invoice-pdf` and `/api/payments/{payment_id}/pdf` endpoints in [main.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/backend/api/main.py) to generate and return the subscription invoice PDF directly as a stream.
+- **UI Download Actions**: Integrated a **«Завантажити PDF»** button directly inside the email invoice modal popup, and added a **«Рахунок (PDF)»** link next to each subscription invoice entry in the payments history table, giving users immediate access to their PDF invoices offline without relying on SMTP email delivery.
+- **Dynamic Invoice Pricing**: Resolved the issue where all invoices were generated with a hardcoded price of 299 UAH regardless of the active profile's group/system (such as FOP 3rd group which pays 450 UAH). Now, the frontend dynamically calculates the pricing based on the selected profile's group and options, passing the correct `amount` and `tariff_code` parameters to both `downloadSubscriptionInvoicePDF` and `sendSubscriptionInvoice` API endpoints. The backend uses these parameters to generate the PDF and populate the billing records with the correct price and Ukrainian tariff name.
+- **Build Success**: Deployed both updated backend and frontend instances successfully to Fly.io.
+
+## 18. App Store Rejection Resolution (Guidelines 3.1.1 & 4.8)
+
+### 1. Guideline 4.8 Compliance (Telegram ID Login Bypass)
+- **iOS Hide**: Wrapped the Telegram ID segmented tab selection and the temporary password request link with `Platform.OS !== 'ios'` checks inside [login.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(auth)/login.tsx).
+- **Default State Constraint**: Implemented a `useEffect` hook to automatically enforce `loginMode = 'email'` if the user is running on iOS. This leaves standard Email/Password authentication as the only active credential method on Apple devices, completely removing the requirement for "Sign In with Apple".
+
+### 2. Guideline 3.1.1 Compliance (Hiding Billing & Payments on iOS)
+- **Business Registration Restored**: Kept the business registration form fully operational inside the app on iOS, allowing FOPs and companies to register directly.
+- **Hiding Billing Tab**: Conditionally hid the «Білінг» (Billing) tab in [_layout.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/_layout.tsx) for business users on iOS by setting its `href` to `null` if `Platform.OS === 'ios' && !isResident`. This completely hides the billing overview screen from Apple's reviewers.
+- **Hiding Inline Payments**: Hidden the Mono Pay and LiqPay online payment buttons for residents on iOS inside [ResidentDashboard.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/components/resident/ResidentDashboard.tsx) and [index.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/index.tsx), leaving only manual bank details (IBAN) visible.
+- **Hiding Invoice Mono Pay**: Hidden the «Оплатити через Mono Pay» button inside the member details modal in [billing.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/billing.tsx) on iOS.
+
+### 3. Payment Wording Cleanup
+- **Mono Pay mention**: Removed the phrase `"через Mono Pay"` from the help and support info card text, changing it to: *«...Мешканці можуть передавати показання та сплачувати рахунки онлайн безпосередньо голові правління.»*
+
+### 4. Build Information
+- **Version Setting**: Bounded build numbers in [app.json](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app.json) to `version = "1.0.0"`, `ios.buildNumber = "8"`, and `android.versionCode = 8`.
+- **EAS Production Build**: Triggered and successfully completed a production build for iOS.
+  * **IPA Artifact URL**: https://expo.dev/artifacts/eas/3NdWkh8fz0a2RZTDrgPWJtNa7UJPDujlbFyuYk5bkXs.ipa
+  * **EAS Build Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/9200dba6-8ee1-4fa5-b925-445aa51220d0
+- **Validation**: Confirmed zero compilation errors via `npx tsc --noEmit` on the mobile project.

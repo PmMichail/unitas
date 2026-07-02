@@ -180,6 +180,8 @@ const servicesDetailMap: Record<string, {
 export default function BenefitsPage() {
   const { telegramId } = useApp();
   const [businessPrice, setBusinessPrice] = useState<number | null>(null);
+  const [tariffs, setTariffs] = useState<any[]>([]);
+  const [loadingTariffs, setLoadingTariffs] = useState(true);
   
   // Modal Window States
   const [selectedService, setSelectedService] = useState<string | null>(null);
@@ -214,6 +216,25 @@ export default function BenefitsPage() {
       }
     };
     fetchPricing();
+  }, []);
+
+  useEffect(() => {
+    const fetchTariffs = async () => {
+      try {
+        const res = await fetch("https://unitas-backend.fly.dev/api/tariffs");
+        if (res.ok) {
+          const data = await res.json();
+          // Sort by monthly price (smaller first)
+          const sorted = data.sort((a: any, b: any) => a.monthly_price - b.monthly_price);
+          setTariffs(sorted);
+        }
+      } catch (err) {
+        console.error("Failed to fetch tariffs", err);
+      } finally {
+        setLoadingTariffs(false);
+      }
+    };
+    fetchTariffs();
   }, []);
 
   const openServiceModal = (e: React.MouseEvent, id: string) => {
@@ -570,6 +591,65 @@ export default function BenefitsPage() {
               </Link>
             </div>
           </div>
+        </div>
+
+        {/* Tariff Plans Section */}
+        <div className="space-y-8">
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-800 dark:text-white">
+              Тарифні плани
+            </h2>
+            <p className="text-xs text-slate-500 max-w-lg mx-auto">
+              Оберіть оптимальний тариф для вашого бізнесу
+            </p>
+          </div>
+
+          {!loadingTariffs && tariffs.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {tariffs.map((tariff) => (
+                  <div
+                    key={tariff.id}
+                    className="group relative p-4 bg-white dark:bg-slate-950/30 border-2 border-slate-200 dark:border-white/10 hover:border-indigo-500 dark:hover:border-indigo-500 rounded-3xl transition-all duration-500 hover:scale-[1.03] hover:-translate-y-1.5 shadow-sm hover:shadow-2xl hover:shadow-indigo-500/10 dark:hover:shadow-indigo-500/15 flex flex-col justify-between overflow-hidden"
+                  >
+                    {/* Decorative Glow Layer */}
+                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-3xl pointer-events-none" />
+                    
+                    <div className="relative space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div className="w-10 h-10 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-white/5 rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform duration-300">
+                          💼
+                        </div>
+                        <Shield className="w-4 h-4 text-indigo-500 opacity-50 group-hover:opacity-100 group-hover:rotate-6 transition-all duration-300" />
+                      </div>
+                      <div className="space-y-1 text-left">
+                        <h3 className="font-extrabold text-slate-800 dark:text-white text-sm group-hover:text-indigo-650 dark:group-hover:text-indigo-400 transition-colors">
+                          {tariff.name_uk}
+                        </h3>
+                        <p className="text-slate-500 dark:text-slate-450 text-[10px] leading-relaxed line-clamp-2">
+                          {tariff.description}
+                        </p>
+                      </div>
+                      <div className="pt-1">
+                        <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                          {tariff.monthly_price} грн
+                        </div>
+                        <p className="text-[9px] text-slate-400 dark:text-slate-500">на місяць</p>
+                      </div>
+                    </div>
+
+                    <div className="relative pt-3">
+                      <Link
+                        href="/register"
+                        className="w-full py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-indigo-650 hover:from-indigo-400 hover:to-indigo-550 text-white text-[10px] font-bold text-center transition-all shadow-md shadow-indigo-600/10 hover:scale-[1.01] flex items-center justify-center gap-1.5"
+                      >
+                        <span>Створити профіль</span>
+                        <ArrowRight className="w-2.5 h-2.5" />
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
 
       </main>

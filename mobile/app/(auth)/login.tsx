@@ -313,6 +313,34 @@ export default function LoginScreen() {
     }
   };
 
+  const handleTestLogin = async () => {
+    setEmailInput('test@unitax.pro');
+    setPasswordInput('123456');
+    setLoginMode('email');
+    
+    setLoading(true);
+    try {
+      setIsTelegramLogin(false);
+      const response = await login('test@unitax.pro', '123456');
+      if (response.status === 'verification_required') {
+        setVerificationEmail('test@unitax.pro');
+        setVerificationModalVisible(true);
+      } else if (response.status === 'success') {
+        if (isBiometricSupported) {
+          await setBiometricPreference(useBioPref);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(
+        'Помилка входу',
+        e.message || 'Не вдалося увійти в тестовий акаунт.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRequestTempPassword = async () => {
     if (!emailInput.trim()) {
       Alert.alert('Помилка', 'Будь ласка, спочатку введіть ваш Email.');
@@ -704,24 +732,24 @@ export default function LoginScreen() {
 
                 {!isRegister ? (
                   <>
-                    <View style={styles.segmentedContainer}>
-                      <Pressable
-                        style={[styles.segment, loginMode === 'email' && { backgroundColor: colors.primary }]}
-                        onPress={() => setLoginMode('email')}
-                      >
-                        <Text style={[styles.segmentText, loginMode === 'email' && { color: '#ffffff' }, { color: colors.text }]}>
-                          Email / Пароль
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.segment, loginMode === 'telegram' && { backgroundColor: colors.primary }]}
-                        onPress={() => setLoginMode('telegram')}
-                      >
-                        <Text style={[styles.segmentText, loginMode === 'telegram' && { color: '#ffffff' }, { color: colors.text }]}>
-                          Telegram ID
-                        </Text>
-                      </Pressable>
-                    </View>
+                      <View style={styles.segmentedContainer}>
+                        <Pressable
+                          style={[styles.segment, loginMode === 'email' && { backgroundColor: colors.primary }]}
+                          onPress={() => setLoginMode('email')}
+                        >
+                          <Text style={[styles.segmentText, loginMode === 'email' && { color: '#ffffff' }, { color: colors.text }]}>
+                            Email / Пароль
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.segment, loginMode === 'telegram' && { backgroundColor: colors.primary }]}
+                          onPress={() => setLoginMode('telegram')}
+                        >
+                          <Text style={[styles.segmentText, loginMode === 'telegram' && { color: '#ffffff' }, { color: colors.text }]}>
+                            Telegram ID
+                          </Text>
+                        </Pressable>
+                      </View>
 
                     {loginMode === 'email' ? (
                       <>
@@ -741,14 +769,14 @@ export default function LoginScreen() {
                           secureTextEntry
                           autoCapitalize="none"
                         />
-                        <Pressable
-                          onPress={handleRequestTempPassword}
-                          style={{ marginTop: 2, marginBottom: 12, alignSelf: 'flex-end' }}
-                        >
-                          <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' }}>
-                            Увійти за допомогою коду Telegram
-                          </Text>
-                        </Pressable>
+                          <Pressable
+                            onPress={handleRequestTempPassword}
+                            style={{ marginTop: 2, marginBottom: 12, alignSelf: 'flex-end' }}
+                          >
+                            <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '600', textDecorationLine: 'underline' }}>
+                              Увійти за допомогою коду Telegram
+                            </Text>
+                          </Pressable>
                       </>
                     ) : (
                       <>
@@ -803,11 +831,18 @@ export default function LoginScreen() {
                       />
                     )}
 
-                    <Pressable style={styles.toggleModeBtn} onPress={() => setIsRegister(true)}>
-                      <Text style={[styles.toggleModeText, { color: colors.primary }]}>
-                        Немає акаунта? Зареєструватися
+                    <Button
+                      title="Тестовий вхід (Демо)"
+                      onPress={handleTestLogin}
+                      variant="outline"
+                      style={[styles.secondaryBtn, { marginTop: 8, borderColor: '#10b981' }]}
+                    />
+
+                    <View style={{ marginTop: 20, alignItems: 'center', paddingHorizontal: 10 }}>
+                      <Text style={{ fontSize: 13, color: '#64748b', textAlign: 'center', lineHeight: 18 }}>
+                        Реєстрація компаній та ФОП здійснюється на нашому веб-сайті. Створіть акаунт на веб-сайті, щоб увійти в мобільний додаток.
                       </Text>
-                    </Pressable>
+                    </View>
                   </>
                 ) : (
                   <>
@@ -1224,7 +1259,7 @@ export default function LoginScreen() {
             <View style={styles.infoTextContainer}>
               <Text style={[styles.infoTitle, { color: colors.text }]}>Потрібна допомога?</Text>
               <Text style={[styles.infoText, { color: colors.textMuted }]}>
-                UniTax дозволяє швидко управляти підприємствами та вести облік внесків ОСББ. Мешканці можуть передавати показання та сплачувати рахунки безпосередньо голові правління через Mono Pay.
+                UniTax дозволяє швидко управляти підприємствами та вести облік внесків ОСББ. Мешканці можуть передавати показання та сплачувати рахунки онлайн безпосередньо голові правління.
               </Text>
             </View>
           </Card>

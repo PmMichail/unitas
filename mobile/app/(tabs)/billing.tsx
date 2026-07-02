@@ -1722,7 +1722,7 @@ export default function BillingScreen() {
                           {selectedMemberDetails.member.balance.toLocaleString('uk-UA')} ₴
                         </Text>
                       </View>
-                      {selectedMemberDetails.member.balance < 0 ? (
+                      {selectedMemberDetails.member.balance < 0 && Platform.OS !== 'ios' ? (
                         <Button
                           title={payingMono ? "Створення рахунку..." : "Оплатити через Mono Pay"}
                           onPress={() => handlePayMonoInvoice(selectedMemberDetails.member)}

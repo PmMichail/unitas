@@ -137,6 +137,32 @@ export default function Dashboard() {
 
   const fopLimit = getFopLimit(dashboardData?.group || selectedProfile?.group);
 
+  const getDpsValue = (taxType: string) => {
+    if (!dashboardData?.dps_info?.settlements) return { debt: 0, overpaid: 0, paid: 0, found: false };
+    const settlements = dashboardData.dps_info.settlements;
+    let matched = settlements.find((s: any) => {
+      const name = s.tax_name.toLowerCase();
+      const code = s.tax_code || "";
+      if (taxType === "unified_tax") {
+        return name.includes("єдиний податок") || name.includes("єп") || code.includes("18050400") || code.includes("18050300");
+      }
+      if (taxType === "esv") {
+        return name.includes("соціальний") || name.includes("єсв") || code.includes("71040000") || code.includes("71010000");
+      }
+      if (taxType === "military_tax") {
+        return name.includes("військовий") || name.includes("вз") || code.includes("11011700") || code.includes("11011800") || code.includes("11011000") || code.includes("11011001");
+      }
+      if (taxType === "pit") {
+        return name.includes("пдфо") || name.includes("доходи фізичних") || code.includes("11010100") || code.includes("11010500");
+      }
+      return false;
+    });
+    if (matched) {
+      return { debt: matched.debt, overpaid: matched.overpaid, paid: matched.paid, found: true };
+    }
+    return { debt: 0, overpaid: 0, paid: 0, found: false };
+  };
+
   // AI Legislation monitor states
   const [legislationChanges, setLegislationChanges] = useState<any[]>([]);
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
@@ -776,6 +802,18 @@ export default function Dashboard() {
             >
               Переваги
             </Link>
+            <Link 
+              href="/marketplace" 
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
+            >
+              Маркетплейс
+            </Link>
+            <Link 
+              href="/consulting/dashboard" 
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
+            >
+              Консалтинг
+            </Link>
           </nav>
 
           <div className="flex items-center space-x-3">
@@ -1096,6 +1134,91 @@ export default function Dashboard() {
                     </p>
                   </div>
                 </div>
+
+                {/* Comparison Card: Unitas vs DPS */}
+                {dashboardData?.dps_info && (
+                  <div className="p-6 rounded-2xl glass-panel mb-8 border border-indigo-500/10">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                      <div className="flex items-center space-x-2">
+                        <ShieldAlert className="w-5 h-5 text-indigo-400" />
+                        <h3 className="text-lg font-bold text-white">Порівняльний аналіз: Сайт vs ДПС</h3>
+                      </div>
+                      <span className="text-slate-400 text-xs font-semibold bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800/80">
+                        Оновлено з ДПС: {new Date(dashboardData.dps_info.recorded_at).toLocaleDateString("uk-UA")}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm text-slate-300">
+                        <thead className="text-xs uppercase bg-slate-950/40 text-slate-400 rounded-lg">
+                          <tr>
+                            <th className="px-4 py-3 rounded-l-lg">Податок / Збір</th>
+                            <th className="px-4 py-3 text-center">Розрахунок сайту (по виписках)</th>
+                            <th className="px-4 py-3 text-center rounded-r-lg">Дані кабінету ДПС (офіційні)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/40">
+                          {[
+                            { id: "unified_tax", name: "Єдиний податок" },
+                            { id: "esv", name: "Єдиний соціальний внесок (ЄСВ)" },
+                            { id: "military_tax", name: "Військовий збір" },
+                            { id: "pit", name: "ПДФО (прибутковий податок)" }
+                          ].map((tax) => {
+                            const uDue = tax.id === "unified_tax" ? dashboardData.tax_due :
+                                          tax.id === "esv" ? dashboardData.esv_due :
+                                          tax.id === "military_tax" ? dashboardData.military_tax_due :
+                                          dashboardData.pit_due;
+                            const uPaid = tax.id === "unified_tax" ? dashboardData.ep_paid :
+                                          tax.id === "esv" ? dashboardData.esv_paid :
+                                          tax.id === "military_tax" ? dashboardData.mil_paid :
+                                          dashboardData.pit_paid;
+                            const uDiff = tax.id === "unified_tax" ? dashboardData.ep_diff :
+                                          tax.id === "esv" ? dashboardData.esv_diff :
+                                          tax.id === "military_tax" ? dashboardData.mil_diff :
+                                          dashboardData.pit_diff;
+
+                            const dps = getDpsValue(tax.id);
+
+                            return (
+                              <tr key={tax.id} className="hover:bg-slate-900/10 transition-colors">
+                                <td className="px-4 py-4 font-semibold text-white">{tax.name}</td>
+                                <td className="px-4 py-4 text-center">
+                                  <div className="space-y-1">
+                                    <div className="text-xs text-slate-400">Нараховано: <span className="text-white font-semibold">{uDue?.toLocaleString("uk-UA")} грн</span></div>
+                                    <div className="text-xs text-slate-400">Сплачено: <span className="text-emerald-400 font-semibold">{uPaid?.toLocaleString("uk-UA")} грн</span></div>
+                                    {uDiff > 0 ? (
+                                      <div className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded inline-block">Борг: {uDiff?.toLocaleString("uk-UA")} грн</div>
+                                    ) : (
+                                      <div className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded inline-block">✅ Сплачено</div>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-4 text-center">
+                                  {dps.found ? (
+                                    <div className="space-y-1">
+                                      {dps.overpaid > 0 && (
+                                        <div className="text-xs text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded inline-block">Переплата: {dps.overpaid?.toLocaleString("uk-UA")} грн</div>
+                                      )}
+                                      {dps.debt > 0 && (
+                                        <div className="text-xs text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded inline-block">Борг: {dps.debt?.toLocaleString("uk-UA")} грн</div>
+                                      )}
+                                      {dps.debt === 0 && dps.overpaid === 0 && (
+                                        <div className="text-xs text-slate-400 bg-slate-800/40 px-2 py-0.5 rounded inline-block">Закрито (0.00 грн)</div>
+                                      )}
+                                      <div className="text-[10px] text-slate-500 mt-1">Остання сплата: {dps.paid?.toLocaleString("uk-UA")} грн</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-slate-500">Немає даних</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* Sub-grid: Upload + Calendar */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

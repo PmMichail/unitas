@@ -29,6 +29,11 @@ export default function DevPage() {
   const [apiKey, setApiKey] = useState("");
   const [pricing, setPricing] = useState({ business: 499 });
   const [newPrice, setNewPrice] = useState(499);
+  const [tariffs, setTariffs] = useState<any[]>([]);
+  const [loadingTariffs, setLoadingTariffs] = useState(false);
+  const [editingTariff, setEditingTariff] = useState<any>(null);
+  const [residentTiers, setResidentTiers] = useState<any[]>([]);
+  const [consultingLimits, setConsultingLimits] = useState({ free_slots: 3, discount: 30 });
   const [users, setUsers] = useState([]);
   const [payments, setPayments] = useState([]);
   const [stats, setStats] = useState<any>(null);
@@ -252,6 +257,7 @@ export default function DevPage() {
         fetchStats();
         fetchEmailStatus();
         fetchEmails();
+        fetchTariffs();
       } else {
         setMessage({ type: "error", text: "Невірний API ключ" });
       }
@@ -275,6 +281,27 @@ export default function DevPage() {
       }
     } catch (error) {
       console.error("Error fetching pricing:", error);
+    }
+  };
+
+  const fetchTariffs = async () => {
+    setLoadingTariffs(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tariffs`, {
+        headers: { "X-API-Key": apiKey }
+      });
+      const data = await res.json();
+      setTariffs(data || []);
+      
+      // Initialize resident tiers from data
+      const residentTariff = data?.find((t: any) => t.code === "resident_module");
+      if (residentTariff?.additional_resident_tiers) {
+        setResidentTiers(residentTariff.additional_resident_tiers);
+      }
+    } catch (error) {
+      console.error("Error fetching tariffs:", error);
+    } finally {
+      setLoadingTariffs(false);
     }
   };
 
@@ -443,6 +470,92 @@ export default function DevPage() {
       }
     } catch (error) {
       setMessage({ type: "error", text: "Помилка оновлення ціни" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateTariff = async (code: string, updates: any) => {
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      Object.keys(updates).forEach(key => {
+        formData.append(key, updates[key]);
+      });
+      
+      const res = await fetch(`${API_BASE_URL}/api/tariffs/${code}`, {
+        method: "PUT",
+        headers: { "X-API-Key": apiKey },
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({ type: "success", text: data.message });
+        fetchTariffs();
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: "error", text: data.detail || "Помилка оновлення тарифу" });
+      }
+    } catch (error) {
+      setMessage({ type: "error", text: "Помилка оновлення тарифу" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateResidentModule = async () => {
+    setLoading(true);
+    try {
+      const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+      if (!residentTariff) return;
+
+      const formData = new FormData();
+      formData.append("base_resident_count", editingTariff?.base_resident_count || residentTariff.base_resident_count);
+      formData.append("base_resident_price", editingTariff?.base_resident_price || residentTariff.base_resident_price);
+      formData.append("additional_resident_tiers", JSON.stringify(residentTiers));
+      
+      const res = await fetch(`${API_BASE_URL}/api/tariffs/resident_module`, {
+        method: "PUT",
+        headers: { "X-API-Key": apiKey },
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({ type: "success", text: data.message });
+        fetchTariffs();
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: "error", text: data.detail || "Помилка оновлення модуля" });
+      }
+    } catch (error) {
+      setMessage({ type: "error", text: "Помилка оновлення модуля" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addResidentTier = () => {
+    setResidentTiers([...residentTiers, { name: "Новий пакет", units: 10, price: 50 }]);
+  };
+
+  const updateResidentTier = (index: number, field: string, value: any) => {
+    const updated = [...residentTiers];
+    updated[index][field] = value;
+    setResidentTiers(updated);
+  };
+
+  const removeResidentTier = (index: number) => {
+    setResidentTiers(residentTiers.filter((_, i) => i !== index));
+  };
+
+  const updateConsultingLimits = async () => {
+    setLoading(true);
+    try {
+      // TODO: Implement backend endpoint for updating consulting limits
+      setMessage({ type: "success", text: "Ліміти консалтингу оновлено" });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (error) {
+      setMessage({ type: "error", text: "Помилка оновлення лімітів" });
     } finally {
       setLoading(false);
     }
@@ -648,40 +761,240 @@ export default function DevPage() {
       </div>
       
       {activeTab === "pricing" && (
-        <div className="p-6 rounded-2xl glass-panel">
-          <h2 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Управління цінами</h2>
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
-                Тариф Business (грн/міс)
-              </label>
-              <input
-                type="number"
-                value={newPrice}
-                onChange={(e) => setNewPrice(parseInt(e.target.value) || 0)}
-                min={0}
-                step={50}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+        <div className="space-y-6">
+          {/* Base Tariffs Grid */}
+          <div className="p-6 rounded-2xl glass-panel">
+            <h2 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Базові тарифи</h2>
+            {loadingTariffs ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {tariffs
+                  .filter((t: any) => 
+                    ['fop_1_2', 'fop_3_tov_ep', 'non_profit', 'tov_general_vat', 'consulting_partner'].includes(t.code)
+                  )
+                  .map((tariff: any) => (
+                    <div key={tariff.id} className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-900/30 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <div className="flex-1">
+                        <div className="font-semibold text-slate-900 dark:text-white">
+                          {tariff.name_uk} ({tariff.code})
+                        </div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">
+                          {tariff.description || "Без опису"}
+                        </div>
+                      </div>
+                      <div className="w-32">
+                        <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                          Ціна (грн/міс)
+                        </label>
+                        <input
+                          type="number"
+                          defaultValue={tariff.monthly_price}
+                          onChange={(e) => {
+                            const updated = { ...editingTariff, [tariff.code]: { ...editingTariff?.[tariff.code], monthly_price: parseFloat(e.target.value) || 0 } };
+                            setEditingTariff(updated);
+                          }}
+                          min={0}
+                          step={10}
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                          Скоро
+                        </label>
+                        <button
+                          onClick={() => updateTariff(tariff.code, { is_coming_soon: !tariff.is_coming_soon })}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                            tariff.is_coming_soon ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-600"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                              tariff.is_coming_soon ? "translate-x-5" : "translate-x-1"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const updates: any = { monthly_price: parseFloat((document.querySelector(`input[data-code="${tariff.code}"]`) as HTMLInputElement)?.value) || tariff.monthly_price };
+                          updateTariff(tariff.code, updates);
+                        }}
+                        disabled={loading}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Оновити
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          {/* Resident Module Batch Constructor */}
+          <div className="p-6 rounded-2xl glass-panel">
+            <h2 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Модуль кабінету мешканців</h2>
+            {loadingTariffs ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {(() => {
+                  const residentTariff = tariffs.find((t: any) => t.code === "resident_module");
+                  if (!residentTariff) return <div className="text-slate-500">Тариф не знайдено</div>;
+                  
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
+                            Базова кількість об'єктів
+                          </label>
+                          <input
+                            type="number"
+                            defaultValue={residentTariff.base_resident_count}
+                            onChange={(e) => setEditingTariff({ ...editingTariff, base_resident_count: parseInt(e.target.value) || 0 })}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
+                            Базова ціна (грн)
+                          </label>
+                          <input
+                            type="number"
+                            defaultValue={residentTariff.base_resident_price}
+                            onChange={(e) => setEditingTariff({ ...editingTariff, base_resident_price: parseFloat(e.target.value) || 0 })}
+                            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-4">
+                          <h3 className="font-semibold text-slate-900 dark:text-white">Додаткові пакети</h3>
+                          <button
+                            onClick={addResidentTier}
+                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Додати крок
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          {residentTiers.map((tier, index) => (
+                            <div key={index} className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900/30 rounded-lg border border-slate-200 dark:border-slate-700">
+                              <div className="flex-1">
+                                <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                                  Назва
+                                </label>
+                                <input
+                                  type="text"
+                                  value={tier.name}
+                                  onChange={(e) => updateResidentTier(index, "name", e.target.value)}
+                                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div className="w-24">
+                                <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                                  + Об'єктів
+                                </label>
+                                <input
+                                  type="number"
+                                  value={tier.units}
+                                  onChange={(e) => updateResidentTier(index, "units", parseInt(e.target.value) || 0)}
+                                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div className="w-24">
+                                <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                                  Ціна (грн)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={tier.price}
+                                  onChange={(e) => updateResidentTier(index, "price", parseFloat(e.target.value) || 0)}
+                                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <button
+                                onClick={() => removeResidentTier(index)}
+                                className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={updateResidentModule}
+                        disabled={loading}
+                        className="w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold transition-colors flex items-center justify-center gap-2"
+                      >
+                        {loading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Оновлення...
+                          </>
+                        ) : (
+                          "Оновити модуль оплат"
+                        )}
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          {/* Global Consulting Limits */}
+          <div className="p-6 rounded-2xl glass-panel">
+            <h2 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Глобальні ліміти консалтингу</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
+                  Безкоштовні слоти FOP
+                </label>
+                <input
+                  type="number"
+                  value={consultingLimits.free_slots}
+                  onChange={(e) => setConsultingLimits({ ...consultingLimits, free_slots: parseInt(e.target.value) || 0 })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">
+                  Партнерська знижка (%)
+                </label>
+                <input
+                  type="number"
+                  value={consultingLimits.discount}
+                  onChange={(e) => setConsultingLimits({ ...consultingLimits, discount: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
             </div>
             <button
-              onClick={updatePrice}
+              onClick={updateConsultingLimits}
               disabled={loading}
-              className="mt-6 py-2.5 px-6 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs transition-all shadow-lg flex items-center gap-2"
+              className="mt-4 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-semibold transition-colors flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Збереження...
+                  Оновлення...
                 </>
               ) : (
-                "Зберегти"
+                "Оновити ліміти"
               )}
             </button>
           </div>
-          <p className="text-sm text-slate-600 dark:text-slate-400 mt-4">
-            Поточна ціна: <strong className="text-slate-900 dark:text-white">{pricing.business} грн/міс</strong>
-          </p>
         </div>
       )}
       

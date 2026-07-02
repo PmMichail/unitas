@@ -286,6 +286,63 @@ class AIService:
                 
         return f"ПРОТОКОЛ ЗАСІДАННЯ ПРАВЛІННЯ ОСББ '{profile_name}'\n\nТема: {issue_title}\nОпис: {issue_description}\n\nРезультати голосування:\n" + "\n".join([f"- {v['name']}: {v['vote']} ({v['comment'] or 'без коментарів'})" for v in votes_summary])
 
+    async def generate_general_meeting_minutes(self, meeting_title: str, meeting_description: str, questions_with_votes: List[dict], profile_name: str) -> str:
+        if not self.use_gemini and not self.use_openai:
+            fallback = f"ПРОТОКОЛ ЗАГАЛЬНИХ ЗБОРІВ СТ/ОСББ '{profile_name}'\n\nТема: {meeting_title}\nПорядок денний: {meeting_description}\n\nРезультати голосування:\n"
+            for q in questions_with_votes:
+                fallback += f"\nПитання: {q['question_text']}\n"
+                fallback += f"- За: {q['yes_area']:.2f} кв.м ({q['yes_percent']:.1f}%)\n"
+                fallback += f"- Проти: {q['no_area']:.2f} кв.м ({q['no_percent']:.1f}%)\n"
+                fallback += f"- Утрималися: {q['abstain_area']:.2f} кв.м ({q['abstain_percent']:.1f}%)\n"
+            return fallback
+
+        prompt = f"""
+        Ти — досвідчений юрист та секретар ОСББ. Тобі потрібно скласти офіційний Протокол Загальних Зборів ОСББ/організації на основі результатів письмового голосування мешканців (співвласників).
+        
+        Назва організації: ОСББ/СТ "{profile_name}"
+        Тема зборів: {meeting_title}
+        Порядок денний: {meeting_description}
+        Дата зборів: {datetime.now().strftime('%d.%m.%Y')}
+        
+        Результати голосування співвласників по кожному питанню порядку денного (підраховано пропорційно до площі квартир/об'єктів):
+        {json.dumps(questions_with_votes, ensure_ascii=False, indent=2)}
+        
+        Сформуй офіційний, структурований текст протоколу українською мовою. Протокол має містити:
+        1. Шапку протоколу (назва, дата, місце проведення).
+        2. Відомості про загальну площу будинку/кооперативу, загальну кількість співвласників, кількість учасників зборів та їхню сукупну площу (для підтвердження кворуму).
+        3. Порядок денний (перелік питань: {meeting_title}).
+        4. Хід обговорення по кожному питанню порядку денного.
+        5. Результати голосування по кожному питанню порядку денного:
+           - Проголосували "За", "Проти", "Утрималися" (вказати площу в кв.м та відсоток).
+           - Рішення прийнято (якщо більше 50% від загальної площі будинку проголосували "За"), або рішення не прийнято.
+        6. Місце для підпису голови зборів та секретаря.
+        
+        Пиши у сухому юридичному офіційно-діловому стилі.
+        """
+        
+        if self.use_gemini:
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.5,
+                        top_p=0.9,
+                        top_k=40,
+                        max_output_tokens=4096,
+                    )
+                )
+                return response.text
+            except Exception as e:
+                print(f"Error calling Gemini in generate_general_meeting_minutes: {e}")
+                
+        fallback = f"ПРОТОКОЛ ЗАГАЛЬНИХ ЗБОРІВ СТ/ОСББ '{profile_name}'\n\nТема: {meeting_title}\nПорядок денний: {meeting_description}\n\nРезультати голосування:\n"
+        for q in questions_with_votes:
+            fallback += f"\nПитання: {q['question_text']}\n"
+            fallback += f"- За: {q['yes_area']:.2f} кв.м ({q['yes_percent']:.1f}%)\n"
+            fallback += f"- Проти: {q['no_area']:.2f} кв.м ({q['no_percent']:.1f}%)\n"
+            fallback += f"- Утрималися: {q['abstain_area']:.2f} кв.м ({q['abstain_percent']:.1f}%)\n"
+        return fallback
+
     def _fallback_chat(self, question: str, profile: Dict, history: Optional[List[Dict]] = None) -> str:
         """Чат без ШІ"""
         question_lower = question.lower()
