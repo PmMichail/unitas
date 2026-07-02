@@ -105,6 +105,24 @@ export default function ConsultingDashboard() {
     }
   };
 
+  const handleSetupCompany = async () => {
+    setIsSeeding(true);
+    try {
+      const response = await axios.post("/api/consulting/setup-company");
+      console.log("Company setup:", response.data);
+      alert("Консалтинг компанія успішно налаштована!");
+      // Refresh dashboard data
+      if (currentUserId) {
+        fetchDashboardData(currentUserId);
+      }
+    } catch (error) {
+      console.error("Failed to setup company:", error);
+      alert("Помилка при налаштуванні компанії");
+    } finally {
+      setIsSeeding(false);
+    }
+  };
+
   const handleInviteClient = async () => {
     try {
       if (!inviteEmail) {
@@ -396,21 +414,28 @@ export default function ConsultingDashboard() {
                 Кабінет Партнера
               </h1>
               <p className="text-slate-600 dark:text-slate-400">
-                {dashboardData?.consulting_company.name} • {dashboardData?.total_clients} клієнтів
+                {dashboardData?.consulting_company.name || "Консалтинг Компанія"} • {dashboardData?.total_clients || 0} клієнтів
               </p>
             </div>
             <div className="flex gap-2">
               <button
+                onClick={handleSetupCompany}
+                disabled={isSeeding}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors disabled:bg-green-400"
+              >
+                {isSeeding ? "Налаштування..." : "Налаштувати компанію"}
+              </button>
+              <button
                 onClick={handleSeedTestData}
                 disabled={isSeeding}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
+                className="px-4 py-2 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors disabled:bg-slate-400"
               >
                 {isSeeding ? "Створення..." : "Створити тестові дані"}
               </button>
               {isOwner && (
                 <button
                   onClick={() => setShowInviteModal(true)}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
                 >
                   + Додати клієнта
                 </button>
