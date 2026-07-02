@@ -437,3 +437,19 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
   * **iOS App (.ipa)**: https://expo.dev/artifacts/eas/-Z-i04A3hzK6oFLMMwG1uCXfoq-MZ9S26qXBxuKTALg.ipa
   * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/30b88210-a860-4ee6-99ac-456a035a7a02
   * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/59ca54cf-b209-4c9a-9ea8-8ae034e708f6
+
+---
+
+## 21. Consulting Registration Removal and Visibility Logic Fixes
+
+### 1. "Register as Consulting" Button Removed
+- **Dashboard Interface**: Completely removed the "Зареєструватися як консалтинг" button from the main header navigation inside [page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/dashboard/page.tsx). 
+
+### 2. Strict Consulting Visibility Guard
+- **Non-Profit Restriction**: Created a new `isOSBBOrST` helper constant inside [page.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/frontend/app/dashboard/page.tsx) that checks if the active organization subtype is a non-profit (`osbb`, `st`, `cooperative`, `go`, `bf`) or matches the `non_profit` tax system.
+- **Link Display Logic**: Configured the "Консалтинг" navigation link to only render when `isConsultingUser === true` and the active organization is **not** a non-profit (`!isOSBBOrST`), fulfilling the requirement that non-profits never see the consulting panel link.
+
+### 3. Verification & Deployment
+- **Type Safety**: Verified zero TypeScript errors across Next.js frontend code using `npx tsc --noEmit`.
+- **Fly.io Deployment**: Successfully deployed the updated Next.js app to Fly.io (`unitas-frontend`).
+
