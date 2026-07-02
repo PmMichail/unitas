@@ -418,6 +418,12 @@ export default function ConsultingDashboard() {
               </p>
             </div>
             <div className="flex gap-2">
+              <Link
+                href="/dashboard"
+                className="px-4 py-2 bg-slate-500 text-white rounded-lg font-medium hover:bg-slate-600 transition-colors"
+              >
+                ← Повернутися в дашборд
+              </Link>
               <button
                 onClick={handleSetupCompany}
                 disabled={isSeeding}
