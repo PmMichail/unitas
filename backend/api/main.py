@@ -24713,6 +24713,31 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/consulting/check-status")
+def check_consulting_status(user_id: int = None, db: Session = Depends(get_db)):
+    """Перевірка статусу консалтинг для користувача"""
+    try:
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+        else:
+            user = db.query(User).first()
+        
+        if not user:
+            return {"is_consulting": False, "is_owner": False}
+        
+        # Перевіряємо, чи є користувач власником консалтинг компанії
+        is_consulting = user.consulting_company_id is not None
+        is_owner = user.is_consulting_owner or False
+        
+        return {
+            "is_consulting": is_consulting,
+            "is_owner": is_owner,
+            "consulting_company_id": user.consulting_company_id
+        }
+    except Exception as e:
+        print(f"Error checking consulting status: {e}")
+        return {"is_consulting": False, "is_owner": False}
+
 @app.post("/api/consulting/setup-company")
 def setup_consulting_company(db: Session = Depends(get_db)):
     """Налаштування консалтинг компанії без створення клієнтів"""
