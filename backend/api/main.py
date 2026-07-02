@@ -24783,7 +24783,7 @@ def check_consulting_status(user_id: Optional[int] = None, telegram_id: Optional
         return {"is_consulting": False, "is_owner": False, "has_consulting_profile": False}
 
 @app.post("/api/consulting/setup-company")
-def setup_consulting_company(db: Session = Depends(get_db)):
+def setup_consulting_company(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Налаштування консалтинг компанії без створення клієнтів"""
     try:
         print("=== Початок налаштування консалтинг компанії ===")
@@ -24805,8 +24805,12 @@ def setup_consulting_company(db: Session = Depends(get_db)):
         else:
             print(f"Консалтинг компанія вже існує з ID: {consulting_company.id}")
         
-        # 2. Налаштуємо першого користувача як власника
-        owner = db.query(User).first()
+        # 2. Налаштуємо потрібного користувача як власника
+        if user_id:
+            owner = db.query(User).filter(User.id == user_id).first()
+        else:
+            owner = db.query(User).first()
+            
         if not owner:
             print("Помилка: користувачів не знайдено в базі")
             raise HTTPException(status_code=404, detail="No users found in database")
@@ -24814,7 +24818,10 @@ def setup_consulting_company(db: Session = Depends(get_db)):
         print(f"Знайдено користувача з ID: {owner.id}")
         
         # 3. Налаштуємо перший профіль користувача як консалтинговий
-        profile = db.query(Profile).filter(Profile.user_id == owner.id).first()
+        profile = db.query(Profile).filter(Profile.user_id == owner.id, Profile.is_consulting_company == True).first()
+        if not profile:
+            profile = db.query(Profile).filter(Profile.user_id == owner.id).first()
+            
         if not profile:
             print("Помилка: профіль користувача не знайдено")
             raise HTTPException(status_code=404, detail="No profile found for user")

@@ -108,7 +108,7 @@ export default function ConsultingDashboard() {
   const handleSetupCompany = async () => {
     setIsSeeding(true);
     try {
-      const response = await axios.post("/api/consulting/setup-company");
+      const response = await axios.post(`/api/consulting/setup-company?user_id=${currentUserId || 1}`);
       console.log("Company setup:", response.data);
       alert("Консалтинг компанія успішно налаштована!");
       // Refresh dashboard data
