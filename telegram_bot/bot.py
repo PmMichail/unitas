@@ -2354,6 +2354,12 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await sign_cmd(update, context)
     elif text == "❓ Допомога":
         await help_cmd(update, context)
+    elif "додати підприємство" in text.lower():
+        await update.message.reply_text(
+            "📝 **Додавання нового профілю**\n\n"
+            "Створення нових профілів компаній або ФОП здійснюється виключно на нашому веб-сайті **www.unitax.pro**.",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 # Callback report selection handler
 async def handle_report_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3534,7 +3540,9 @@ def main() -> None:
             "💵 Сплата податків", 
             "📥 Експорт даних", 
             "🔏 Підписати документи", 
-            "❓ Допомога"
+            "❓ Допомога",
+            "➕ Додати підприємство",
+            "Додати підприємство"
         ]), 
         handle_menu_click
     ))
