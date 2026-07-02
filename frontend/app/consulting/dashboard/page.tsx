@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import Link from "next/link";
+import { API_BASE_URL } from "@/lib/api";
 
 interface ClientData {
   profile_id: number;
@@ -76,7 +77,7 @@ export default function ConsultingDashboard() {
         console.error("No telegram_id found in localStorage");
         return;
       }
-      const response = await axios.get(`/api/auth/user-by-telegram?telegram_id=${telegramId}`);
+      const response = await axios.get(`${API_BASE_URL}/api/auth/user-by-telegram?telegram_id=${telegramId}`);
       setCurrentUserId(response.data.user_id);
       fetchDashboardData(response.data.user_id);
     } catch (error) {
@@ -90,7 +91,7 @@ export default function ConsultingDashboard() {
   const handleSeedTestData = async () => {
     setIsSeeding(true);
     try {
-      const response = await axios.post("/api/consulting/seed-test-data");
+      const response = await axios.post(`${API_BASE_URL}/api/consulting/seed-test-data`);
       console.log("Test data seeded:", response.data);
       alert("Тестові дані успішно створено!");
       // Refresh dashboard data
@@ -108,7 +109,7 @@ export default function ConsultingDashboard() {
   const handleSetupCompany = async () => {
     setIsSeeding(true);
     try {
-      const response = await axios.post(`/api/consulting/setup-company?user_id=${currentUserId || 1}`);
+      const response = await axios.post(`${API_BASE_URL}/api/consulting/setup-company?user_id=${currentUserId || 1}`);
       console.log("Company setup:", response.data);
       alert("Консалтинг компанія успішно налаштована!");
       // Refresh dashboard data
@@ -142,7 +143,7 @@ export default function ConsultingDashboard() {
 
   const fetchDashboardData = async (userId: number) => {
     try {
-      const response = await axios.get<DashboardData>(`/api/consulting/dashboard?user_id=${userId}`);
+      const response = await axios.get<DashboardData>(`${API_BASE_URL}/api/consulting/dashboard?user_id=${userId}`);
       setDashboardData(response.data);
       setIsOwner(response.data.user_role === "owner");
     } catch (error) {
@@ -155,7 +156,7 @@ export default function ConsultingDashboard() {
   const fetchStaffData = async () => {
     try {
       if (!currentUserId) return;
-      const response = await axios.get<{ team: StaffMember[] }>(`/api/consulting/team?user_id=${currentUserId}`);
+      const response = await axios.get<{ team: StaffMember[] }>(`${API_BASE_URL}/api/consulting/team?user_id=${currentUserId}`);
       setStaffData(response.data.team);
     } catch (error) {
       console.error("Failed to fetch staff data:", error);
@@ -203,7 +204,7 @@ export default function ConsultingDashboard() {
       if (invitePhone) formData.append("phone", invitePhone);
       formData.append("user_id", userId.toString());
       
-      await axios.post("/api/consulting/add-team-member", formData);
+      await axios.post(`${API_BASE_URL}/api/consulting/add-team-member`, formData);
       setShowInviteModal(false);
       setInviteEmail("");
       setInvitePhone("");
@@ -216,7 +217,7 @@ export default function ConsultingDashboard() {
   const fetchBillingData = async () => {
     try {
       if (!currentUserId) return;
-      const response = await axios.get(`/api/consulting/billing?user_id=${currentUserId}`);
+      const response = await axios.get(`${API_BASE_URL}/api/consulting/billing?user_id=${currentUserId}`);
       setBillingData(response.data);
     } catch (error) {
       console.error("Failed to fetch billing data:", error);
@@ -227,8 +228,8 @@ export default function ConsultingDashboard() {
     try {
       if (!currentUserId) return;
       const [offersRes, userRes] = await Promise.all([
-        axios.get(`/api/consulting/marketplace/offers?user_id=${currentUserId}`),
-        axios.get(`/api/consulting/dashboard?user_id=${currentUserId}`)
+        axios.get(`${API_BASE_URL}/api/consulting/marketplace/offers?user_id=${currentUserId}`),
+        axios.get(`${API_BASE_URL}/api/consulting/dashboard?user_id=${currentUserId}`)
       ]);
       setMarketplaceOffers(offersRes.data.offers);
       setMarketplaceListing(userRes.data);
@@ -247,7 +248,7 @@ export default function ConsultingDashboard() {
       formData.append("target_type", newOffer.target_type);
       formData.append("user_id", currentUserId.toString());
       
-      await axios.post("/api/consulting/marketplace/offers", formData);
+      await axios.post(`${API_BASE_URL}/api/consulting/marketplace/offers`, formData);
       setShowOfferModal(false);
       setNewOffer({ title: "", description: "", price: "", target_type: "fop" });
       fetchMarketplaceData();
@@ -263,7 +264,7 @@ export default function ConsultingDashboard() {
       formData.append("is_listed", (!marketplaceListing?.is_listed_in_marketplace).toString());
       formData.append("user_id", currentUserId.toString());
       
-      await axios.put("/api/consulting/marketplace/listing", formData);
+      await axios.put(`${API_BASE_URL}/api/consulting/marketplace/listing`, formData);
       fetchMarketplaceData();
     } catch (error) {
       console.error("Failed to toggle listing:", error);
@@ -273,7 +274,7 @@ export default function ConsultingDashboard() {
   const handleDeleteOffer = async (offerId: number) => {
     try {
       if (!currentUserId) return;
-      await axios.delete(`/api/consulting/marketplace/offers/${offerId}?user_id=${currentUserId}`);
+      await axios.delete(`${API_BASE_URL}/api/consulting/marketplace/offers/${offerId}?user_id=${currentUserId}`);
       fetchMarketplaceData();
     } catch (error) {
       console.error("Failed to delete offer:", error);
