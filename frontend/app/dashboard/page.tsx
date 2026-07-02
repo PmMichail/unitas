@@ -525,8 +525,9 @@ export default function Dashboard() {
 
   // Перевірка консалтинг статусу користувача
   const fetchConsultingStatus = async () => {
+    if (!selectedProfile) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/consulting/check-status`);
+      const response = await fetch(`${API_BASE_URL}/api/consulting/check-status?user_id=${selectedProfile.user_id}`);
       const data = await response.json();
       // Використовуємо has_consulting_profile для перевірки, чи є профіль консалтинговою компанією
       setIsConsultingUser(data.has_consulting_profile || false);

@@ -24747,24 +24747,30 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
 
 
 @app.get("/api/consulting/check-status")
-def check_consulting_status(user_id: int = None, db: Session = Depends(get_db)):
+def check_consulting_status(user_id: Optional[int] = None, telegram_id: Optional[str] = None, db: Session = Depends(get_db)):
     """Перевірка статусу консалтинг для користувача"""
     try:
+        user = None
         if user_id:
             user = db.query(User).filter(User.id == user_id).first()
-        else:
-            user = db.query(User).first()
+        elif telegram_id:
+            user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
         
         if not user:
-            return {"is_consulting": False, "is_owner": False}
+            user = db.query(User).first()
+            
+        if not user:
+            return {"is_consulting": False, "is_owner": False, "has_consulting_profile": False}
         
         # Перевіряємо, чи є користувач власником консалтинг компанії
         is_consulting = user.consulting_company_id is not None
         is_owner = user.is_consulting_owner or False
         
         # Перевіряємо, чи є хоча б один профіль користувача консалтинговою компанією
-        profile = db.query(Profile).filter(Profile.user_id == user.id).first()
-        has_consulting_profile = profile and profile.is_consulting_company if profile else False
+        has_consulting_profile = db.query(Profile).filter(
+            Profile.user_id == user.id,
+            Profile.is_consulting_company == True
+        ).first() is not None
         
         return {
             "is_consulting": is_consulting,
