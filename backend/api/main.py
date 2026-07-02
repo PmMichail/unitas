@@ -2649,7 +2649,7 @@ def migrate_consulting_field(db: Session = Depends(get_db)):
     """Додати поле is_consulting_company в таблицю profiles"""
     try:
         # Перевіримо, чи існує поле
-        from sqlalchemy import inspect
+        from sqlalchemy import inspect, text
         inspector = inspect(db.bind)
         columns = [col['name'] for col in inspector.get_columns('profiles')]
         
@@ -2657,7 +2657,7 @@ def migrate_consulting_field(db: Session = Depends(get_db)):
             return {"status": "success", "message": "Поле is_consulting_company вже існує"}
         
         # Додамо поле
-        db.execute("ALTER TABLE profiles ADD COLUMN is_consulting_company BOOLEAN DEFAULT FALSE")
+        db.execute(text("ALTER TABLE profiles ADD COLUMN is_consulting_company BOOLEAN DEFAULT FALSE"))
         db.commit()
         
         return {"status": "success", "message": "Поле is_consulting_company успішно додано"}
