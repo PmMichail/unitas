@@ -22,6 +22,8 @@ interface ConsultingCompany {
   offers: ServiceOffer[];
   free_slots: number;
   partner_discount: number;
+  rating: number;
+  review_count: number;
 }
 
 export default function MarketplacePage() {
@@ -110,9 +112,20 @@ export default function MarketplacePage() {
               <div key={company.consulting_company_id} className="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden">
                 {/* Company Header */}
                 <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
-                    {company.company_name}
-                  </h3>
+                  <div className="flex items-start justify-between mb-2">
+                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                      {company.company_name}
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <span className="text-yellow-500">⭐</span>
+                      <span className="font-semibold text-slate-900 dark:text-white">
+                        {company.rating.toFixed(1)}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        ({company.review_count})
+                      </span>
+                    </div>
+                  </div>
                   {company.owner_info.public_bio && (
                     <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">
                       {company.owner_info.public_bio}

@@ -921,6 +921,9 @@ class ConsultingCompany(Base):
     # Partner discount configuration
     free_fop_slots_included = Column(Integer, default=3)  # 3 free FOP 1-2 slots included in base fee
     partner_discount_percentage = Column(Float, default=30.0)  # 30% discount on additional clients
+    # Rating for marketplace sorting
+    rating = Column(Float, default=0.0)  # Rating from 0 to 5
+    review_count = Column(Integer, default=0)  # Number of reviews
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -24338,11 +24341,12 @@ def get_marketplace_catalog(db: Session = Depends(get_db)):
     """
     Get marketplace catalog of consulting companies and their service offers.
     Available for independent FOPs.
+    Sorted by rating (highest first).
     """
-    # Get all consulting companies listed in marketplace
+    # Get all consulting companies listed in marketplace, sorted by rating
     consulting_companies = db.query(ConsultingCompany).filter(
         ConsultingCompany.is_active == True
-    ).all()
+    ).order_by(ConsultingCompany.rating.desc()).all()
     
     catalog = []
     for company in consulting_companies:
@@ -24380,7 +24384,9 @@ def get_marketplace_catalog(db: Session = Depends(get_db)):
                 for offer in offers
             ],
             "free_slots": company.free_fop_slots_included,
-            "partner_discount": company.partner_discount_percentage
+            "partner_discount": company.partner_discount_percentage,
+            "rating": company.rating,
+            "review_count": company.review_count
         })
     
     return {"catalog": catalog}
