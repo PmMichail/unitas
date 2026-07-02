@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import axios from "axios";
+import Link from "next/link";
 
 interface ClientData {
   profile_id: number;
@@ -101,6 +102,23 @@ export default function ConsultingDashboard() {
       alert("Помилка при створенні тестових даних");
     } finally {
       setIsSeeding(false);
+    }
+  };
+
+  const handleInviteClient = async () => {
+    try {
+      if (!inviteEmail) {
+        alert("Введіть email клієнта");
+        return;
+      }
+      // For now, just show a success message
+      alert(`Запрошення відправлено на ${inviteEmail}`);
+      setShowInviteModal(false);
+      setInviteEmail("");
+      setInvitePhone("");
+    } catch (error) {
+      console.error("Failed to invite client:", error);
+      alert("Помилка при відправці запрошення");
     }
   };
 
@@ -335,10 +353,30 @@ export default function ConsultingDashboard() {
       {/* Context Switch Banner */}
       {selectedProfileId && (
         <div className="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between shadow-lg">
-          <div className="flex items-center">
+          <div className="flex items-center gap-4">
             <span className="font-medium">
               Ви працюєте в кабінеті клієнта: <strong>{selectedProfileName}</strong>
             </span>
+            <div className="flex gap-2">
+              <Link
+                href="/reports"
+                className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+              >
+                Звіти
+              </Link>
+              <Link
+                href="/taxes"
+                className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+              >
+                Податки
+              </Link>
+              <Link
+                href="/settings"
+                className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+              >
+                Налаштування
+              </Link>
+            </div>
           </div>
           <button
             onClick={handleReturnToConsulting}
@@ -361,13 +399,23 @@ export default function ConsultingDashboard() {
                 {dashboardData?.consulting_company.name} • {dashboardData?.total_clients} клієнтів
               </p>
             </div>
-            <button
-              onClick={handleSeedTestData}
-              disabled={isSeeding}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
-            >
-              {isSeeding ? "Створення..." : "Створити тестові дані"}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSeedTestData}
+                disabled={isSeeding}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
+              >
+                {isSeeding ? "Створення..." : "Створити тестові дані"}
+              </button>
+              {isOwner && (
+                <button
+                  onClick={() => setShowInviteModal(true)}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+                >
+                  + Додати клієнта
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -790,7 +838,7 @@ export default function ConsultingDashboard() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-slate-800 rounded-xl p-6 w-full max-w-md mx-4">
             <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
-              Додати бухгалтера
+              {activeTab === "staff" ? "Додати бухгалтера" : "Додати клієнта"}
             </h3>
             <div className="space-y-4">
               <div>
@@ -802,7 +850,7 @@ export default function ConsultingDashboard() {
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent dark:bg-slate-700 dark:text-white"
-                  placeholder="accountant@example.com"
+                  placeholder={activeTab === "staff" ? "accountant@example.com" : "client@example.com"}
                 />
               </div>
               <div>
@@ -826,10 +874,10 @@ export default function ConsultingDashboard() {
                 Скасувати
               </button>
               <button
-                onClick={handleInviteAccountant}
+                onClick={activeTab === "staff" ? handleInviteAccountant : handleInviteClient}
                 className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
               >
-                Надіслати запрошення
+                {activeTab === "staff" ? "Надіслати запрошення" : "Додати клієнта"}
               </button>
             </div>
           </div>
