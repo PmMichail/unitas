@@ -408,9 +408,7 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
 - **Bot Actions**: Removed the "+ Додати підприємство" (Add company) keyboard layout, message filter registration, and click event callbacks inside [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py) to prevent organization registration actions from the Telegram interface.
 
 ### 6. Build Information
-- **EAS Production Build 1.0.0 (9)**: Completed production builds successfully:
-  * **Android App (.aab)**: https://expo.dev/artifacts/eas/RMjeqjM0CelEjIjGVp9ihtSC_HUrQw6hcxPptxxbbfw.aab
-  * **iOS App (.ipa)**: https://expo.dev/artifacts/eas/SfSo4f_4tmWYpluVqMvHJJ7Uy_CkqdczPT4AikRot2A.ipa
-  * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/81f527fc-7dd2-479d-9511-810bac4054cf
-  * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/25b0485b-16ab-4a7e-bcdb-a9ba70c91fd4
+- **EAS Production Build 1.0.0 (10)**: Initiated production builds for iOS and Android:
+  * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/3fc95c4c-85cd-4335-9357-2b002189d21c
+  * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/f264ee30-82b2-41a0-a7f4-cb558655ebc2
 - **Verification**: Validated compilation with `npx tsc --noEmit` producing zero type errors.
