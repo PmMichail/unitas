@@ -19,11 +19,11 @@ primary_region = 'gru'
   processes = ['app']
 
   [[http_service.checks]]
-    interval = '15s'
-    timeout = '10s'
-    grace_period = '5s'
+    interval = '30s'
+    timeout = '20s'
+    grace_period = '10s'
     method = 'GET'
-    path = '/'
+    path = '/api/health'
 
 [[vm]]
   memory = '1gb'
