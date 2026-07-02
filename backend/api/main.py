@@ -24800,6 +24800,20 @@ def update_consulting_marketplace_listing(
     return {"status": "success"}
 
 
+@app.get("/api/config/news-banner")
+def get_news_banner_config():
+    """Endpoint providing a fallback news banner config for mobile app."""
+    return {
+        "is_active": True,
+        "banner_id": "update_02_07_2026",
+        "title": "Оновлення системи",
+        "description": "Ми оптимізували модуль формування податкової звітності. Тепер графіки завантажуються в 2 рази швидше.",
+        "image_url": "https://storage.unitax.pro/banners/news_1.png",
+        "action_type": "internal_route",
+        "action_value": "transactions"
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -385,3 +385,32 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
   * **IPA Artifact URL**: https://expo.dev/artifacts/eas/3NdWkh8fz0a2RZTDrgPWJtNa7UJPDujlbFyuYk5bkXs.ipa
   * **EAS Build Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/9200dba6-8ee1-4fa5-b925-445aa51220d0
 - **Validation**: Confirmed zero compilation errors via `npx tsc --noEmit` on the mobile project.
+
+---
+
+## 19. Mobile App Store Compliance Fixes (Guideline 3.1.1 & 4.8) - Version 1.0.0 (9)
+
+### 1. Account / Profile Registration Removal (Mobile App)
+- **Modal Swapper Button**: Removed the "Додати новий профіль" (Add new profile) action button from the profile selection switcher modal in [index.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/index.tsx).
+- **Profiles Management Screen**: Removed both the top header "Додати профіль" (Add profile) button and the empty state add action button in [profiles.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/profiles.tsx).
+
+### 2. Website Redirect Cards Removal
+- **Dashboard Section**: Replaced the "Web Version Redirect Card" in [index.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/index.tsx) with a beautiful static "Популярні новини" (Popular News) card placeholder layout that lists relevant tax updates and calendar warnings without external hyperlinks.
+- **Settings Screen**: Deleted the "Transition to website Card" completely from [settings.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/settings.tsx).
+
+### 3. Non-Profit Billing Screen Restored
+- **Layout Tab Bar**: Restored the visibility of the "Білінг" (Billing) tab on iOS by removing the `Platform.OS === 'ios'` constraint on the `href` field in [_layout.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/_layout.tsx). This allows non-profit/OSBB organization owners to manage their co-owners, utilities, and contributions ledger on Apple devices.
+
+### 4. Locked Taxation Structures (Edit Mode)
+- **Profiles screen**: Disabled inputs and segmented toggles for Profile Type (FOP vs Company), Tax System, Non-Profit Subtypes, and Tax Groups/Rates inside the profile editor popup of [profiles.tsx](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app/(tabs)/profiles.tsx) whenever `editingProfile` is not null. This enforces the rule that users cannot switch tax groups/categories on existing profiles inside the app.
+
+### 5. Telegram Bot Registry Cleanup
+- **Bot Actions**: Removed the "+ Додати підприємство" (Add company) keyboard layout, message filter registration, and click event callbacks inside [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py) to prevent organization registration actions from the Telegram interface.
+
+### 6. Build Information
+- **EAS Production Build 1.0.0 (9)**: Completed production builds successfully:
+  * **Android App (.aab)**: https://expo.dev/artifacts/eas/RMjeqjM0CelEjIjGVp9ihtSC_HUrQw6hcxPptxxbbfw.aab
+  * **iOS App (.ipa)**: https://expo.dev/artifacts/eas/SfSo4f_4tmWYpluVqMvHJJ7Uy_CkqdczPT4AikRot2A.ipa
+  * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/81f527fc-7dd2-479d-9511-810bac4054cf
+  * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/25b0485b-16ab-4a7e-bcdb-a9ba70c91fd4
+- **Verification**: Validated compilation with `npx tsc --noEmit` producing zero type errors.

@@ -18,7 +18,9 @@ import {
   Dimensions,
   Linking,
   Clipboard,
+  Image,
 } from 'react-native';
+import { getLatestNewsBanner, shouldShowBanner, markBannerAsRead, NewsBannerConfig } from '../../services/firebaseNews';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Card } from '../../components/ui/Card';
@@ -66,6 +68,28 @@ export default function DashboardScreen() {
     period: string;
     amount: number;
   } | null>(null);
+
+  // Remote Config / Firestore News States
+  const [newsBanner, setNewsBanner] = useState<NewsBannerConfig | null>(null);
+  const [newsModalVisible, setNewsModalVisible] = useState(false);
+
+  useEffect(() => {
+    async function checkNewsBanner() {
+      try {
+        const banner = await getLatestNewsBanner();
+        if (banner && banner.is_active) {
+          const show = await shouldShowBanner(banner.banner_id);
+          if (show) {
+            setNewsBanner(banner);
+            setNewsModalVisible(true);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to resolve remote news banner:', e);
+      }
+    }
+    checkNewsBanner();
+  }, []);
 
   const parseAmountFromDesc = (desc: string): number => {
     if (!desc) return 0;
@@ -1431,6 +1455,70 @@ export default function DashboardScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      {/* Dynamic Remote Config / Firestore News Modal */}
+      {newsBanner && (
+        <Modal
+          animationType="fade"
+          transparent={true}
+          visible={newsModalVisible}
+          onRequestClose={() => setNewsModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.newsModalContent, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              {/* Optional Header Image */}
+              {newsBanner.image_url ? (
+                <Image
+                  source={{ uri: newsBanner.image_url }}
+                  style={styles.newsImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={[styles.newsHeaderPlaceholder, { backgroundColor: colors.primaryMuted }]}>
+                  <FileText size={48} color={colors.primary} />
+                </View>
+              )}
+
+              <View style={styles.newsBody}>
+                <Text style={[styles.newsTitle, { color: colors.text }]}>
+                  {newsBanner.title}
+                </Text>
+
+                <ScrollView style={styles.newsDescScroll} contentContainerStyle={{ paddingBottom: 12 }}>
+                  <Text style={[styles.newsDesc, { color: colors.textMuted }]}>
+                    {newsBanner.description}
+                  </Text>
+                </ScrollView>
+
+                <View style={styles.newsButtonsRow}>
+                  <Button
+                    title="Закрити"
+                    onPress={async () => {
+                      await markBannerAsRead(newsBanner.banner_id);
+                      setNewsModalVisible(false);
+                    }}
+                    variant="outline"
+                    style={styles.newsCloseBtn}
+                  />
+                  {newsBanner.action_value ? (
+                    <Button
+                      title="Детальніше"
+                      onPress={async () => {
+                        await markBannerAsRead(newsBanner.banner_id);
+                        setNewsModalVisible(false);
+                        // Redirect to the internal route
+                        router.push(newsBanner.action_value as any);
+                      }}
+                      variant="primary"
+                      style={styles.newsActionBtn}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
 
       {/* AI Chat Modal */}
       <Modal
@@ -3233,5 +3321,54 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  newsModalContent: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  newsImage: {
+    width: '100%',
+    height: 180,
+  },
+  newsHeaderPlaceholder: {
+    width: '100%',
+    height: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  newsBody: {
+    padding: 20,
+  },
+  newsTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  newsDescScroll: {
+    maxHeight: 150,
+    marginBottom: 16,
+  },
+  newsDesc: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  newsButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'flex-end',
+  },
+  newsCloseBtn: {
+    flex: 1,
+  },
+  newsActionBtn: {
+    flex: 1,
   },
 });
