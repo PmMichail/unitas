@@ -24614,7 +24614,6 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             owner = User(
                 email="owner@consulting.com",
                 hashed_password="test_hash",
-                account_type="consulting",
                 consulting_company_id=consulting_company.id,
                 is_consulting_owner=True
             )
@@ -24622,8 +24621,7 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             db.commit()
             db.refresh(owner)
         else:
-            # Оновимо існуючого користувача
-            owner.account_type = "consulting"
+            # Оновимо існуючого користувача (без використання account_type)
             owner.consulting_company_id = consulting_company.id
             owner.is_consulting_owner = True
             db.commit()
@@ -24634,7 +24632,6 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             accountant1 = User(
                 email="accountant1@consulting.com",
                 hashed_password="test_hash",
-                account_type="consulting",
                 consulting_company_id=consulting_company.id,
                 is_consulting_owner=False
             )
@@ -24647,7 +24644,6 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             accountant2 = User(
                 email="accountant2@consulting.com",
                 hashed_password="test_hash",
-                account_type="consulting",
                 consulting_company_id=consulting_company.id,
                 is_consulting_owner=False
             )
