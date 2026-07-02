@@ -13,7 +13,7 @@
     ],
     "ios": {
       "bundleIdentifier": "com.unitas.app",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "supportsTablet": true,
       "infoPlist": {
         "NSFaceIDUsageDescription": "UniTax використовує Face ID для безпечного входу",
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.unitas.app",
-      "versionCode": 10,
+      "versionCode": 11,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE"
