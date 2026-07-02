@@ -24653,11 +24653,13 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             db.refresh(accountant2)
         
         # 4. Створимо тестові профілі клієнтів
+        print("Створення тестових профілів клієнтів")
         client_profiles = []
         for i in range(1, 11):
             profile = db.query(Profile).filter(Profile.name == f"Тестовий Клієнт {i}").first()
             if not profile:
                 try:
+                    print(f"Створення профілю {i}: Тестовий Клієнт {i}")
                     profile = Profile(
                         user_id=owner.id,  # тимчасово прив'яжемо до власника
                         type="fop",
@@ -24673,10 +24675,15 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
                     db.add(profile)
                     db.commit()
                     db.refresh(profile)
+                    print(f"Профіль {i} створений успішно з ID: {profile.id}")
                 except Exception as e:
                     print(f"Error creating profile {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     db.rollback()
                     continue
+            else:
+                print(f"Профіль {i} вже існує з ID: {profile.id}")
             client_profiles.append(profile)
         
         # 5. Створимо прив'язки клієнтів до консалтинг компанії
@@ -24742,9 +24749,12 @@ def check_consulting_status(user_id: int = None, db: Session = Depends(get_db)):
 def setup_consulting_company(db: Session = Depends(get_db)):
     """Налаштування консалтинг компанії без створення клієнтів"""
     try:
+        print("=== Початок налаштування консалтинг компанії ===")
+        
         # 1. Знайдемо або створимо консалтинг компанію
         consulting_company = db.query(ConsultingCompany).first()
         if not consulting_company:
+            print("Створення нової консалтинг компанії")
             consulting_company = ConsultingCompany(
                 company_name="Консалтинг Компанія",
                 is_active=True,
@@ -24754,19 +24764,29 @@ def setup_consulting_company(db: Session = Depends(get_db)):
             db.add(consulting_company)
             db.commit()
             db.refresh(consulting_company)
+            print(f"Консалтинг компанія створена з ID: {consulting_company.id}")
+        else:
+            print(f"Консалтинг компанія вже існує з ID: {consulting_company.id}")
         
         # 2. Налаштуємо першого користувача як власника
         owner = db.query(User).first()
         if not owner:
+            print("Помилка: користувачів не знайдено в базі")
             raise HTTPException(status_code=404, detail="No users found in database")
+        
+        print(f"Знайдено користувача з ID: {owner.id}")
         
         # Оновимо користувача без використання account_type (якої може не бути в базі)
         try:
+            print(f"Оновлення користувача: consulting_company_id={consulting_company.id}, is_consulting_owner=True")
             owner.consulting_company_id = consulting_company.id
             owner.is_consulting_owner = True
             db.commit()
+            print("Користувач успішно оновлений")
         except Exception as e:
             print(f"Error updating user: {e}")
+            import traceback
+            traceback.print_exc()
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
         
@@ -24777,6 +24797,9 @@ def setup_consulting_company(db: Session = Depends(get_db)):
             "message": "Консалтинг компанія успішно налаштована"
         }
     except Exception as e:
+        print(f"Загальна помилка при налаштуванні компанії: {e}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
