@@ -353,7 +353,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if res_profiles.status_code != 200 or len(res_profiles.json()) == 0:
             await update.message.reply_text(
                 "У вас поки немає зареєстрованих профілів.\n"
-                "Будь ласка, почніть з реєстрації через /start або додайте новий профіль через /add_profile."
+                "Будь ласка, почніть з реєстрації через /start або створіть профіль на нашому сайті www.unitax.pro."
             )
             return
             
@@ -915,180 +915,6 @@ async def employees_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def add_profile_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Початок додавання нового профілю."""
-    await update.message.reply_text(
-        "📝 **Додавання нового профілю**\n\n"
-        "Створення нових профілів компаній або ФОП здійснюється виключно на нашому веб-сайті **www.unitax.pro**."
-    )
-    return ConversationHandler.END
-
-async def add_profile_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка вибору типу профілю."""
-    query = update.callback_query
-    await query.answer()
-    
-    p_type = "fop" if query.data == "add_p_fop" else "company"
-    context.user_data["new_profile"] = {"type": p_type}
-    
-    await query.edit_message_text(
-        "Введіть назву підприємства (наприклад, ТОВ 'Вектор' або ФОП Шевченко):"
-    )
-    return P_ENTERING_NAME
-
-async def add_profile_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення назви."""
-    name = update.message.text.strip()
-    context.user_data["new_profile"]["name"] = name
-    
-    await update.message.reply_text(
-        "Введіть податковий номер (ЄДРПОУ для ТОВ або РНОКПП для ФОП):\n"
-        "*(Це допоможе автоматично визначати профіль при завантаженні виписок)*"
-    )
-    return P_ENTERING_TAX_ID
-
-async def add_profile_tax_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення податкового номера."""
-    tax_id = update.message.text.strip()
-    context.user_data["new_profile"]["tax_id"] = tax_id
-    
-    p_type = context.user_data["new_profile"]["type"]
-    if p_type == "fop":
-        keyboard = [
-            [
-                InlineKeyboardButton("1 група", callback_data="sys_fop_1"),
-                InlineKeyboardButton("2 група", callback_data="sys_fop_2"),
-            ],
-            [
-                InlineKeyboardButton("3 група (5%)", callback_data="sys_fop_3_5"),
-                InlineKeyboardButton("3 група (3% + ПДВ)", callback_data="sys_fop_3_3"),
-            ],
-            [
-                InlineKeyboardButton("Загальна система", callback_data="sys_fop_general")
-            ]
-        ]
-    else:
-        keyboard = [
-            [
-                InlineKeyboardButton("Податок на прибуток (18%)", callback_data="sys_llc_profit"),
-                InlineKeyboardButton("Єдиний податок 3 група (5%)", callback_data="sys_llc_ep"),
-            ]
-        ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Оберіть систему оподаткування:",
-        reply_markup=reply_markup
-    )
-    return P_CHOOSING_SYSTEM
-
-async def add_profile_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка вибору системи оподаткування."""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    profile_data = context.user_data["new_profile"]
-    
-    # Defaults
-    profile_data["group"] = None
-    profile_data["rate"] = 0.0
-    profile_data["is_vat_payer"] = False
-    
-    if data == "sys_fop_1":
-        profile_data["tax_system"] = "ednuy-3-5%"
-        profile_data["group"] = 1
-        profile_data["rate"] = 10.0
-    elif data == "sys_fop_2":
-        profile_data["tax_system"] = "ednuy-3-5%"
-        profile_data["group"] = 2
-        profile_data["rate"] = 20.0
-    elif data == "sys_fop_3_5":
-        profile_data["tax_system"] = "ednuy-3-5%"
-        profile_data["group"] = 3
-        profile_data["rate"] = 5.0
-    elif data == "sys_fop_3_3":
-        profile_data["tax_system"] = "ednuy-3-5%"
-        profile_data["group"] = 3
-        profile_data["rate"] = 3.0
-        profile_data["is_vat_payer"] = True
-    elif data == "sys_fop_general":
-        profile_data["tax_system"] = "zagalna"
-        profile_data["rate"] = 18.0
-    elif data == "sys_llc_profit":
-        profile_data["tax_system"] = "zagalna"
-        profile_data["rate"] = 18.0
-    elif data == "sys_llc_ep":
-        profile_data["tax_system"] = "ednuy-3-5%"
-        profile_data["group"] = 3
-        profile_data["rate"] = 5.0
-        
-    if profile_data["type"] == "company":
-        keyboard = [
-            [
-                InlineKeyboardButton("Так", callback_data="dir_yes"),
-                InlineKeyboardButton("Ні", callback_data="dir_no")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "Чи є ви директором цього підприємства?",
-            reply_markup=reply_markup
-        )
-        return P_CHOOSING_DIRECTOR
-    else:
-        profile_data["is_director"] = False
-        return await save_profile(query.message, context)
-
-async def add_profile_director(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка вибору ролі директора та збереження."""
-    query = update.callback_query
-    await query.answer()
-    
-    context.user_data["new_profile"]["is_director"] = (query.data == "dir_yes")
-    return await save_profile(query.message, context)
-
-async def save_profile(message, context) -> int:
-    """Збереження профілю на бекенді."""
-    profile_data = context.user_data.get("new_profile")
-    telegram_id = str(message.chat_id)
-    
-    try:
-        payload = {
-            "telegram_id": telegram_id,
-            "type": profile_data["type"],
-            "name": profile_data["name"],
-            "tax_id": profile_data["tax_id"],
-            "tax_system": profile_data["tax_system"],
-            "is_director": int(profile_data["is_director"]),
-            "group": profile_data["group"] if profile_data["group"] is not None else "",
-            "rate": profile_data["rate"] if profile_data["rate"] is not None else "",
-            "has_employees": 0,
-            "is_vat_payer": int(profile_data["is_vat_payer"]),
-            "reg_date": date.today().strftime("%Y-%m-%d")
-        }
-        
-        res = requests.post(f"{BACKEND_URL}/api/profiles", data=payload, timeout=5)
-        if res.status_code == 200:
-            await message.reply_text(
-                f"🎉 **Профіль успішно створено!**\n\n"
-                f"🏢 Назва: {profile_data['name']}\n"
-                f"🔢 Tax ID: {profile_data['tax_id']}\n"
-                f"⚖️ Система: {profile_data['tax_system']} (група {profile_data['group'] or 'загальна'})\n"
-                f"👤 Директор: {'Так' if profile_data['is_director'] else 'Ні'}"
-            )
-        else:
-            await message.reply_text("⚠️ Не вдалося зберегти профіль на сервері.")
-    except Exception as e:
-        logger.error(f"Помилка створення профілю: {e}")
-        await message.reply_text("⚠️ Помилка зв'язку з бекендом.")
-        
-    return ConversationHandler.END
-
-async def cancel_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Створення профілю скасовано.")
-    return ConversationHandler.END
-
 # Employee Conversation
 async def add_employee_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Початок додавання працівника. Вибір профілю."""
@@ -1104,7 +930,7 @@ async def add_employee_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(
                     "⚠️ У вас немає зареєстрованих профілів типу ТОВ.\n"
                     "Працівників можна додавати тільки для підприємств (ТОВ).\n"
-                    "Створіть профіль ТОВ за допомогою /add_profile."
+                    "Створіть профіль ТОВ на нашому сайті www.unitax.pro."
                 )
                 return ConversationHandler.END
                 
@@ -1665,7 +1491,7 @@ async def sign_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if res_profiles.status_code != 200 or len(res_profiles.json()) == 0:
             msg_text = (
                 "У вас поки немає зареєстрованих профілів.\n"
-                "Будь ласка, почніть з реєстрації через /start або додайте новий профіль через /add_profile."
+                "Будь ласка, почніть з реєстрації через /start або створіть профіль на нашому сайті www.unitax.pro."
             )
             if is_callback:
                 await query.edit_message_text(msg_text)
@@ -3229,7 +3055,7 @@ async def invoices_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if res_profiles.status_code != 200 or len(res_profiles.json()) == 0:
             await message.reply_text(
                 "У вас поки немає зареєстрованих профілів.\n"
-                "Будь ласка, почніть з реєстрації через /start або додайте новий профіль через /add_profile."
+                "Будь ласка, почніть з реєстрації через /start або створіть профіль на нашому сайті www.unitax.pro."
             )
             return
             
@@ -3415,20 +3241,6 @@ def main() -> None:
         allow_reentry=True,
     )
 
-    add_profile_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("add_profile", add_profile_start)
-        ],
-        states={
-            P_CHOOSING_TYPE: [CallbackQueryHandler(add_profile_type, pattern="^add_p_")],
-            P_ENTERING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_profile_name)],
-            P_ENTERING_TAX_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_profile_tax_id)],
-            P_CHOOSING_SYSTEM: [CallbackQueryHandler(add_profile_system, pattern="^sys_")],
-            P_CHOOSING_DIRECTOR: [CallbackQueryHandler(add_profile_director, pattern="^dir_")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_profile)],
-        allow_reentry=True,
-    )
 
     add_employee_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("add_employee", add_employee_start)],
@@ -3465,7 +3277,6 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     application.add_handler(vat_conv_handler)
-    application.add_handler(add_profile_conv_handler)
     application.add_handler(add_employee_conv_handler)
     application.add_handler(edit_salary_conv_handler)
     application.add_handler(delete_employee_conv_handler)
