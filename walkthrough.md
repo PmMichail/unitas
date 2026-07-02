@@ -408,7 +408,9 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
 - **Bot Actions**: Removed the "+ Додати підприємство" (Add company) keyboard layout, message filter registration, and click event callbacks inside [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py) to prevent organization registration actions from the Telegram interface.
 
 ### 6. Build Information
-- **EAS Production Build 1.0.0 (10)**: Initiated production builds for iOS and Android:
+- **EAS Production Build 1.0.0 (10)**: Completed production builds successfully:
+  * **Android App (.aab)**: https://expo.dev/artifacts/eas/ZjhxdcOIEyrpB0O7Csh9_7a6-VX-2FCoZ0jtPIKytA0.aab
+  * **iOS App (.ipa)**: https://expo.dev/artifacts/eas/5skJRVEohWqr_RtqNjHaQ80ipKuN2ug2PBn2Qf_DiGE.ipa
   * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/3fc95c4c-85cd-4335-9357-2b002189d21c
   * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/f264ee30-82b2-41a0-a7f4-cb558655ebc2
 - **Verification**: Validated compilation with `npx tsc --noEmit` producing zero type errors.
