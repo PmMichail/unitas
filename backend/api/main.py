@@ -24735,11 +24735,24 @@ def setup_consulting_company(db: Session = Depends(get_db)):
         if not owner:
             raise HTTPException(status_code=404, detail="No users found in database")
         
-        # Оновимо користувача
-        owner.account_type = "consulting"
-        owner.consulting_company_id = consulting_company.id
-        owner.is_consulting_owner = True
-        db.commit()
+        # Оновимо користувача з обробкою помилок
+        try:
+            owner.account_type = "consulting"
+            owner.consulting_company_id = consulting_company.id
+            owner.is_consulting_owner = True
+            db.commit()
+        except Exception as e:
+            print(f"Error updating user: {e}")
+            db.rollback()
+            # Спробуємо оновити тільки необхідні поля
+            try:
+                owner.consulting_company_id = consulting_company.id
+                owner.is_consulting_owner = True
+                db.commit()
+            except Exception as e2:
+                print(f"Error updating user with minimal fields: {e2}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e2)}")
         
         return {
             "status": "success",
