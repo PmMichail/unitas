@@ -2739,81 +2739,6 @@ def delete_tariff(code: str, db: Session = Depends(get_db)):
 
 
 # Consulting Dashboard Endpoints
-@app.get("/api/consulting/dashboard")
-def get_consulting_dashboard(
-    user_id: Optional[int] = None,
-    db: Session = Depends(get_db)
-):
-    """Get consulting dashboard matrix with all assigned clients and their status counters"""
-    # Get user - for now, we'll use user_id from query param (TODO: replace with auth)
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id parameter required")
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check if user is consulting owner or linked to consulting company
-    if not user.is_consulting_owner and not user.consulting_company_id:
-        raise HTTPException(status_code=403, detail="User is not authorized for consulting dashboard")
-    
-    # Get consulting company
-    consulting_company = None
-    if user.is_consulting_owner:
-        consulting_company = db.query(ConsultingCompany).filter(ConsultingCompany.owner_user_id == user.id).first()
-    elif user.consulting_company_id:
-        consulting_company = db.query(ConsultingCompany).filter(ConsultingCompany.id == user.consulting_company_id).first()
-    
-    if not consulting_company:
-        raise HTTPException(status_code=404, detail="Consulting company not found")
-    
-    # Get all client assignments for this consulting company
-    # If user is owner, show all clients. If user is accountant, show only assigned clients.
-    if user.is_consulting_owner:
-        assignments = db.query(ConsultingClientAssignment).filter(
-            ConsultingClientAssignment.consulting_company_id == consulting_company.id
-        ).all()
-    else:
-        assignments = db.query(ConsultingClientAssignment).filter(
-            ConsultingClientAssignment.consulting_company_id == consulting_company.id,
-            ConsultingClientAssignment.assigned_accountant_id == user.id
-        ).all()
-    
-    # Build dashboard matrix
-    dashboard_data = []
-    for assignment in assignments:
-        client_profile = db.query(Profile).filter(Profile.id == assignment.assigned_profile_id).first()
-        if not client_profile:
-            continue
-        
-        # Stub status counters for now - these will be calculated from actual data later
-        dashboard_data.append({
-            "assignment_id": assignment.id,
-            "client_profile_id": client_profile.id,
-            "client_name": client_profile.name,
-            "target_profile_type": client_profile.type,
-            "tax_id": client_profile.tax_id,
-            "assigned_accountant_id": assignment.assigned_accountant_id,
-            "is_free_slot": assignment.is_free_slot,
-            "discount_applied": assignment.discount_applied,
-            "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
-            # Status counters (stub values for now)
-            "bank_sync_status": "synced",  # TODO: Calculate from bank_connections table
-            "tax_payment_status": "paid",  # TODO: Calculate from tax_events table
-            "dps_report_status": "accepted",  # TODO: Calculate from report_submissions table
-            "subscription_status": "active",  # TODO: Calculate from subscriptions table
-            "subscription_expires_at": None  # TODO: Get from subscriptions table
-        })
-    
-    return {
-        "consulting_company_id": consulting_company.id,
-        "consulting_company_name": consulting_company.company_name,
-        "user_role": "owner" if user.is_consulting_owner else "accountant",
-        "total_clients": len(dashboard_data),
-        "clients": dashboard_data
-    }
-
-
 @app.post("/api/consulting/clients/assign")
 def assign_client_to_accountant(
     client_profile_id: int = Form(...),
@@ -13608,6 +13533,7 @@ def send_invoice_now(
     custom_day: Optional[int] = Form(None),
     custom_month: Optional[int] = Form(None),
     include_act: Optional[bool] = Form(None),
+    send_email: Optional[bool] = Form(True),
     user_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
@@ -13669,10 +13595,11 @@ def send_invoice_now(
         db.commit()
         db.refresh(act)
     
-    trigger_invoice_sending(invoice, act, profile_name, db)
+    if send_email:
+        trigger_invoice_sending(invoice, act, profile_name, db)
     
     return {
-        "message": "Рахунок" + (" та акт" if act else "") + " успішно згенеровано та надіслано!",
+        "message": "Рахунок" + (" та акт" if act else "") + " успішно згенеровано" + (" та надіслано!" if send_email else "!"),
         "invoice_number": inv_num,
         "act_number": act.act_number if act else None
     }
@@ -16317,6 +16244,52 @@ def get_incoming_documents(profile_id: int, user_id: Optional[int] = None, db: S
         raise HTTPException(status_code=404, detail="Profile not found")
     if user_id is not None and profile.user_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied: profile does not belong to this user")
+    
+    # 1. Auto-link documents issued by others that target this profile's tax_id
+    if profile.tax_id:
+        tax_id_clean = profile.tax_id.strip()
+        if len(tax_id_clean) >= 8:
+            matching_invoices = db.query(Invoice).filter(
+                Invoice.client_tax_id == tax_id_clean,
+                Invoice.profile_id != profile_id
+            ).all()
+            for inv in matching_invoices:
+                existing_inc = db.query(IncomingDocument).filter(
+                    IncomingDocument.profile_id == profile_id,
+                    IncomingDocument.document_id == inv.id
+                ).first()
+                if not existing_inc:
+                    new_inc = IncomingDocument(
+                        profile_id=profile_id,
+                        document_id=inv.id,
+                        shared_by=inv.profile_id,
+                        viewed=False
+                    )
+                    db.add(new_inc)
+            db.commit()
+            
+    # 2. Auto-link documents issued by others that target the owner's registered email
+    user = db.query(User).filter(User.id == profile.user_id).first()
+    if user and user.email:
+        email_clean = user.email.strip().lower()
+        matching_invoices_by_email = db.query(Invoice).filter(
+            Invoice.client_email == email_clean,
+            Invoice.profile_id != profile_id
+        ).all()
+        for inv in matching_invoices_by_email:
+            existing_inc = db.query(IncomingDocument).filter(
+                IncomingDocument.profile_id == profile_id,
+                IncomingDocument.document_id == inv.id
+            ).first()
+            if not existing_inc:
+                new_inc = IncomingDocument(
+                    profile_id=profile_id,
+                    document_id=inv.id,
+                    shared_by=inv.profile_id,
+                    viewed=False
+                )
+                db.add(new_inc)
+        db.commit()
     
     incoming = db.query(IncomingDocument).filter(IncomingDocument.profile_id == profile_id).all()
     results = []
@@ -24559,7 +24532,8 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
             db.refresh(consulting_company)
         
         # 2. Знайдемо або створимо користувача-власника
-        owner = db.query(User).filter(User.account_type == "consulting").first()
+        # Спробуємо знайти першого користувача для налаштування
+        owner = db.query(User).first()
         if not owner:
             # Створимо тестового власника
             owner = User(
