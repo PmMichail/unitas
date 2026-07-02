@@ -23972,7 +23972,7 @@ def vote_member_meeting(meeting_id: int, req: ResidentVoteRequest, auth: dict = 
 @app.get("/api/auth/user-by-telegram")
 def get_user_by_telegram(telegram_id: str, db: Session = Depends(get_db)):
     """Get user_id by telegram_id for frontend authentication."""
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"user_id": user.id, "account_type": user.account_type}
