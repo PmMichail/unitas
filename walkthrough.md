@@ -414,3 +414,26 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
   * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/3fc95c4c-85cd-4335-9357-2b002189d21c
   * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/f264ee30-82b2-41a0-a7f4-cb558655ebc2
 - **Verification**: Validated compilation with `npx tsc --noEmit` producing zero type errors.
+
+---
+
+## 20. Google Play Console Compliance and Telegram Bot Cleanup - Version 1.0.0 (11)
+
+### 1. Telegram Bot Complete Registration Flow Deletion
+- **Command & Conversational Flow Removal**: Completely deleted `add_profile_conv_handler` registration and all associated state functions (`add_profile_start`, `add_profile_type`, `add_profile_name`, `add_profile_tax_id`, `add_profile_system`, `add_profile_director`, `save_profile`, `cancel_profile`) from [bot.py](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/telegram_bot/bot.py).
+- **Instruction Cleanup**: Replaced all obsolete `/add_profile` text recommendations in user-facing error messages, startup alerts, and support guides with clear instructions redirecting users to the official website (**www.unitax.pro**).
+
+### 2. Google Play Console Large Screen Orientation & Resizing Compliance
+- **Orientation Settings**: Switched `"orientation"` from `"portrait"` to `"default"` in [app.json](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app.json) to support orientation rotation on tablets, foldables, and large screen devices.
+- **Native Android Manifest Update**: Changed `android:screenOrientation` to `"unspecified"` and added `android:resizeableActivity="true"` under the `MainActivity` in [AndroidManifest.xml](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/android/app/src/main/AndroidManifest.xml) to disable resizing and rotation constraints.
+
+### 3. Google Play Console Edge-to-Edge compliance
+- **System Bar Styling**: Changed the solid status bar background color `#ffffff` to `@android:color/transparent` and enabled transparent navigation bars in [styles.xml](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/android/app/src/main/res/values/styles.xml).
+- **EAS Prebuild Directives**: Added explicit translucent status bar and transparent navigation bar config options under the `android` block in [app.json](file:///Users/mac/.gemini/antigravity-ide/scratch/unitas/mobile/app.json) to guarantee that all generated native builds comply with Android 15 edge-to-edge requirements.
+
+### 4. Build Information
+- **EAS Production Build 1.0.0 (11)**: Completed production builds successfully:
+  * **Android App (.aab)**: https://expo.dev/artifacts/eas/kzR3D2YefhgQyECwLDiBnp1A5hDNrdCWnc0d0OMWmjI.aab
+  * **iOS App (.ipa)**: https://expo.dev/artifacts/eas/-Z-i04A3hzK6oFLMMwG1uCXfoq-MZ9S26qXBxuKTALg.ipa
+  * **Android EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/30b88210-a860-4ee6-99ac-456a035a7a02
+  * **iOS EAS Logs**: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/59ca54cf-b209-4c9a-9ea8-8ae034e708f6
