@@ -2565,6 +2565,74 @@ def on_startup():
     # threading.Thread(target=run_periodic_scheduler, daemon=True).start()
     # print("[SCHEDULER] Started periodic tax event notification thread.")
     print("[SCHEDULER] Scheduler disabled temporarily.")
+    
+    # Ensure test user exists for App Store reviewer
+    db = SessionLocal()
+    try:
+        test_email = "test@unitax.pro"
+        test_user = db.query(User).filter(User.email == test_email).first()
+        if not test_user:
+            import hashlib
+            from datetime import date, datetime, timedelta
+            hashed_pass = hashlib.sha256(b"123456").hexdigest()
+            new_user = User(
+                email=test_email,
+                hashed_password=hashed_pass,
+                phone="+380991234567"
+            )
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+            
+            # Create a test company profile
+            comp = Company(
+                user_id=new_user.id,
+                name="ТОВ 'ТЕСТ КОМПАНІ'",
+                tax_system="llc_ep",
+                group=3,
+                rate=5.0,
+                reg_date=date.today(),
+                has_employees=False,
+                is_vat_payer=False
+            )
+            db.add(comp)
+            db.commit()
+            db.refresh(comp)
+            
+            prof = Profile(
+                id=comp.id,
+                user_id=new_user.id,
+                type="company",
+                name="ТОВ 'ТЕСТ КОМПАНІ'",
+                tax_id="88888888",
+                tax_system="llc_ep",
+                group=3,
+                rate=5.0,
+                reg_date=date.today(),
+                has_employees=False,
+                is_vat_payer=False
+            )
+            db.add(prof)
+            db.commit()
+            db.refresh(prof)
+            
+            # Create subscription
+            ends = datetime.utcnow() + timedelta(days=365)
+            sub = Subscription(
+                profile_id=prof.id,
+                plan="business",
+                plan_type="business",
+                payment_period="monthly",
+                status="active",
+                expires_at=ends
+            )
+            db.add(sub)
+            db.commit()
+            print("[TEST USER] Successfully created test@unitax.pro user and company profile.")
+    except Exception as ue:
+        print(f"[TEST USER ERROR] Failed to create test user: {ue}")
+    finally:
+        db.close()
 
 @app.get("/api/health")
 async def health_check():
@@ -13174,7 +13242,8 @@ def send_email_with_attachments(to_email: str, subject: str, body: str, attachme
         msg['Subject'] = subject
         
         # Attach body
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        content_type = 'html' if body.strip().startswith('<html') or '<html>' in body else 'plain'
+        msg.attach(MIMEText(body, content_type, 'utf-8'))
         
         for filename, file_bytes in attachments:
             if filename.endswith('.p7m'):
@@ -13999,7 +14068,8 @@ def send_email_via_gmail_api(profile_id: int, to_email: str, subject: str, body:
         msg['From'] = auth.email
         msg['Subject'] = subject
         
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        content_type = 'html' if body.strip().startswith('<html') or '<html>' in body else 'plain'
+        msg.attach(MIMEText(body, content_type, 'utf-8'))
         
         for filename, file_bytes in attachments:
             if filename.endswith('.p7m'):
@@ -14405,9 +14475,9 @@ def send_invoice_api(
             is_invoice_file = "invoice" in filename.lower() or "contract" in filename.lower() or "document" in filename.lower()
             is_act_file = "act" in filename.lower() or "waybill" in filename.lower()
             
-            if is_invoice_file and not getattr(req, "include_invoice", True):
+            if is_invoice_file and getattr(req, "include_invoice", True) is False:
                 continue
-            if is_act_file and not getattr(req, "include_act", True):
+            if is_act_file and getattr(req, "include_act", True) is False:
                 continue
             attachments.append((filename, content))
     except Exception as e:
@@ -14509,6 +14579,8 @@ def send_invoice_api(
 </html>"""
 
     auth = db.query(EmailAuth).filter(EmailAuth.profile_id == inv.profile_id).first()
+    
+    print(f"[SEND_INVOICE_API] Sending email to {to_email} with attachments: {[(name, len(content)) for name, content in attachments]}")
     
     import threading
     if auth:
@@ -24585,21 +24657,26 @@ def seed_consulting_test_data(db: Session = Depends(get_db)):
         for i in range(1, 11):
             profile = db.query(Profile).filter(Profile.name == f"Тестовий Клієнт {i}").first()
             if not profile:
-                profile = Profile(
-                    user_id=owner.id,  # тимчасово прив'яжемо до власника
-                    type="fop",
-                    name=f"Тестовий Клієнт {i}",
-                    tax_id=f"1234567890{i}",
-                    tax_system="fop_ep",
-                    group=3,
-                    rate=5,
-                    has_employees=False,
-                    is_vat_payer=False,
-                    reg_date=date.today() - timedelta(days=random.randint(30, 365))
-                )
-                db.add(profile)
-                db.commit()
-                db.refresh(profile)
+                try:
+                    profile = Profile(
+                        user_id=owner.id,  # тимчасово прив'яжемо до власника
+                        type="fop",
+                        name=f"Тестовий Клієнт {i}",
+                        tax_id=f"1234567890{i}",
+                        tax_system="fop_ep",
+                        group=3,
+                        rate=5,
+                        has_employees=False,
+                        is_vat_payer=False,
+                        reg_date=date.today() - timedelta(days=random.randint(30, 365))
+                    )
+                    db.add(profile)
+                    db.commit()
+                    db.refresh(profile)
+                except Exception as e:
+                    print(f"Error creating profile {i}: {e}")
+                    db.rollback()
+                    continue
             client_profiles.append(profile)
         
         # 5. Створимо прив'язки клієнтів до консалтинг компанії
