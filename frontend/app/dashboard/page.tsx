@@ -524,10 +524,9 @@ export default function Dashboard() {
   };
 
   // Перевірка консалтинг статусу користувача
-  const fetchConsultingStatus = async () => {
-    if (!selectedProfile) return;
+  const fetchConsultingStatus = async (userId: number) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/consulting/check-status?user_id=${selectedProfile.user_id}`);
+      const response = await fetch(`${API_BASE_URL}/api/consulting/check-status?user_id=${userId}`);
       const data = await response.json();
       // Використовуємо has_consulting_profile для перевірки, чи є профіль консалтинговою компанією
       setIsConsultingUser(data.has_consulting_profile || false);
@@ -547,7 +546,7 @@ export default function Dashboard() {
       
       if (data.status === 'success') {
         // Після успішного налаштування оновимо статус
-        await fetchConsultingStatus();
+        if (selectedProfile) await fetchConsultingStatus(selectedProfile.user_id);
         // Перенаправимо на консалтинг дашборд
         window.location.href = '/consulting/dashboard';
       } else {
@@ -563,8 +562,10 @@ export default function Dashboard() {
     fetchLegislationData();
     fetchStatements();
     fetchModerationCount();
-    fetchConsultingStatus();
-  }, [companyId]);
+    if (selectedProfile) {
+      fetchConsultingStatus(selectedProfile.user_id);
+    }
+  }, [companyId, selectedProfile?.user_id]);
 
   useEffect(() => {
     if (activeTab === "statements") {
