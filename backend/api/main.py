@@ -2331,7 +2331,13 @@ app = FastAPI(title="UniTax API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://unitax.pro",
+        "https://www.unitax.pro",
+        "https://unitas-frontend.fly.dev",
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
