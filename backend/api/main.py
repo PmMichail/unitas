@@ -973,6 +973,26 @@ class ConsultingMarketplaceOrder(Base):
     client_profile = relationship("Profile")
     service_offer = relationship("ConsultingServiceOffer", back_populates="orders")
 
+class AccountantDocument(Base):
+    __tablename__ = "accountant_documents"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    document_type = Column(String)  # "diploma", "license", "experience", "cv"
+    document_name = Column(String)
+    file_url = Column(String)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+class ConsultingAgreement(Base):
+    __tablename__ = "consulting_agreements"
+    __table_args__ = (UniqueConstraint('consulting_company_id', 'party_id', 'agreement_type', name='_company_party_agreement_uc'),)
+    id = Column(Integer, primary_key=True, index=True)
+    agreement_type = Column(String)  # "company_client" or "company_accountant"
+    consulting_company_id = Column(Integer, ForeignKey("consulting_companies.id"))
+    party_id = Column(Integer)  # User ID of accountant or Profile ID of client
+    status = Column(String, default="pending")  # "pending", "signed"
+    signed_at = Column(DateTime, nullable=True)
+    contract_text = Column(Text)
+
 def get_config_val(db: Session, key: str, default: float) -> float:
     config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
     if config is None:
@@ -24305,6 +24325,204 @@ def add_team_member(
     return {"status": "success"}
 
 
+@app.get("/api/consulting/accountant/documents")
+def get_accountant_documents(
+    accountant_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get documents uploaded for/by a specific accountant."""
+    requester = require_consulting_account(user_id, db)
+    
+    accountant = db.query(User).filter(
+        User.id == accountant_id,
+        User.consulting_company_id == requester.consulting_company_id
+    ).first()
+    if not accountant:
+        raise HTTPException(status_code=403, detail="Access denied: accountant not found in your company")
+        
+    docs = db.query(AccountantDocument).filter(AccountantDocument.user_id == accountant_id).all()
+    return {
+        "documents": [
+            {
+                "id": d.id,
+                "document_type": d.document_type,
+                "document_name": d.document_name,
+                "file_url": d.file_url,
+                "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None
+            }
+            for d in docs
+        ]
+    }
+
+@app.post("/api/consulting/accountant/documents")
+def upload_accountant_document(
+    accountant_id: int = Form(...),
+    document_type: str = Form(...),  # "diploma", "license", "experience", "cv"
+    document_name: str = Form(...),
+    file: UploadFile = File(None),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Upload/add a new document for an accountant."""
+    requester = require_consulting_account(user_id, db)
+    
+    accountant = db.query(User).filter(
+        User.id == accountant_id,
+        User.consulting_company_id == requester.consulting_company_id
+    ).first()
+    if not accountant:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    filename = file.filename if file else document_name
+    file_url = f"/uploads/documents/{accountant_id}/{filename}"
+    
+    doc = AccountantDocument(
+        user_id=accountant_id,
+        document_type=document_type,
+        document_name=document_name,
+        file_url=file_url
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return {"status": "success", "document_id": doc.id}
+
+@app.delete("/api/consulting/accountant/documents/{doc_id}")
+def delete_accountant_document(
+    doc_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Delete an accountant document."""
+    requester = require_consulting_account(user_id, db)
+    
+    doc = db.query(AccountantDocument).filter(AccountantDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    accountant = db.query(User).filter(
+        User.id == doc.user_id,
+        User.consulting_company_id == requester.consulting_company_id
+    ).first()
+    if not accountant:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    db.delete(doc)
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/consulting/agreements")
+def get_consulting_agreement(
+    party_id: int,
+    agreement_type: str,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get agreement status and text."""
+    requester = require_consulting_account(user_id, db)
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == requester.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+        
+    agreement = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == consulting_company.id,
+        ConsultingAgreement.party_id == party_id,
+        ConsultingAgreement.agreement_type == agreement_type
+    ).first()
+    
+    if agreement_type == "company_client":
+        client_name = "Клієнт"
+        profile = db.query(Profile).filter(Profile.id == party_id).first()
+        if profile:
+            client_name = profile.name
+        contract_text = (
+            f"ДОГОВІР ПРО НАДАННЯ БУХГАЛТЕРСЬКИХ ПОСЛУГ № {consulting_company.id}-{party_id}\n\n"
+            f"Цей Договір укладено між Виконавцем: {consulting_company.company_name} "
+            f"та Замовником: {client_name}.\n\n"
+            "1. ПРЕДМЕТ ДОГОВОРУ\n"
+            "1.1. Виконавець зобов'язується надавати Замовнику послуги з ведення бухгалтерського та податкового обліку, "
+            "а Замовник зобов'язується оплачувати ці послуги згідно з обраним тарифним пакетом.\n\n"
+            "2. ВАРТІСТЬ ПОСЛУГ ТА ОПЛАТА\n"
+            "2.1. Вартість послуг визначається згідно з діючими тарифами Виконавця, погодженими сторонами.\n"
+            "2.2. Оплата здійснюється щомісячно до 10 числа поточного місяця.\n\n"
+            "3. ВІДПОВІДАЛЬНІСТЬ СТОРІН\n"
+            "3.1. Виконавець несе відповідальність за правильність нарахування податків та своєчасність подання звітності."
+        )
+    else:
+        acc_name = "Бухгалтер"
+        accountant = db.query(User).filter(User.id == party_id).first()
+        if accountant:
+            acc_name = accountant.email
+        contract_text = (
+            f"ПАРТНЕРСЬКА УГОДА ПРО СПІВПРАЦЮ № {consulting_company.id}-A{party_id}\n\n"
+            f"Ця Угода укладена між Консалтинговою компанією: {consulting_company.company_name} "
+            f"та залученим фахівцем (Бухгалтером): {acc_name}.\n\n"
+            "1. ПРЕДМЕТ УГОДИ\n"
+            "1.1. Сторони погоджуються співпрацювати у сфері надання бухгалтерських та консалтингових послуг клієнтам компанії.\n"
+            "1.2. Бухгалтер зобов'язується якісно та своєчасно виконувати завдання з ведення обліку призначених йому клієнтів.\n\n"
+            "2. КОНФІДЕНЦІЙНІСТЬ\n"
+            "2.1. Бухгалтер зобов'язується не розголошувати будь-яку комерційну та фінансову інформацію про клієнтів компанії.\n\n"
+            "3. ОПЛАТА ПРАЦІ\n"
+            "3.1. Оплата послуг Бухгалтера визначається відсотком від вартості пакетів обслуговуваних клієнтів або за фіксованою ставкою."
+        )
+        
+    if not agreement:
+        agreement = ConsultingAgreement(
+            agreement_type=agreement_type,
+            consulting_company_id=consulting_company.id,
+            party_id=party_id,
+            status="pending",
+            contract_text=contract_text
+        )
+        db.add(agreement)
+        db.commit()
+        db.refresh(agreement)
+        
+    return {
+        "id": agreement.id,
+        "agreement_type": agreement.agreement_type,
+        "party_id": agreement.party_id,
+        "status": agreement.status,
+        "signed_at": agreement.signed_at.isoformat() if agreement.signed_at else None,
+        "contract_text": agreement.contract_text
+    }
+
+@app.post("/api/consulting/agreements/sign")
+def sign_consulting_agreement(
+    party_id: int = Form(...),
+    agreement_type: str = Form(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Sign the digital agreement."""
+    requester = require_consulting_account(user_id, db)
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == requester.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+        
+    agreement = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == consulting_company.id,
+        ConsultingAgreement.party_id == party_id,
+        ConsultingAgreement.agreement_type == agreement_type
+    ).first()
+    
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Agreement not initialized")
+        
+    agreement.status = "signed"
+    agreement.signed_at = datetime.utcnow()
+    db.commit()
+    return {
+        "status": "success",
+        "signed_at": agreement.signed_at.isoformat()
+    }
+
+
 @app.get("/api/consulting/billing")
 def get_consulting_billing(
     user_id: Optional[int] = None,
@@ -24325,15 +24543,9 @@ def get_consulting_billing(
         ConsultingClientAssignment.consulting_company_id == consulting_company.id
     ).count()
     
-    # Count free slots used
-    free_slots_used = db.query(ConsultingClientAssignment).filter(
-        ConsultingClientAssignment.consulting_company_id == consulting_company.id,
-        ConsultingClientAssignment.is_free_slot == True
-    ).count()
-    
-    # Calculate billing
-    free_slots = consulting_company.free_fop_slots_included
-    paid_slots = max(0, total_clients - free_slots)
+    # Calculate billing: every 10th client slot is free
+    free_slots = total_clients // 10
+    paid_slots = total_clients - free_slots
     partner_discount = consulting_company.partner_discount_percentage
     
     # Simple pricing (adjust as needed)
@@ -24349,8 +24561,8 @@ def get_consulting_billing(
         },
         "usage": {
             "total_clients": total_clients,
-            "free_slots_used": free_slots_used,
-            "free_slots_remaining": free_slots - free_slots_used,
+            "free_slots_used": free_slots,
+            "free_slots_remaining": 0,
             "paid_slots": paid_slots
         },
         "billing": {
