@@ -198,13 +198,12 @@ export default function ConsultingDashboard() {
 
   const handleInviteAccountant = async () => {
     try {
-      const userId = 1; // TODO: Replace with actual user_id from auth
+      const userId = currentUserId || 1;
       const formData = new FormData();
       formData.append("email", inviteEmail);
       if (invitePhone) formData.append("phone", invitePhone);
-      formData.append("user_id", userId.toString());
       
-      await axios.post(`${API_BASE_URL}/api/consulting/add-team-member`, formData);
+      await axios.post(`${API_BASE_URL}/api/consulting/add-team-member?user_id=${userId}`, formData);
       setShowInviteModal(false);
       setInviteEmail("");
       setInvitePhone("");
@@ -246,9 +245,8 @@ export default function ConsultingDashboard() {
       formData.append("description_uk", newOffer.description);
       formData.append("price_uah", newOffer.price);
       formData.append("target_type", newOffer.target_type);
-      formData.append("user_id", currentUserId.toString());
       
-      await axios.post(`${API_BASE_URL}/api/consulting/marketplace/offers`, formData);
+      await axios.post(`${API_BASE_URL}/api/consulting/marketplace/offers?user_id=${currentUserId}`, formData);
       setShowOfferModal(false);
       setNewOffer({ title: "", description: "", price: "", target_type: "fop" });
       fetchMarketplaceData();
@@ -262,9 +260,8 @@ export default function ConsultingDashboard() {
       if (!currentUserId) return;
       const formData = new FormData();
       formData.append("is_listed", (!marketplaceListing?.is_listed_in_marketplace).toString());
-      formData.append("user_id", currentUserId.toString());
       
-      await axios.put(`${API_BASE_URL}/api/consulting/marketplace/listing`, formData);
+      await axios.put(`${API_BASE_URL}/api/consulting/marketplace/listing?user_id=${currentUserId}`, formData);
       fetchMarketplaceData();
     } catch (error) {
       console.error("Failed to toggle listing:", error);
