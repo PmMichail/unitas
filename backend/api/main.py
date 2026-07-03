@@ -24625,6 +24625,7 @@ def update_consulting_marketplace_offer(
 @app.post("/api/consulting/seed-test-data")
 def seed_consulting_test_data(db: Session = Depends(get_db)):
     """Створення тестових даних для консалтинг дашборду"""
+    import random
     try:
         # 1. Знайдемо або створимо консалтинг компанію
         consulting_company = db.query(ConsultingCompany).first()
