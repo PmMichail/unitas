@@ -22568,6 +22568,31 @@ def migrate_database():
             print(f"Error self-healing consulting account_type: {e}")
             db.rollback()
 
+        # Backfill: create assignments for approved orders that don't have one yet
+        try:
+            missing = db.execute(text("""
+                SELECT o.id, o.client_profile_id, o.confirmed_accountant_id, s.consulting_company_id
+                FROM consulting_marketplace_orders o
+                JOIN consulting_service_offers s ON o.service_offer_id = s.id
+                WHERE o.status = 'approved'
+                AND NOT EXISTS (
+                    SELECT 1 FROM consulting_client_assignments a
+                    WHERE a.assigned_profile_id = o.client_profile_id
+                )
+            """)).fetchall()
+            for row in missing:
+                db.execute(text("""
+                    INSERT INTO consulting_client_assignments
+                    (consulting_company_id, assigned_profile_id, assigned_accountant_id, is_free_slot, discount_applied)
+                    VALUES (:cid, :pid, :aid, false, 0.0)
+                """), {"cid": row[3], "pid": row[1], "aid": row[2]})
+            if missing:
+                db.commit()
+                print(f"Backfilled {len(missing)} missing client assignments for approved orders")
+        except Exception as e:
+            print(f"Error backfilling assignments: {e}")
+            db.rollback()
+
         # Add is_member_module_active column to subscriptions table if not present
         subscriptions_columns = [col['name'] for col in inspector.get_columns('subscriptions')]
         if 'is_member_module_active' not in subscriptions_columns:
