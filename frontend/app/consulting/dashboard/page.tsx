@@ -2172,23 +2172,9 @@ export default function ConsultingDashboard() {
               {editingOfferId ? "Редагувати тарифний пакет" : "Додати тарифний пакет"}
             </h3>
             <div className="space-y-4">
-              {activeTab !== "staff" && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Ім'я клієнта (ФОП / Назва)
-                  </label>
-                  <input
-                    type="text"
-                    value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
-                    className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent dark:bg-slate-700 dark:text-white"
-                    placeholder="ФОП Петренко І.І. / ТОВ Альфа"
-                  />
-                </div>
-              )}
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Email
+                  Назва пакету
                 </label>
                 <input
                   type="text"

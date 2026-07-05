@@ -25470,6 +25470,44 @@ def approve_incoming_request(
     
     # Generate mock checkout URL linking back to the frontend checkout payment success simulation
     order.liqpay_order_id = f"mkt_{order.id}_{int(datetime.utcnow().timestamp())}"
+
+    # Create client assignment immediately so client appears in dashboard
+    offer = order.service_offer
+    if offer:
+        existing_assignment = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.assigned_profile_id == order.client_profile_id
+        ).first()
+
+        if not existing_assignment:
+            db.add(ConsultingClientAssignment(
+                consulting_company_id=offer.consulting_company_id,
+                assigned_profile_id=order.client_profile_id,
+                assigned_accountant_id=req.confirmed_accountant_id,
+                is_free_slot=False,
+                discount_applied=0.0
+            ))
+        else:
+            existing_assignment.assigned_accountant_id = req.confirmed_accountant_id
+
+        # Seed client-company welcome message
+        db.add(SupportMessage(
+            profile_id=order.client_profile_id,
+            sender="admin",
+            message="Вітаємо! Ваш запит підтверджено. Менеджер компанії скоро зв'яжеться з вами тут.",
+            room_type="client_company",
+            recipient_id=offer.consulting_company_id
+        ))
+
+        # Seed client-accountant welcome message
+        if req.confirmed_accountant_id:
+            db.add(SupportMessage(
+                profile_id=order.client_profile_id,
+                sender="admin",
+                message="Вітаємо! Я ваш персональний бухгалтер. Давайте почнемо роботу. Завантажте, будь ласка, ваші актуальні документи.",
+                room_type="client_accountant",
+                recipient_id=req.confirmed_accountant_id
+            ))
+
     db.commit()
     
     return {
