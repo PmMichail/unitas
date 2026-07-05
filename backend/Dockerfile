@@ -15,10 +15,10 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install psycopg2-binary==2.9.9
 
-COPY backend/ .
+COPY backend/ /app/
 
 EXPOSE 8000
 
 CMD ["sh", "-c", \
     "if [ -f /app/dps-nodejs/package.json ] && [ ! -d /app/dps-nodejs/node_modules ]; then echo '[STARTUP] Installing dps-nodejs npm packages...'; cd /app/dps-nodejs && npm install --production; fi && \
-    uvicorn backend.api.main:app --host 0.0.0.0 --port 8000"]
+    uvicorn api.main:app --host 0.0.0.0 --port 8000"]
