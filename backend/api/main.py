@@ -24548,13 +24548,23 @@ def get_consulting_team(
             ConsultingClientAssignment.assigned_accountant_id == member.id
         ).count()
         
+        # Check if company-accountant agreement is signed
+        agreement = db.query(ConsultingAgreement).filter(
+            ConsultingAgreement.consulting_company_id == user.consulting_company_id,
+            ConsultingAgreement.party_id == member.id,
+            ConsultingAgreement.agreement_type == "company_accountant"
+        ).first()
+        is_active = (agreement is not None and agreement.status == "signed")
+        
         members.append({
             "id": member.id,
             "user_id": member.id,
             "email": member.email,
             "phone": member.phone,
             "role": "owner" if member.is_consulting_owner else "manager",
-            "client_count": client_count
+            "client_count": client_count,
+            "assigned_clients_count": client_count,
+            "is_active": is_active
         })
     
     return {"team": members}
@@ -24775,16 +24785,26 @@ def get_consulting_agreement(
         )
         
     if not agreement:
-        agreement = ConsultingAgreement(
-            agreement_type=agreement_type,
-            consulting_company_id=consulting_company.id,
-            party_id=party_id,
-            status="pending",
-            contract_text=contract_text
-        )
-        db.add(agreement)
-        db.commit()
-        db.refresh(agreement)
+        try:
+            agreement = ConsultingAgreement(
+                agreement_type=agreement_type,
+                consulting_company_id=consulting_company.id,
+                party_id=party_id,
+                status="pending",
+                contract_text=contract_text
+            )
+            db.add(agreement)
+            db.commit()
+            db.refresh(agreement)
+        except Exception:
+            db.rollback()
+            agreement = db.query(ConsultingAgreement).filter(
+                ConsultingAgreement.consulting_company_id == consulting_company.id,
+                ConsultingAgreement.party_id == party_id,
+                ConsultingAgreement.agreement_type == agreement_type
+            ).first()
+            if not agreement:
+                raise HTTPException(status_code=500, detail="Failed to initialize or retrieve agreement")
         
     return {
         "id": agreement.id,
@@ -25743,6 +25763,7 @@ def setup_consulting_company(user_id: Optional[int] = None, db: Session = Depend
             print(f"Оновлення користувача: consulting_company_id={consulting_company.id}, is_consulting_owner=True")
             owner.consulting_company_id = consulting_company.id
             owner.is_consulting_owner = True
+            owner.account_type = "consulting"
             
             print(f"Оновлення профілю: is_consulting_company=True")
             profile.is_consulting_company = True
