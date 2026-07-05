@@ -22876,7 +22876,7 @@ def get_support_messages(
             "profile_id": m.profile_id,
             "is_from_admin": m.sender == "admin",
             "text": m.message,
-            "created_at": m.timestamp.isoformat(),
+            "created_at": m.timestamp.isoformat() if m.timestamp else datetime.utcnow().isoformat(),
             "room_type": m.room_type,
             "recipient_id": m.recipient_id
         }
@@ -25868,15 +25868,18 @@ def check_consulting_status(user_id: Optional[int] = None, telegram_id: Optional
             Profile.is_consulting_company == True
         ).first() is not None
         
+        is_accountant = is_consulting and not is_owner
+        
         return {
             "is_consulting": is_consulting,
             "is_owner": is_owner,
+            "is_accountant": is_accountant,
             "has_consulting_profile": has_consulting_profile,
             "consulting_company_id": user.consulting_company_id
         }
     except Exception as e:
         print(f"Error checking consulting status: {e}")
-        return {"is_consulting": False, "is_owner": False, "has_consulting_profile": False}
+        return {"is_consulting": False, "is_owner": False, "is_accountant": False, "has_consulting_profile": False}
 
 @app.post("/api/consulting/setup-company")
 def setup_consulting_company(user_id: Optional[int] = None, db: Session = Depends(get_db)):

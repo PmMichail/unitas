@@ -104,6 +104,7 @@ export default function Dashboard() {
   const [newAnnContent, setNewAnnContent] = useState("");
   const [newAnnPinned, setNewAnnPinned] = useState(false);
   const [isConsultingUser, setIsConsultingUser] = useState(false);
+  const [isAccountant, setIsAccountant] = useState(false);
 
   const simplifiedSystems = ["ednuy-3-5%", "single_tax", "fop_ep", "llc_ep", "ep"];
   const isSimplified = simplifiedSystems.includes((dashboardData?.tax_system || selectedProfile?.tax_system || "").toLowerCase());
@@ -532,6 +533,7 @@ export default function Dashboard() {
       const data = await response.json();
       // Використовуємо has_consulting_profile для перевірки, чи є профіль консалтинговою компанією
       setIsConsultingUser(data.has_consulting_profile || false);
+      setIsAccountant(data.is_accountant || false);
     } catch (err) {
       console.error("Error checking consulting status:", err);
       setIsConsultingUser(false);
@@ -855,13 +857,22 @@ export default function Dashboard() {
             >
               Маркетплейс
             </Link>
-            {/* Кнопка Консалтинг показується тільки для зареєстрованих консалтингових компаній, які не є неприбутковими організаціями */}
+            {/* Кнопка Консалтинг для власника компанії */}
             {isConsultingUser && selectedProfile?.is_consulting_company === true && !isOSBBOrST && (
               <Link 
                 href="/consulting/dashboard" 
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
               >
                 Консалтинг
+              </Link>
+            )}
+            {/* Кнопка Кабінет бухгалтера */}
+            {isAccountant && !isConsultingUser && (
+              <Link 
+                href="/consulting/accountant" 
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-violet-400 hover:text-violet-200 transition-all duration-200"
+              >
+                Мої клієнти
               </Link>
             )}
           </nav>
