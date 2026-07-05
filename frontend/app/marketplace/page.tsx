@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import { API_BASE_URL } from "@/lib/api";
 import { useApp } from "@/context/AppContext";
-import { 
-  Search, 
-  Star, 
+import {
+  Search,
+  Star,
   ChevronRight,
   ShieldCheck,
   UserCheck,
@@ -16,6 +16,7 @@ import {
   Info,
   BadgeCheck
 } from "lucide-react";
+import ClientAssignmentModal from "./ClientAssignmentModal";
 
 interface ServiceOffer {
   id: number;
@@ -66,7 +67,18 @@ export default function MarketplacePage() {
       company_id: number;
       company_phone: string;
       company_email: string;
+      accountant: {
+        id: number;
+        name: string;
+        email: string;
+        phone: string;
+      } | null;
       is_suspended: boolean;
+      assigned_at: string | null;
+      offer_title: string;
+      offer_description: string;
+      price: number;
+      target_type: string;
     };
   } | null>(null);
 
@@ -82,9 +94,15 @@ export default function MarketplacePage() {
   const [chosenAccountantId, setChosenAccountantId] = useState<string>("");
   const [isDiscretion, setIsDiscretion] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<number>(1);
 
   useEffect(() => {
     fetchCatalog();
+    const telegramId = localStorage.getItem("telegram_id");
+    if (telegramId) {
+      axios.get(`${API_BASE_URL}/api/auth/user-by-telegram?telegram_id=${telegramId}`).then(res => setCurrentUserId(res.data.user_id)).catch(() => {});
+    }
   }, []);
 
   useEffect(() => {
@@ -429,10 +447,18 @@ export default function MarketplacePage() {
                 )}
               </div>
             ) : clientStatus?.has_active_assignment ? (
-              <div className="p-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 dark:text-emerald-400 rounded-2xl flex flex-col gap-2 items-center text-center">
-                <span className="text-2xl">✅</span>
-                <p className="text-sm font-black">Договір активний</p>
-                <p className="text-xs font-semibold leading-relaxed">Ви вже обслуговуєтесь у компанії <strong>{clientStatus.assignment?.company_name}</strong>.</p>
+              <div className="space-y-4">
+                <div className="p-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 dark:text-emerald-400 rounded-2xl flex flex-col gap-2 items-center text-center">
+                  <span className="text-2xl">✅</span>
+                  <p className="text-sm font-black">Договір активний</p>
+                  <p className="text-xs font-semibold leading-relaxed">Ви обслуговуєтесь у компанії <strong>{clientStatus.assignment?.company_name}</strong>.</p>
+                </div>
+                <button
+                  onClick={() => setShowAssignmentModal(true)}
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md"
+                >
+                  <Building2 className="w-4 h-4" /> Відкрити кабінет обслуговування
+                </button>
               </div>
             ) : (
               <div className="space-y-4">
@@ -636,6 +662,20 @@ export default function MarketplacePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Assignment Modal */}
+      {showAssignmentModal && clientStatus?.assignment && clientProfileId && (
+        <ClientAssignmentModal
+          assignment={clientStatus.assignment}
+          clientProfileId={parseInt(clientProfileId)}
+          userId={currentUserId}
+          onClose={() => setShowAssignmentModal(false)}
+          onTerminated={() => {
+            setShowAssignmentModal(false);
+            fetchClientStatus(clientProfileId);
+          }}
+        />
       )}
     </div>
   );

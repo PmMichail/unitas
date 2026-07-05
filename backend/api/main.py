@@ -24976,6 +24976,211 @@ def sign_consulting_agreement(
     }
 
 
+@app.put("/api/consulting/agreements/update")
+def update_consulting_agreement(
+    party_id: int = Form(...),
+    agreement_type: str = Form(...),
+    contract_text: str = Form(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Update agreement text (only if not yet signed)."""
+    requester = require_consulting_account(user_id, db)
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == requester.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    agreement = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == consulting_company.id,
+        ConsultingAgreement.party_id == party_id,
+        ConsultingAgreement.agreement_type == agreement_type
+    ).first()
+
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Agreement not found")
+
+    if agreement.status == "signed":
+        raise HTTPException(status_code=400, detail="Signed agreements cannot be edited")
+
+    agreement.contract_text = contract_text
+    db.commit()
+    return {"status": "success", "contract_text": agreement.contract_text}
+
+
+@app.get("/api/consulting/agreements/download")
+def download_consulting_agreement(
+    party_id: int,
+    agreement_type: str,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Download agreement as text file."""
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Find the company — either user's own or the one assigned to client
+    if user.consulting_company_id:
+        consulting_company = db.query(ConsultingCompany).filter(
+            ConsultingCompany.id == user.consulting_company_id
+        ).first()
+    else:
+        # Client user — find via assignment
+        assignment = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.assigned_profile_id == party_id
+        ).first()
+        consulting_company = assignment.consulting_company if assignment else None
+
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    agreement = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == consulting_company.id,
+        ConsultingAgreement.party_id == party_id,
+        ConsultingAgreement.agreement_type == agreement_type
+    ).first()
+
+    if not agreement:
+        raise HTTPException(status_code=404, detail="Agreement not found")
+
+    # Generate filename
+    if agreement_type == "company_client":
+        profile = db.query(Profile).filter(Profile.id == party_id).first()
+        name_part = profile.name if profile else f"client_{party_id}"
+    else:
+        acc = db.query(User).filter(User.id == party_id).first()
+        name_part = acc.email if acc else f"accountant_{party_id}"
+
+    filename = f"agreement_{agreement_type}_{name_part}.txt"
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        content=agreement.contract_text or "",
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.post("/api/marketplace/terminate")
+def terminate_client_relationship(
+    req: dict,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Terminate relationship between client and consulting company."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    client_profile_id = req.get("client_profile_id")
+    if not client_profile_id:
+        raise HTTPException(status_code=400, detail="client_profile_id required")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Verify ownership
+    profile = db.query(Profile).filter(Profile.id == client_profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Client can terminate own, or company owner can terminate
+    is_owner = profile.user_id == user_id
+    if not is_owner and not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == client_profile_id
+    ).first()
+
+    if not assignment:
+        raise HTTPException(status_code=404, detail="No active assignment")
+
+    # Mark as suspended / terminated
+    assignment.is_suspended = True
+
+    # Also mark related orders as terminated
+    orders = db.query(ConsultingMarketplaceOrder).filter(
+        ConsultingMarketplaceOrder.client_profile_id == client_profile_id,
+        ConsultingMarketplaceOrder.status.in_(["approved", "paid"])
+    ).all()
+    for order in orders:
+        order.status = "terminated"
+
+    db.commit()
+    return {"status": "success", "message": "Relationship terminated"}
+
+
+@app.get("/api/marketplace/client-agreement")
+def get_client_agreement(
+    client_profile_id: int,
+    agreement_type: str,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get agreement from client side (client or company can access)."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Find company via assignment
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == client_profile_id
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="No active assignment")
+
+    consulting_company = assignment.consulting_company
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    agreement = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == consulting_company.id,
+        ConsultingAgreement.party_id == client_profile_id,
+        ConsultingAgreement.agreement_type == agreement_type
+    ).first()
+
+    if not agreement:
+        # Auto-create with default text
+        profile = db.query(Profile).filter(Profile.id == client_profile_id).first()
+        client_name = profile.name if profile else "Клієнт"
+        contract_text = (
+            f"ДОГОВІР ПРО НАДАННЯ БУХГАЛТЕРСЬКИХ ПОСЛУГ № {consulting_company.id}-{client_profile_id}\n\n"
+            f"Цей Договір укладено між Виконавцем: {consulting_company.company_name} "
+            f"та Замовником: {client_name}.\n\n"
+            "1. ПРЕДМЕТ ДОГОВОРУ\n"
+            "1.1. Виконавець зобов'язується надавати Замовнику послуги з ведення бухгалтерського та податкового обліку.\n\n"
+            "2. ВАРТІСТЬ ПОСЛУГ ТА ОПЛАТА\n"
+            "2.1. Вартість послуг визначається згідно з діючими тарифами Виконавця.\n"
+            "2.2. Оплата здійснюється щомісячно.\n\n"
+            "3. ВІДПОВІДАЛЬНІСТЬ СТОРІН\n"
+            "3.1. Виконавець несе відповідальність за правильність нарахування податків."
+        )
+        agreement = ConsultingAgreement(
+            agreement_type=agreement_type,
+            consulting_company_id=consulting_company.id,
+            party_id=client_profile_id,
+            status="pending",
+            contract_text=contract_text
+        )
+        db.add(agreement)
+        db.commit()
+        db.refresh(agreement)
+
+    return {
+        "id": agreement.id,
+        "agreement_type": agreement.agreement_type,
+        "party_id": agreement.party_id,
+        "status": agreement.status,
+        "signed_at": agreement.signed_at.isoformat() if agreement.signed_at else None,
+        "contract_text": agreement.contract_text
+    }
+
+
 @app.get("/api/consulting/billing")
 def get_consulting_billing(
     user_id: Optional[int] = None,
@@ -25566,7 +25771,20 @@ def get_client_marketplace_status(
         company = assignment.consulting_company
         owner = db.query(User).filter(User.id == company.owner_user_id).first() if company else None
         acc = db.query(User).filter(User.id == assignment.assigned_accountant_id).first() if assignment.assigned_accountant_id else None
-        
+
+        # Find the approved order to get offer details
+        order = db.query(ConsultingMarketplaceOrder).filter(
+            ConsultingMarketplaceOrder.client_profile_id == client_profile_id,
+            ConsultingMarketplaceOrder.status.in_(["approved", "paid"])
+        ).order_by(ConsultingMarketplaceOrder.id.desc()).first()
+        offer = order.service_offer if order else None
+
+        # Get accountant profile name
+        acc_name = None
+        if acc:
+            acc_profile = db.query(Profile).filter(Profile.user_id == acc.id).first()
+            acc_name = acc_profile.name if acc_profile else acc.email
+
         return {
             "has_active_assignment": True,
             "has_pending_order": False,
@@ -25578,10 +25796,16 @@ def get_client_marketplace_status(
                 "company_email": owner.email if owner else "",
                 "accountant": {
                     "id": acc.id,
-                    "email": acc.email,
-                    "phone": acc.phone or ""
+                    "name": acc_name or acc.email if acc else "",
+                    "email": acc.email if acc else "",
+                    "phone": acc.phone or "" if acc else ""
                 } if acc else None,
-                "is_suspended": assignment.is_suspended
+                "is_suspended": assignment.is_suspended,
+                "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
+                "offer_title": offer.title_uk if offer else "",
+                "offer_description": offer.description_uk if offer else "",
+                "price": offer.price_uah if offer else (order.amount if order else 0),
+                "target_type": offer.target_type if offer else ""
             }
         }
         
