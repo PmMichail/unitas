@@ -22532,7 +22532,7 @@ def migrate_database():
 
         # Self-heal: any user already marked as consulting owner must have account_type='consulting'
         try:
-            db.execute(text("UPDATE users SET account_type = 'consulting' WHERE is_consulting_owner = 1 AND (account_type IS NULL OR account_type != 'consulting')"))
+            db.execute(text("UPDATE users SET account_type = 'consulting' WHERE is_consulting_owner = true AND (account_type IS NULL OR account_type != 'consulting')"))
             db.commit()
         except Exception as e:
             print(f"Error self-healing consulting account_type: {e}")
