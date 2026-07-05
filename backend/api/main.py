@@ -297,6 +297,9 @@ class User(Base):
     # Marketplace fields
     is_listed_in_marketplace = Column(Boolean, default=False)
     public_bio_uk = Column(Text, nullable=True)
+    # Accountant profile fields (for marketplace accountant selection)
+    accountant_rating = Column(Float, default=5.0)
+    accountant_specialization = Column(String, nullable=True)
     companies = relationship("Company", back_populates="owner")
     profiles = relationship("Profile", back_populates="owner")
     consulting_company = relationship("ConsultingCompany", foreign_keys=[consulting_company_id])
@@ -22530,6 +22533,24 @@ def migrate_database():
                 print(f"Error adding is_consulting_owner: {e}")
                 db.rollback()
 
+        if 'accountant_rating' not in users_columns:
+            try:
+                db.execute(text("ALTER TABLE users ADD COLUMN accountant_rating FLOAT DEFAULT 5.0"))
+                db.commit()
+                print("Added accountant_rating column to users table")
+            except Exception as e:
+                print(f"Error adding accountant_rating: {e}")
+                db.rollback()
+
+        if 'accountant_specialization' not in users_columns:
+            try:
+                db.execute(text("ALTER TABLE users ADD COLUMN accountant_specialization VARCHAR"))
+                db.commit()
+                print("Added accountant_specialization column to users table")
+            except Exception as e:
+                print(f"Error adding accountant_specialization: {e}")
+                db.rollback()
+
         # Self-heal: any user already marked as consulting owner must have account_type='consulting'
         try:
             db.execute(text("UPDATE users SET account_type = 'consulting' WHERE is_consulting_owner = true AND (account_type IS NULL OR account_type != 'consulting')"))
@@ -24610,10 +24631,36 @@ def get_consulting_team(
             "role": "owner" if member.is_consulting_owner else "manager",
             "client_count": client_count,
             "assigned_clients_count": client_count,
-            "is_active": is_active
+            "is_active": is_active,
+            "rating": member.accountant_rating if member.accountant_rating is not None else 5.0,
+            "specialization": member.accountant_specialization or ""
         })
     
     return {"team": members}
+
+
+@app.post("/api/consulting/team/{member_id}/specialization")
+def update_accountant_specialization(
+    member_id: int,
+    specialization: str = Form(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Update an accountant's specialization/area of expertise shown on the marketplace (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied: only owners can edit team member specialization")
+
+    member = db.query(User).filter(
+        User.id == member_id,
+        User.consulting_company_id == user.consulting_company_id
+    ).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    member.accountant_specialization = specialization.strip()
+    db.commit()
+    return {"status": "success", "specialization": member.accountant_specialization}
 
 
 @app.post("/api/consulting/add-team-member")
@@ -24650,6 +24697,7 @@ def add_team_member(
         existing_user.consulting_company_id = user.consulting_company_id
         existing_user.account_type = "consulting"
         existing_user.is_consulting_owner = False
+        existing_user.role = "accountant"
     else:
         # Create new user
         new_user = User(
@@ -24658,7 +24706,7 @@ def add_team_member(
             consulting_company_id=user.consulting_company_id,
             account_type="consulting",
             is_consulting_owner=False,
-            role="manager"
+            role="accountant"
         )
         db.add(new_user)
     
@@ -25168,7 +25216,7 @@ def get_company_accountants(company_id: int, db: Session = Depends(get_db)):
 
     accountants = db.query(User).filter(
         User.consulting_company_id == company_id,
-        User.role == "accountant"
+        User.is_consulting_owner == False
     ).all()
     
     active_accountants = [acc for acc in accountants if acc.id in signed_party_ids]
@@ -25185,7 +25233,8 @@ def get_company_accountants(company_id: int, db: Session = Depends(get_db)):
             "name": name,
             "email": acc.email,
             "phone": acc.phone or "",
-            "rating": 4.9
+            "rating": acc.accountant_rating if acc.accountant_rating is not None else 5.0,
+            "specialization": acc.accountant_specialization or "Загальна практика"
         })
         
     return {"accountants": result}

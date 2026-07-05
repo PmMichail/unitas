@@ -569,18 +569,35 @@ export default function MarketplacePage() {
                       <Info className="w-4 h-4" /> У цій компанії наразі немає вільних бухгалтерів.
                     </div>
                   ) : (
-                    <select
-                      value={chosenAccountantId}
-                      onChange={(e) => setChosenAccountantId(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-550 text-xs font-semibold"
-                    >
-                      <option value="">-- Оберіть конкретного бухгалтера --</option>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
                       {accountants.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.email} {acc.phone ? `(${acc.phone})` : ""}
-                        </option>
+                        <button
+                          key={acc.id}
+                          onClick={() => setChosenAccountantId(String(acc.id))}
+                          className={`w-full text-left p-3 rounded-xl border-2 transition-all ${
+                            chosenAccountantId === String(acc.id)
+                              ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30"
+                              : "border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-slate-800 dark:text-white">
+                              {acc.name}
+                            </span>
+                            <span className="flex items-center gap-0.5 text-amber-500 text-xs font-bold">
+                              <Star className="w-3 h-3 fill-amber-500" />
+                              {(acc.rating ?? 5.0).toFixed(1)}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 mb-1">
+                            {acc.email}
+                          </div>
+                          <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 rounded-full text-[10px] font-semibold">
+                            {acc.specialization || "Загальна практика"}
+                          </div>
+                        </button>
                       ))}
-                    </select>
+                    </div>
                   )}
                 </div>
               )}

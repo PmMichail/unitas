@@ -45,6 +45,8 @@ interface StaffMember {
   language: string;
   assigned_clients_count: number;
   is_active: boolean;
+  rating?: number;
+  specialization?: string;
 }
 
 type ConsultingTab = "clients" | "staff" | "billing" | "marketplace" | "chats" | "requests";
@@ -78,6 +80,7 @@ export default function ConsultingDashboard() {
   const [staffDocs, setStaffDocs] = useState<Record<number, any[]>>({});
   const [uploadingDocType, setUploadingDocType] = useState<Record<number, string>>({});
   const [uploadingDocName, setUploadingDocName] = useState<Record<number, string>>({});
+  const [specializationDrafts, setSpecializationDrafts] = useState<Record<number, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<Record<number, File | null>>({});
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsName, setSettingsName] = useState("");
@@ -622,6 +625,18 @@ export default function ConsultingDashboard() {
     } catch (error) {
       console.error("Failed to delete client:", error);
       alert("Помилка при видаленні клієнта");
+    }
+  };
+
+  const handleSaveSpecialization = async (memberId: number, specialization: string) => {
+    try {
+      const formData = new FormData();
+      formData.append("specialization", specialization);
+      await axios.post(`${API_BASE_URL}/api/consulting/team/${memberId}/specialization?user_id=${currentUserId || 1}`, formData);
+      fetchStaffData();
+    } catch (error) {
+      console.error("Failed to update specialization:", error);
+      alert("Не вдалося зберегти напрямок спеціалізації");
     }
   };
 
@@ -1294,6 +1309,40 @@ export default function ConsultingDashboard() {
                       <span className="text-lg font-bold text-violet-600 dark:text-violet-400">
                         {staff.assigned_clients_count}
                       </span>
+                    </div>
+                  </div>
+
+                  {/* Rating (visible to client on the marketplace) */}
+                  <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-slate-600 dark:text-slate-400">
+                        Рейтинг на маркетплейсі
+                      </span>
+                      <span className="flex items-center gap-1 text-amber-500 font-semibold text-sm">
+                        ★ {(staff.rating ?? 5.0).toFixed(1)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Specialization editor */}
+                  <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
+                    <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                      Напрямок / спеціалізація
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="напр. ФОП 3 група, ЗЕД, зарплата"
+                        value={specializationDrafts[staff.user_id] ?? staff.specialization ?? ""}
+                        onChange={(e) => setSpecializationDrafts({ ...specializationDrafts, [staff.user_id]: e.target.value })}
+                        className="flex-1 text-xs px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-700 dark:text-white"
+                      />
+                      <button
+                        onClick={() => handleSaveSpecialization(staff.user_id, specializationDrafts[staff.user_id] ?? staff.specialization ?? "")}
+                        className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium rounded transition-colors"
+                      >
+                        Зберегти
+                      </button>
                     </div>
                   </div>
 
