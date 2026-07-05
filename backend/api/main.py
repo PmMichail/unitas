@@ -22492,6 +22492,52 @@ def migrate_database():
                 print(f"Error adding show_apartment_meters_in_transparency: {e}")
                 db.rollback()
 
+        if 'is_consulting_company' not in profiles_columns:
+            try:
+                db.execute(text("ALTER TABLE profiles ADD COLUMN is_consulting_company BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added is_consulting_company column to profiles table")
+            except Exception as e:
+                print(f"Error adding is_consulting_company: {e}")
+                db.rollback()
+
+        # Check and add account_type / consulting columns to users table
+        users_columns = [col['name'] for col in inspector.get_columns('users')]
+        if 'account_type' not in users_columns:
+            try:
+                db.execute(text("ALTER TABLE users ADD COLUMN account_type VARCHAR DEFAULT 'individual'"))
+                db.commit()
+                print("Added account_type column to users table")
+            except Exception as e:
+                print(f"Error adding account_type: {e}")
+                db.rollback()
+
+        if 'consulting_company_id' not in users_columns:
+            try:
+                db.execute(text("ALTER TABLE users ADD COLUMN consulting_company_id INTEGER"))
+                db.commit()
+                print("Added consulting_company_id column to users table")
+            except Exception as e:
+                print(f"Error adding consulting_company_id: {e}")
+                db.rollback()
+
+        if 'is_consulting_owner' not in users_columns:
+            try:
+                db.execute(text("ALTER TABLE users ADD COLUMN is_consulting_owner BOOLEAN DEFAULT FALSE"))
+                db.commit()
+                print("Added is_consulting_owner column to users table")
+            except Exception as e:
+                print(f"Error adding is_consulting_owner: {e}")
+                db.rollback()
+
+        # Self-heal: any user already marked as consulting owner must have account_type='consulting'
+        try:
+            db.execute(text("UPDATE users SET account_type = 'consulting' WHERE is_consulting_owner = 1 AND (account_type IS NULL OR account_type != 'consulting')"))
+            db.commit()
+        except Exception as e:
+            print(f"Error self-healing consulting account_type: {e}")
+            db.rollback()
+
         # Add is_member_module_active column to subscriptions table if not present
         subscriptions_columns = [col['name'] for col in inspector.get_columns('subscriptions')]
         if 'is_member_module_active' not in subscriptions_columns:
