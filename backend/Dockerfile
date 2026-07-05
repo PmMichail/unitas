@@ -21,4 +21,4 @@ EXPOSE 8000
 
 CMD ["sh", "-c", \
     "if [ -f /app/dps-nodejs/package.json ] && [ ! -d /app/dps-nodejs/node_modules ]; then echo '[STARTUP] Installing dps-nodejs npm packages...'; cd /app/dps-nodejs && npm install --production; fi && \
-    uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+    uvicorn backend.api.main:app --host 0.0.0.0 --port 8000"]
