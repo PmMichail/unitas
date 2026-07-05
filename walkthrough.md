@@ -613,3 +613,16 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
 - **FastAPI Client Verification**: Simulated `POST /api/marketplace/liqpay-callback` using `TestClient` and confirmed that all state transitions, assignments, and seeded welcome messages are successfully verified.
 - **Deployment**: Successfully redeployed the updated backend service to Fly.io production.
 
+
+## 30. Apple App Store Guideline 3.1.1 Compliance (Removing External Registration Info)
+
+### 1. External Registration Guide Removal
+- **Login screen**: Removed the text block telling users that registration is performed on the website and guiding them to sign up online before logging into the app from the mobile login screen (`mobile/app/(auth)/login.tsx`). The screen now strictly contains the email/password fields and the sign-in actions.
+
+### 2. Version Bumping & Production EAS Builds
+- **Configuration Update**: Incremented the `ios.buildNumber` and `android.versionCode` from `11` to `12` in `mobile/app.json`.
+- **EAS Build Submission**: Submitted production builds successfully to Expo servers for compiling version `1.0.0 (12)`.
+  - Android Logs: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/5967aa10-d4a4-41d2-b135-ae97cec2530e
+  - iOS Logs: https://expo.dev/accounts/maiklmax/projects/unitax-mobile/builds/8e47f4e1-f320-4d99-9846-ceee80d8647b
+
+
