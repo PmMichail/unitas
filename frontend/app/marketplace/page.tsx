@@ -13,7 +13,8 @@ import {
   ArrowUpDown,
   Building2,
   Clock,
-  Info
+  Info,
+  BadgeCheck
 } from "lucide-react";
 
 interface ServiceOffer {
@@ -79,7 +80,7 @@ export default function MarketplacePage() {
   const [accountants, setAccountants] = useState<any[]>([]);
   const [loadingAccountants, setLoadingAccountants] = useState(false);
   const [chosenAccountantId, setChosenAccountantId] = useState<string>("");
-  const [isDiscretion, setIsDiscretion] = useState(true);
+  const [isDiscretion, setIsDiscretion] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -146,7 +147,7 @@ export default function MarketplacePage() {
     setSelectedCompany(company);
     setSelectedOffer(offer);
     setChosenAccountantId("");
-    setIsDiscretion(true);
+    setIsDiscretion(false);
     fetchAccountants(company.consulting_company_id);
     setShowCheckoutModal(true);
   };
@@ -584,10 +585,17 @@ export default function MarketplacePage() {
                             <span className="text-xs font-bold text-slate-800 dark:text-white">
                               {acc.name}
                             </span>
-                            <span className="flex items-center gap-0.5 text-amber-500 text-xs font-bold">
-                              <Star className="w-3 h-3 fill-amber-500" />
-                              {(acc.rating ?? 5.0).toFixed(1)}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {acc.is_verified && (
+                                <span className="flex items-center gap-0.5 text-emerald-500 text-[10px] font-bold" title="Договір з компанією підписано">
+                                  <BadgeCheck className="w-3.5 h-3.5" />
+                                </span>
+                              )}
+                              <span className="flex items-center gap-0.5 text-amber-500 text-xs font-bold">
+                                <Star className="w-3 h-3 fill-amber-500" />
+                                {(acc.rating ?? 5.0).toFixed(1)}
+                              </span>
+                            </div>
                           </div>
                           <div className="text-[10px] text-slate-500 dark:text-slate-400 mb-1">
                             {acc.email}

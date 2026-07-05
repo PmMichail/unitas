@@ -25214,8 +25214,8 @@ def get_marketplace_catalog(db: Session = Depends(get_db)):
 
 @app.get("/api/marketplace/companies/{company_id}/accountants")
 def get_company_accountants(company_id: int, db: Session = Depends(get_db)):
-    """Get the list of active accountants in a company for client selection."""
-    # Find signed agreements
+    """Get the list of accountants in a company for client selection."""
+    # Find signed agreements (verified accountants)
     signed_agreements = db.query(ConsultingAgreement).filter(
         ConsultingAgreement.consulting_company_id == company_id,
         ConsultingAgreement.agreement_type == "company_accountant",
@@ -25228,22 +25228,21 @@ def get_company_accountants(company_id: int, db: Session = Depends(get_db)):
         User.is_consulting_owner == False
     ).all()
     
-    active_accountants = [acc for acc in accountants if acc.id in signed_party_ids]
-    
     result = []
-    for acc in active_accountants:
+    for acc in accountants:
         profile = db.query(Profile).filter(Profile.user_id == acc.id).first()
-        name = profile.name if profile else acc.email.split("@")[0].capitalize()
+        name = profile.name if profile else (acc.email.split("@")[0].capitalize() if acc.email else "Бухгалтер")
         if not name:
             name = "Бухгалтер"
             
         result.append({
             "id": acc.id,
             "name": name,
-            "email": acc.email,
+            "email": acc.email or "",
             "phone": acc.phone or "",
             "rating": acc.accountant_rating if acc.accountant_rating is not None else 5.0,
-            "specialization": acc.accountant_specialization or "Загальна практика"
+            "specialization": acc.accountant_specialization or "Загальна практика",
+            "is_verified": acc.id in signed_party_ids
         })
         
     return {"accountants": result}

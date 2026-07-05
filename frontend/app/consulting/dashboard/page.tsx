@@ -69,6 +69,7 @@ export default function ConsultingDashboard() {
   const [marketplaceListing, setMarketplaceListing] = useState<any>(null);
   const [showOfferModal, setShowOfferModal] = useState(false);
   const [newOffer, setNewOffer] = useState({ title: "", description: "", price: "", target_type: "fop" });
+  const [editingOfferId, setEditingOfferId] = useState<number | null>(null);
   const [filterMyClients, setFilterMyClients] = useState(false);
   const [filterNeedsAttention, setFilterNeedsAttention] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
@@ -762,7 +763,45 @@ export default function ConsultingDashboard() {
       fetchMarketplaceData();
     } catch (error) {
       console.error("Failed to create offer:", error);
+      alert("Помилка при створенні тарифу");
     }
+  };
+
+  const handleEditOffer = (offer: any) => {
+    setEditingOfferId(offer.id);
+    setNewOffer({
+      title: offer.title,
+      description: offer.description || "",
+      price: String(offer.price),
+      target_type: offer.target_type
+    });
+    setShowOfferModal(true);
+  };
+
+  const handleUpdateOffer = async () => {
+    if (!editingOfferId || !currentUserId) return;
+    try {
+      const formData = new FormData();
+      formData.append("title_uk", newOffer.title);
+      formData.append("description_uk", newOffer.description);
+      formData.append("price_uah", newOffer.price);
+      formData.append("target_type", newOffer.target_type);
+      
+      await axios.put(`${API_BASE_URL}/api/consulting/marketplace/offers/${editingOfferId}?user_id=${currentUserId}`, formData);
+      setShowOfferModal(false);
+      setEditingOfferId(null);
+      setNewOffer({ title: "", description: "", price: "", target_type: "fop" });
+      fetchMarketplaceData();
+    } catch (error) {
+      console.error("Failed to update offer:", error);
+      alert("Помилка при оновленні тарифу");
+    }
+  };
+
+  const openCreateOfferModal = () => {
+    setEditingOfferId(null);
+    setNewOffer({ title: "", description: "", price: "", target_type: "fop" });
+    setShowOfferModal(true);
   };
 
   const handleToggleListing = async () => {
@@ -1742,7 +1781,7 @@ export default function ConsultingDashboard() {
                   </p>
                 </div>
                 <button
-                  onClick={() => setShowOfferModal(true)}
+                  onClick={openCreateOfferModal}
                   className="px-4 py-2 bg-gradient-to-r from-violet-600 to-orange-500 hover:from-violet-500 hover:to-orange-400 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-violet-600/10 flex items-center gap-1"
                 >
                   <span>+ Додати пакет</span>
@@ -1806,12 +1845,20 @@ export default function ConsultingDashboard() {
                           </span>
                           <span className="text-[10px] text-slate-450 dark:text-slate-400 ml-1">грн/міс</span>
                         </div>
-                        <button
-                          onClick={() => handleDeleteOffer(offer.id)}
-                          className="px-3.5 py-1.5 text-rose-500 hover:text-white hover:bg-rose-500 border border-rose-200/50 hover:border-transparent rounded-xl text-xs font-bold transition-all"
-                        >
-                          Видалити
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEditOffer(offer)}
+                            className="px-3.5 py-1.5 text-indigo-500 hover:text-white hover:bg-indigo-500 border border-indigo-200/50 hover:border-transparent rounded-xl text-xs font-bold transition-all"
+                          >
+                            Редагувати
+                          </button>
+                          <button
+                            onClick={() => handleDeleteOffer(offer.id)}
+                            className="px-3.5 py-1.5 text-rose-500 hover:text-white hover:bg-rose-500 border border-rose-200/50 hover:border-transparent rounded-xl text-xs font-bold transition-all"
+                          >
+                            Видалити
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2122,7 +2169,7 @@ export default function ConsultingDashboard() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-slate-800 rounded-xl p-6 w-full max-w-md mx-4 border border-orange-500/20 shadow-lg">
             <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
-              Додати тарифний пакет
+              {editingOfferId ? "Редагувати тарифний пакет" : "Додати тарифний пакет"}
             </h3>
             <div className="space-y-4">
               {activeTab !== "staff" && (
@@ -2198,10 +2245,10 @@ export default function ConsultingDashboard() {
                 Скасувати
               </button>
               <button
-                onClick={handleCreateOffer}
+                onClick={editingOfferId ? handleUpdateOffer : handleCreateOffer}
                 className="flex-1 px-4 py-2 bg-gradient-to-r from-violet-600 to-orange-500 hover:from-violet-700 hover:to-orange-600 text-white rounded-lg font-medium transition-colors"
               >
-                Додати
+                {editingOfferId ? "Зберегти" : "Додати"}
               </button>
             </div>
           </div>
