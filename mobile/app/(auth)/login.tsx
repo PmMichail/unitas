@@ -838,11 +838,7 @@ export default function LoginScreen() {
                       style={[styles.secondaryBtn, { marginTop: 8, borderColor: '#10b981' }]}
                     />
 
-                    <View style={{ marginTop: 20, alignItems: 'center', paddingHorizontal: 10 }}>
-                      <Text style={{ fontSize: 13, color: '#64748b', textAlign: 'center', lineHeight: 18 }}>
-                        Реєстрація компаній та ФОП здійснюється на нашому веб-сайті. Створіть акаунт на веб-сайті, щоб увійти в мобільний додаток.
-                      </Text>
-                    </View>
+
                   </>
                 ) : (
                   <>
