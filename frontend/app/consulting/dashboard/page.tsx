@@ -47,7 +47,7 @@ interface StaffMember {
   is_active: boolean;
 }
 
-type ConsultingTab = "clients" | "staff" | "billing" | "marketplace" | "chats";
+type ConsultingTab = "clients" | "staff" | "billing" | "marketplace" | "chats" | "requests";
 
 export default function ConsultingDashboard() {
   const [activeTab, setActiveTab] = useState<ConsultingTab>("clients");
@@ -109,6 +109,7 @@ export default function ConsultingDashboard() {
   // Marketplace incoming requests states
   const [marketplaceRequests, setMarketplaceRequests] = useState<any[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(false);
+  const [requestAccountants, setRequestAccountants] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (activeTab === "chats") {
@@ -130,10 +131,10 @@ export default function ConsultingDashboard() {
   }, [activeTab, selectedChatId, dashboardData, currentUserId]);
 
   useEffect(() => {
-    if (activeTab === "marketplace" && isOwner && currentUserId) {
+    if (isOwner && currentUserId) {
       fetchMarketplaceRequests();
     }
-  }, [activeTab, isOwner, currentUserId]);
+  }, [isOwner, currentUserId]);
 
   const fetchMarketplaceRequests = async () => {
     setLoadingRequests(true);
@@ -261,7 +262,9 @@ export default function ConsultingDashboard() {
     try {
       const telegramId = localStorage.getItem("telegram_id");
       if (!telegramId) {
-        console.error("No telegram_id found in localStorage");
+        console.warn("No telegram_id found in localStorage, fallback to user_id=1");
+        setCurrentUserId(1);
+        fetchDashboardData(1);
         return;
       }
       const response = await axios.get(`${API_BASE_URL}/api/auth/user-by-telegram?telegram_id=${telegramId}`);
@@ -561,6 +564,12 @@ export default function ConsultingDashboard() {
       setShowAgreementModal(false);
       setSignConsentChecked(false);
       alert("Договір успішно підписано онлайн!");
+      
+      // Refresh team and dashboard data
+      fetchStaffData();
+      if (currentUserId) {
+        fetchDashboardData(currentUserId);
+      }
     } catch (error) {
       console.error("Failed to sign agreement:", error);
       alert("Помилка підписання договору");
@@ -839,6 +848,8 @@ export default function ConsultingDashboard() {
     return true;
   }) || [];
 
+  const pendingRequestsCount = marketplaceRequests.filter(r => r.status === "requested").length;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#fafbfd] dark:bg-[#090d16] flex items-center justify-center">
@@ -1022,6 +1033,23 @@ export default function ConsultingDashboard() {
                 }`}
               >
                 Мій Маркетплейс
+              </button>
+            )}
+            {isOwner && (
+              <button
+                onClick={() => setActiveTab("requests")}
+                className={`relative px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === "requests"
+                    ? "bg-white dark:bg-slate-850 text-indigo-650 dark:text-indigo-400 shadow-md shadow-slate-200/50 dark:shadow-none border border-slate-200/40 dark:border-slate-750"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+              >
+                Вхідні запити
+                {pendingRequestsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 px-1.5 py-0.5 bg-rose-500 text-white text-[8px] font-black rounded-full border border-white dark:border-slate-900 animate-bounce">
+                    {pendingRequestsCount}
+                  </span>
+                )}
               </button>
             )}
           </div>
@@ -1741,6 +1769,111 @@ export default function ConsultingDashboard() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === "requests" && isOwner && (
+          <div className="space-y-6 animate-fadeIn">
+            <div>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white">
+                Вхідні запити від клієнтів
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-405 mt-1">
+                Тут відображаються нові заявки від клієнтів з маркетплейсу. Будь ласка, призначте персонального бухгалтера для кожного запиту та підтвердіть співпрацю.
+              </p>
+            </div>
+
+            {loadingRequests ? (
+              <div className="text-center py-12">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-650"></div>
+                <p className="mt-2 text-xs text-slate-500">Завантаження запитів...</p>
+              </div>
+            ) : marketplaceRequests.filter(r => r.status === "requested").length === 0 ? (
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-12 text-center">
+                <div className="w-12 h-12 bg-slate-105 dark:bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-4 text-slate-405">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                </div>
+                <h4 className="font-bold text-slate-800 dark:text-slate-250">Немає нових запитів</h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
+                  Усі вхідні запити оброблені. Нові запити від клієнтів з'являться тут автоматично.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {marketplaceRequests.filter(r => r.status === "requested").map((req) => {
+                  const selectedAccId = requestAccountants[req.order_id] || "";
+                  const activeAccountants = staffData.filter(s => s.is_active);
+
+                  return (
+                    <div 
+                      key={req.order_id} 
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-6"
+                    >
+                      <div className="space-y-2.5 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 bg-amber-500/10 text-amber-600 rounded-full text-[10px] font-black uppercase tracking-wider border border-amber-500/20">
+                            Новий запит
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-bold">
+                            {new Date(req.created_at).toLocaleDateString('uk-UA')}
+                          </span>
+                        </div>
+                        <h4 className="font-black text-slate-900 dark:text-white text-base">
+                          {req.client_name}
+                        </h4>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                          <div>
+                            Тариф: <strong className="text-slate-700 dark:text-slate-300">"{req.offer_title}"</strong>
+                          </div>
+                          <div>
+                            Вартість: <strong className="text-indigo-650 dark:text-indigo-400">{req.amount} грн/міс</strong>
+                          </div>
+                          {req.is_at_company_discretion ? (
+                            <div className="text-[10px] bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-slate-600 dark:text-slate-400 font-bold">
+                              На розсуд компанії
+                            </div>
+                          ) : (
+                            <div className="text-[10px] bg-violet-50 dark:bg-violet-950/30 px-2 py-0.5 rounded text-violet-600 dark:text-violet-400 font-bold border border-violet-100 dark:border-violet-900/30">
+                              Бажаний бухгалтер: {req.requested_accountant?.email || "Не вказано"}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Accountant Assignment and Approve Actions */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 min-w-[300px]">
+                        <div className="flex-1">
+                          <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            Призначити виконавця:
+                          </label>
+                          <select
+                            value={selectedAccId}
+                            onChange={(e) => setRequestAccountants(prev => ({ ...prev, [req.order_id]: e.target.value }))}
+                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl focus:outline-none focus:border-indigo-500 text-xs font-semibold"
+                          >
+                            <option value="">На розсуд компанії (без призначення)</option>
+                            {activeAccountants.map((acc) => (
+                              <option key={acc.user_id} value={acc.user_id}>
+                                {acc.email} (клієнтів: {acc.assigned_clients_count})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <button
+                          onClick={() => handleApproveRequest(req.order_id, selectedAccId ? parseInt(selectedAccId) : null)}
+                          className="px-5 py-3.5 bg-indigo-650 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-650/10 flex items-center justify-center gap-1.5 self-end"
+                        >
+                          Підтвердити
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
