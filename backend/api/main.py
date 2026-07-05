@@ -22551,6 +22551,15 @@ def migrate_database():
                 print(f"Error adding accountant_specialization: {e}")
                 db.rollback()
 
+        # Fix: migrate existing accountants from role="manager" to role="accountant"
+        try:
+            db.execute(text("UPDATE users SET role = 'accountant' WHERE is_consulting_owner = false AND account_type = 'consulting' AND role = 'manager'"))
+            db.commit()
+            print("Migrated existing accountants from role=manager to role=accountant")
+        except Exception as e:
+            print(f"Error migrating accountant roles: {e}")
+            db.rollback()
+
         # Self-heal: any user already marked as consulting owner must have account_type='consulting'
         try:
             db.execute(text("UPDATE users SET account_type = 'consulting' WHERE is_consulting_owner = true AND (account_type IS NULL OR account_type != 'consulting')"))
@@ -24628,7 +24637,7 @@ def get_consulting_team(
             "user_id": member.id,
             "email": member.email,
             "phone": member.phone,
-            "role": "owner" if member.is_consulting_owner else "manager",
+            "role": "owner" if member.is_consulting_owner else "accountant",
             "client_count": client_count,
             "assigned_clients_count": client_count,
             "is_active": is_active,
