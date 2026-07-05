@@ -29,7 +29,9 @@ import {
   Send,
   MessageSquare,
   Trash2,
-  AlertCircle
+  AlertCircle,
+  Landmark,
+  Shield
 } from "lucide-react";
 
 // Counter animation hook
@@ -854,7 +856,7 @@ export default function Dashboard() {
               Маркетплейс
             </Link>
             {/* Кнопка Консалтинг показується тільки для зареєстрованих консалтингових компаній, які не є неприбутковими організаціями */}
-            {isConsultingUser && !isOSBBOrST && (
+            {isConsultingUser && selectedProfile?.is_consulting_company === true && !isOSBBOrST && (
               <Link 
                 href="/consulting/dashboard" 
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-400 hover:text-slate-200 transition-all duration-200"
@@ -897,6 +899,68 @@ export default function Dashboard() {
             {/* Dashboard View */}
             {activeTab === "dashboard" && (
               <div className="mt-8 space-y-8">
+                
+                {selectedProfile?.is_managed_client && (
+                  <div className="p-6 rounded-2xl bg-gradient-to-r from-violet-600/10 to-indigo-600/10 border border-violet-500/20 shadow-lg space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-violet-600/20 text-violet-600 rounded-xl">
+                        <Cpu className="w-6 h-6 text-violet-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                          Швидке налаштування кабінету клієнта
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Для повноцінної роботи вашого бухгалтера з кабінетом, будь ласка, підключіть необхідні інтеграції:
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                      <Link
+                        href="/settings/banks"
+                        className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-violet-500/50 hover:shadow-md transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Landmark className="w-5 h-5 text-indigo-500" />
+                          <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                            Банки та виписки
+                          </span>
+                        </div>
+                        <span className="text-xs text-violet-600 dark:text-violet-400 font-bold group-hover:translate-x-1 transition-transform">
+                          Налаштувати →
+                        </span>
+                      </Link>
+                      <Link
+                        href="/settings/tax-api"
+                        className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-violet-500/50 hover:shadow-md transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Cpu className="w-5 h-5 text-emerald-500" />
+                          <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                            Інтеграція з ДПС
+                          </span>
+                        </div>
+                        <span className="text-xs text-violet-600 dark:text-violet-400 font-bold group-hover:translate-x-1 transition-transform">
+                          Налаштувати →
+                        </span>
+                      </Link>
+                      <Link
+                        href="/settings/certificates"
+                        className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-violet-500/50 hover:shadow-md transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Shield className="w-5 h-5 text-amber-500" />
+                          <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                            КЕП та Підписи
+                          </span>
+                        </div>
+                        <span className="text-xs text-violet-600 dark:text-violet-400 font-bold group-hover:translate-x-1 transition-transform">
+                          Налаштувати →
+                        </span>
+                      </Link>
+                    </div>
+                  </div>
+                )}
                 
                 {pendingRequests && pendingRequests.length > 0 && (
                   <div className="space-y-4">

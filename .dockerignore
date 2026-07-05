@@ -1,11 +1,11 @@
 .venv/
 .git/
 .github/
-__pycache__/
+**/__pycache__/
 *.pyc
 unitas.db
-node_modules/
-.next/
+**/node_modules/
+**/.next/
 dist/
 build/
 temp_bot/
@@ -16,4 +16,9 @@ mobile/
 frontend/
 scratch/
 unitas.zip
-
+*.db
+*.pdf
+backend/dps-go/
+backend/dps-nodejs/
+backend/uapki/
+hello-fly/

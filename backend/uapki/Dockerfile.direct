@@ -1,0 +1,22 @@
+FROM uapki-cpp:latest
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    httpx
+
+# Copy direct auth test script
+COPY test_dps_direct_auth.py /app/test_dps_direct_auth.py
+
+# Copy test files
+COPY test_sign.json /app/test_sign.json
+COPY test_key.jks /app/test_key.jks
+
+WORKDIR /app
+
+CMD ["python3", "test_dps_direct_auth.py"]

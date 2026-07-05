@@ -82,10 +82,67 @@
 - [x] Verify remote signature parameters and layout flow
 
 ## Dashboard Modals Redesign
-- [ ] Refactor `globals.css` to clean up forced modal borders and text-white overrides
-- [ ] Implement premium, responsive, clean modal components in `frontend/app/dashboard/page.tsx`
-- [ ] Verify local Next.js build passes cleanly without compilation errors
-- [ ] Deploy updated frontend to Fly.io production
-- [ ] Verify the live site modal visual styling and theme switching
+- [x] Refactor `globals.css` to clean up forced modal borders and text-white overrides
+- [x] Implement premium, responsive, clean modal components in `frontend/app/dashboard/page.tsx`
+- [x] Verify local Next.js build passes cleanly without compilation errors
+- [x] Deploy updated frontend to Fly.io production
+- [x] Verify the live site modal visual styling and theme switching
 
+## Consulting Partnership Terms, Dynamic Client Pricing, and 50% Discount for Every 10th Client
+- [x] Lock consulting company settings dialog on frontend as a read-only Cooperation Terms modal
+- [x] Map consulting billing endpoint on backend to calculate dynamic client prices based on resolved tariff profiles
+- [x] Implement 10% partner discount with 50% discount on every 10th client in backend billing calculation
+- [x] Display detailed client-by-client monthly billing breakdown grid in partner cabinet billing tab
+- [x] Verify local Next.js frontend compile safety via `npx tsc --noEmit`
+- [x] Verify FastAPI backend syntax checks
+- [x] Redeploy backend and frontend services to Fly.io production
+- [x] Update walkthrough.md and task.md with details of implementation
+
+## Accountant Assignment controls, Marketplace Toggle fix, and Marketplace Layout redesign
+- [x] Replace read-only accountant cell with styled dropdown selector in Client Matrix tab
+- [x] Modify fetchDashboardData to pre-load staff data for owner accounts
+- [x] Update assign-accountant endpoint on backend to allow unassignment when accountant_id <= 0
+- [x] Include is_listed_in_marketplace flag in backend consulting dashboard response to fix the toggle button state
+- [x] Redesign Marketplace settings banner into a clean glassmorphic component with pulsing status badge
+- [x] Refactor Marketplace service offers list into a responsive grid card layout
+- [x] Fix invited accountant signup conflict by allowing passwordless invited users to register
+- [x] Verify frontend build passes without compile errors
+- [x] Redeploy both services to Fly.io production
+- [x] Create detailed design and search plan for the public marketplace
+
+## Consulting Cabinet Improvements & Card Integration
+- [x] Add `is_suspended` to `ConsultingClientAssignment` and card columns to `ConsultingCompany`
+- [x] Implement database migrations for new columns
+- [x] Fix invited accountant signup conflict by allowing passwordless invited users to register
+- [x] Fall back to any user with `is_listed_in_marketplace == True` in `get_marketplace_catalog`
+- [x] Update `/api/consulting/billing` to return `is_suspended` and omit suspended clients from total price
+- [x] Implement `PUT /api/consulting/billing/suspension` endpoint for freezing/unfreezing client slots
+- [x] Implement `POST /api/consulting/billing/card` endpoint for linking payment cards
+- [x] Implement Card Binding Modal & Card Info display in the billing tab of the frontend
+- [x] Add client row freeze/unfreeze action buttons in the Billing tab
+- [x] Verify Next.js build compiles without errors
+- [x] Update walkthrough.md and task.md with details of implementation
+- [x] Fix accountant invitation hijacking bug in backend team member search
+
+## Marketplace Checkout Accountant Selection & Communication Restored
+- [x] Add `requested_accountant_id` and `is_at_company_discretion` to `ConsultingMarketplaceOrder` model and migration
+- [x] Update `POST /api/marketplace/checkout` to link chosen accountant and create requested order
+- [x] Add `GET /api/consulting/marketplace/requests` and `POST /api/consulting/marketplace/requests/{order_id}/approve` endpoints
+- [x] Add `GET /api/marketplace/client-status` to let client track active assignments and requested orders
+- [x] Update support chat GET/POST endpoints to route messages through separate rooms (UniTax, Client-Company, Client-Accountant)
+- [x] Update `getClientMarketplaceStatus` and `getPartnerSupportChats` helpers to frontend api client
+- [x] Integrate multi-room support chat tab selection in client-side SupportChatWidget
+- [x] Implement incoming requests grid list and accountant approval dropdowns in partner dashboard
+- [x] Verify frontend build passes Next.js production packaging checks
+- [x] Redeploy backend and frontend services to Fly.io production
+
+## Consulting Cabinet Reconstruction & Compilation Repair
+- [x] Reconstruct lost `page.tsx` from logs using python fuzzy match parser
+- [x] Fix duplicate Settings Modal blocks in loading checks
+- [x] Delete duplicate remove accountant button blocks
+- [x] Resolve template literal backtick syntax issues
+- [x] Declare settingsDescription state and remove duplicate handlers
+- [x] Verify local build compiling safely (`npm run build` succeeds)
+- [x] Redeploy frontend updates to Fly.io
+- [x] Update walkthrough.md and task.md
 

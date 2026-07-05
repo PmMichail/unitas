@@ -41,6 +41,8 @@ interface Profile {
   color_theme?: string;
   lat?: number | null;
   lon?: number | null;
+  is_consulting_company?: boolean;
+  is_managed_client?: boolean;
 }
 
 interface SubscriptionInfo {

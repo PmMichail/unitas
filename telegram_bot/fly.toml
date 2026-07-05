@@ -1,0 +1,16 @@
+# fly.toml app configuration file for telegram bot
+app = 'unitas-telegram-bot'
+primary_region = 'gru'
+
+[build]
+  dockerfile = 'Dockerfile'
+  context = '.'
+
+[env]
+  BACKEND_URL = 'https://unitas.fly.dev'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512

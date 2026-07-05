@@ -924,6 +924,11 @@ class ConsultingCompany(Base):
     # Rating for marketplace sorting
     rating = Column(Float, default=0.0)  # Rating from 0 to 5
     review_count = Column(Integer, default=0)  # Number of reviews
+    # Card details
+    card_last_four = Column(String, nullable=True)
+    card_type = Column(String, nullable=True)
+    card_masked = Column(String, nullable=True)
+    card_token = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -939,6 +944,7 @@ class ConsultingClientAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow)
     is_free_slot = Column(Boolean, default=False)  # Whether this uses one of the free FOP slots
     discount_applied = Column(Float, default=0.0)  # Discount percentage applied to this client
+    is_suspended = Column(Boolean, default=False)
     
     consulting_company = relationship("ConsultingCompany", back_populates="client_assignments")
     client_profile = relationship("Profile")
@@ -965,13 +971,18 @@ class ConsultingMarketplaceOrder(Base):
     client_profile_id = Column(Integer, ForeignKey("profiles.id"))
     service_offer_id = Column(Integer, ForeignKey("consulting_service_offers.id"))
     amount = Column(Float, nullable=False)
-    status = Column(String, default="pending")  # 'pending', 'paid', 'failed'
+    status = Column(String, default="pending")  # 'pending', 'requested', 'approved', 'paid', 'failed'
     liqpay_order_id = Column(String, nullable=True)
+    requested_accountant_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    confirmed_accountant_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_at_company_discretion = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     client_profile = relationship("Profile")
     service_offer = relationship("ConsultingServiceOffer", back_populates="orders")
+    requested_accountant = relationship("User", foreign_keys=[requested_accountant_id])
+    confirmed_accountant = relationship("User", foreign_keys=[confirmed_accountant_id])
 
 class AccountantDocument(Base):
     __tablename__ = "accountant_documents"
@@ -1230,6 +1241,8 @@ class SupportMessage(Base):
     sender = Column(String, nullable=False)  # 'user' or 'admin'
     message = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    room_type = Column(String(50), default="company_support")
+    recipient_id = Column(Integer, nullable=True)
 
 class VisitLog(Base):
     __tablename__ = "visit_logs"
@@ -1374,7 +1387,12 @@ migrations = [
     "ALTER TABLE users ADD COLUMN account_type VARCHAR DEFAULT 'individual'",
     "ALTER TABLE users ADD COLUMN language VARCHAR DEFAULT 'uk'",
     "ALTER TABLE users ADD COLUMN is_listed_in_marketplace BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE users ADD COLUMN public_bio_uk TEXT DEFAULT NULL"
+    "ALTER TABLE users ADD COLUMN public_bio_uk TEXT DEFAULT NULL",
+    "ALTER TABLE consulting_marketplace_orders ADD COLUMN requested_accountant_id INTEGER DEFAULT NULL",
+    "ALTER TABLE consulting_marketplace_orders ADD COLUMN confirmed_accountant_id INTEGER DEFAULT NULL",
+    "ALTER TABLE consulting_marketplace_orders ADD COLUMN is_at_company_discretion BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE support_messages ADD COLUMN room_type VARCHAR(50) DEFAULT 'company_support'",
+    "ALTER TABLE support_messages ADD COLUMN recipient_id INTEGER DEFAULT NULL"
 ]
 
 import re
@@ -7173,13 +7191,77 @@ def delete_meter_reading(profile_id: int, meter_id: int, reading_id: int, db: Se
     return {"message": "Показ успішно видалено"}
 
 
+def serialize_profile(p: Profile, is_managed: bool = False) -> dict:
+    return {
+        "id": p.id,
+        "user_id": p.user_id,
+        "type": p.type,
+        "name": p.name,
+        "tax_id": p.tax_id,
+        "tax_system": p.tax_system,
+        "is_director": p.is_director,
+        "group": p.group,
+        "rate": p.rate,
+        "reg_date": p.reg_date.isoformat() if p.reg_date else None,
+        "has_employees": p.has_employees,
+        "is_vat_payer": p.is_vat_payer,
+        "esv_paid_by_employer": p.esv_paid_by_employer,
+        "address": p.address,
+        "director_name": p.director_name,
+        "phone": p.phone,
+        "is_blocked": p.is_blocked,
+        "block_reason": p.block_reason,
+        "bank_name": p.bank_name,
+        "mfo": p.mfo,
+        "iban": p.iban,
+        "custom_recipient": p.custom_recipient,
+        "custom_edrpou": p.custom_edrpou,
+        "custom_iban_edp": p.custom_iban_edp,
+        "custom_iban_esv": p.custom_iban_esv,
+        "custom_iban_pdfo": p.custom_iban_pdfo,
+        "custom_iban_vz": p.custom_iban_vz,
+        "organization_subtype": p.organization_subtype,
+        "non_profit_code": p.non_profit_code,
+        "parent_profile_id": p.parent_profile_id,
+        "has_resident_cabinet": p.has_resident_cabinet,
+        "is_member_module_active": p.is_member_module_active,
+        "slug": p.slug,
+        "color_theme": p.color_theme,
+        "lat": p.lat,
+        "lon": p.lon,
+        "is_consulting_company": p.is_consulting_company,
+        "is_managed_client": is_managed
+    }
+
+
 @app.get("/api/profiles/{telegram_id}")
 def get_profiles(telegram_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     background_tasks.add_task(cleanup_expired_guests)
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="Користувача не знайдено")
-    return [p for p in user.profiles if p.parent_profile_id is None]
+    
+    res = [serialize_profile(p, is_managed=False) for p in user.profiles if p.parent_profile_id is None]
+    
+    if user.consulting_company_id:
+        if user.is_consulting_owner:
+            assignments = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.consulting_company_id == user.consulting_company_id
+            ).all()
+        else:
+            assignments = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.consulting_company_id == user.consulting_company_id,
+                ConsultingClientAssignment.assigned_accountant_id == user.id
+            ).all()
+        
+        existing_ids = {p["id"] for p in res}
+        for assignment in assignments:
+            client_profile = assignment.client_profile
+            if client_profile and client_profile.id not in existing_ids:
+                res.append(serialize_profile(client_profile, is_managed=True))
+                
+    return res
+
 
 @app.get("/api/profiles")
 def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -7187,7 +7269,27 @@ def get_profiles_query(telegram_id: str, background_tasks: BackgroundTasks, db: 
     user = db.query(User).filter((User.telegram_id == telegram_id) | (User.email == telegram_id)).first()
     if not user:
         return []
-    return [p for p in user.profiles if p.parent_profile_id is None]
+        
+    res = [serialize_profile(p, is_managed=False) for p in user.profiles if p.parent_profile_id is None]
+    
+    if user.consulting_company_id:
+        if user.is_consulting_owner:
+            assignments = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.consulting_company_id == user.consulting_company_id
+            ).all()
+        else:
+            assignments = db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.consulting_company_id == user.consulting_company_id,
+                ConsultingClientAssignment.assigned_accountant_id == user.id
+            ).all()
+        
+        existing_ids = {p["id"] for p in res}
+        for assignment in assignments:
+            client_profile = assignment.client_profile
+            if client_profile and client_profile.id not in existing_ids:
+                res.append(serialize_profile(client_profile, is_managed=True))
+                
+    return res
 
 @app.delete("/api/profiles/{profile_id}")
 def delete_profile_endpoint(profile_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -11945,6 +12047,41 @@ def delete_profile_data_helper(profile_id: int, db: Session):
     if company:
         db.delete(company)
 
+    # 27. Delete ConsultingClientAssignment where assigned_profile_id == profile_id
+    db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == profile_id
+    ).delete(synchronize_session=False)
+
+    # 28. Delete ConsultingMarketplaceOrder where client_profile_id == profile_id
+    db.query(ConsultingMarketplaceOrder).filter(
+        ConsultingMarketplaceOrder.client_profile_id == profile_id
+    ).delete(synchronize_session=False)
+
+    # 29. Clean up ConsultingCompany references if this profile represents a consulting company
+    profile_obj = db.query(Profile).filter(Profile.id == profile_id).first()
+    if profile_obj and (profile_obj.is_consulting_company or getattr(profile_obj, 'type', '') == 'consulting'):
+        cc = db.query(ConsultingCompany).filter(ConsultingCompany.owner_user_id == profile_obj.user_id).first()
+        if cc:
+            db.query(ConsultingClientAssignment).filter(
+                ConsultingClientAssignment.consulting_company_id == cc.id
+            ).delete(synchronize_session=False)
+            
+            offers = db.query(ConsultingServiceOffer).filter(
+                ConsultingServiceOffer.consulting_company_id == cc.id
+            ).all()
+            for offer in offers:
+                db.query(ConsultingMarketplaceOrder).filter(
+                    ConsultingMarketplaceOrder.service_offer_id == offer.id
+                ).delete(synchronize_session=False)
+                db.delete(offer)
+            
+            db.query(User).filter(User.consulting_company_id == cc.id).update(
+                {User.consulting_company_id: None, User.is_consulting_owner: False},
+                synchronize_session=False
+            )
+            
+            db.delete(cc)
+
 @app.post("/api/invoices/recurring")
 def create_recurring_invoice(
     profile_id: int = Form(...),
@@ -12666,7 +12803,44 @@ def generate_invoice_pdf(invoice: Invoice, profile: Profile, db: Session = None)
         notes_style = ParagraphStyle('InvNotes', parent=styles['Normal'], fontName=font_name, fontSize=8, leading=12, textColor=colors.HexColor("#4A5568"))
         story.append(Paragraph(f"<b>Примітка:</b> {invoice.notes}", notes_style))
         
-    story.append(Spacer(1, 35))
+    # Payment QR code block
+    qr_data = f"IBAN: {iban_val}\nОтримувач: {profile.name}\nКод: {profile.tax_id}\nМФО: {mfo_val}\nСума: {invoice.amount} UAH\nПризначення: Оплата за рахунком № {invoice.invoice_number}"
+    try:
+        import qrcode
+        from reportlab.platypus import Image as RLImage
+        qr = qrcode.QRCode(version=1, box_size=2, border=1)
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        qr_buf = io.BytesIO()
+        img.save(qr_buf, format="PNG")
+        qr_buf.seek(0)
+        pay_qr_img = RLImage(qr_buf, width=70, height=70)
+        pay_qr_img.hAlign = 'CENTER'
+        
+        qr_block_data = [
+            [
+                Paragraph("<b>Швидка оплата за QR-кодом:</b><br/>Відскануйте QR-код своїм банківським застосунком (Приват24, Монобанк тощо) для автоматичного заповнення реквізитів платежу.", small_style),
+                pay_qr_img
+            ]
+        ]
+        qr_table = Table(qr_block_data, colWidths=[400, 140])
+        qr_table.setStyle(TableStyle([
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F7FAFC")),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN', (1,0), (1,0), 'CENTER'),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('LEFTPADDING', (0,0), (-1,-1), 8),
+            ('RIGHTPADDING', (0,0), (-1,-1), 8),
+        ]))
+        story.append(qr_table)
+        story.append(Spacer(1, 15))
+    except Exception as qre:
+        print(f"Failed to generate payment QR: {qre}")
+        
+    story.append(Spacer(1, 15))
     
     # Signatures
     sig_data = [
@@ -21920,10 +22094,14 @@ class SendSubscriptionInvoiceRequest(BaseModel):
 class SupportMessageRequest(BaseModel):
     profile_id: int
     text: str
+    room_type: Optional[str] = "company_support"
+    recipient_id: Optional[int] = None
 
 class SupportReplyRequest(BaseModel):
     profile_id: int
     text: str
+    room_type: Optional[str] = "company_support"
+    recipient_id: Optional[int] = None
 
 @app.post("/api/subscriptions/enable-autorenew/{profile_id}")
 def enable_autorenew(profile_id: int, req: EnableAutoRenewRequest, db: Session = Depends(get_db)):
@@ -22138,7 +22316,9 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     msg = SupportMessage(
         profile_id=req.profile_id,
         sender="user",
-        message=req.text
+        message=req.text,
+        room_type=req.room_type,
+        recipient_id=req.recipient_id
     )
     db.add(msg)
     db.commit()
@@ -22575,10 +22755,19 @@ migrate_database()
 
 
 @app.get("/api/support/messages/{profile_id}")
-def get_support_messages(profile_id: int, db: Session = Depends(get_db)):
-    messages = db.query(SupportMessage).filter(
-        SupportMessage.profile_id == profile_id
-    ).order_by(SupportMessage.timestamp.asc()).all()
+def get_support_messages(
+    profile_id: int,
+    room_type: Optional[str] = "company_support",
+    recipient_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(SupportMessage).filter(SupportMessage.profile_id == profile_id)
+    if room_type:
+        query = query.filter(SupportMessage.room_type == room_type)
+    if recipient_id is not None:
+        query = query.filter(SupportMessage.recipient_id == recipient_id)
+        
+    messages = query.order_by(SupportMessage.timestamp.asc()).all()
     
     return [
         {
@@ -22586,7 +22775,9 @@ def get_support_messages(profile_id: int, db: Session = Depends(get_db)):
             "profile_id": m.profile_id,
             "is_from_admin": m.sender == "admin",
             "text": m.message,
-            "created_at": m.timestamp.isoformat()
+            "created_at": m.timestamp.isoformat(),
+            "room_type": m.room_type,
+            "recipient_id": m.recipient_id
         }
         for m in messages
     ]
@@ -22600,11 +22791,52 @@ def reply_support_message(req: SupportReplyRequest, db: Session = Depends(get_db
     msg = SupportMessage(
         profile_id=req.profile_id,
         sender="admin",
-        message=req.text
+        message=req.text,
+        room_type=req.room_type,
+        recipient_id=req.recipient_id
     )
     db.add(msg)
     db.commit()
     return {"message": "Відповідь надіслано", "id": msg.id, "created_at": msg.timestamp.isoformat()}
+
+
+@app.get("/api/support/partner/chats")
+def get_partner_support_chats(
+    room_type: str = "client_company",
+    recipient_id: int = Query(...),
+    db: Session = Depends(get_db)
+):
+    """Get the list of clients who have sent messages/active support chat in the specified room for this company/accountant."""
+    from sqlalchemy import func
+    
+    subq = db.query(
+        SupportMessage.profile_id,
+        func.max(SupportMessage.timestamp).label("last_msg_time")
+    ).filter(
+        SupportMessage.room_type == room_type,
+        SupportMessage.recipient_id == recipient_id
+    ).group_by(SupportMessage.profile_id).subquery()
+    
+    chats = db.query(Profile, subq.c.last_msg_time).join(
+        subq, Profile.id == subq.c.profile_id
+    ).order_by(subq.c.last_msg_time.desc()).all()
+    
+    result = []
+    for profile, last_time in chats:
+        last_msg = db.query(SupportMessage).filter(
+            SupportMessage.profile_id == profile.id,
+            SupportMessage.room_type == room_type,
+            SupportMessage.recipient_id == recipient_id
+        ).order_by(SupportMessage.timestamp.desc()).first()
+        
+        result.append({
+            "profile_id": profile.id,
+            "profile_name": profile.name,
+            "last_message_text": last_msg.message if last_msg else "",
+            "last_message_time": last_time.isoformat() if last_time else None,
+            "last_message_from_admin": (last_msg.sender == "admin") if last_msg else False
+        })
+    return result
 
 @app.get("/api/support/chats")
 def get_support_chats(db: Session = Depends(get_db)):
@@ -24110,21 +24342,61 @@ def get_consulting_dashboard(
             "tax_status": tax_status,
             "report_status": report_status,
             "needs_attention": needs_attention,
-            "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None
+            "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
+            "assignment_id": assignment.id,
+            "is_suspended": assignment.is_suspended
         })
     
     return {
         "consulting_company": {
             "id": consulting_company.id,
             "name": consulting_company.company_name,
+            "description": user.public_bio_uk or "",
             "free_slots": consulting_company.free_fop_slots_included,
-            "partner_discount": consulting_company.partner_discount_percentage
+            "partner_discount": consulting_company.partner_discount_percentage,
+            "owner_email": consulting_company.owner.email if consulting_company.owner else None
         },
         "user_role": "owner" if user.is_consulting_owner else "manager",
+        "is_listed_in_marketplace": user.is_listed_in_marketplace,
         "clients": clients,
         "total_clients": len(clients),
         "needs_attention_count": sum(1 for c in clients if c["needs_attention"])
     }
+
+
+@app.put("/api/consulting/update-company")
+def update_consulting_company(
+    company_name: str = Form(...),
+    description: Optional[str] = Form(None),
+    free_slots: Optional[int] = Form(None),
+    partner_discount: Optional[float] = Form(None),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Update consulting company name, free slots, discount, and description/bio."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Consulting company not found")
+        
+    # Update fields
+    consulting_company.company_name = company_name
+    
+    if free_slots is not None:
+        consulting_company.free_fop_slots_included = free_slots
+    if partner_discount is not None:
+        consulting_company.partner_discount_percentage = partner_discount
+        
+    # Update bio for the owner user
+    user.public_bio_uk = description
+    
+    db.commit()
+    return {"status": "success"}
 
 
 def get_bank_status(profile_id: int, db: Session) -> dict:
@@ -24197,7 +24469,7 @@ def get_report_status(profile_id: int, db: Session) -> dict:
     # Get latest report
     latest_report = db.query(GeneratedReport).filter(
         GeneratedReport.profile_id == profile_id
-    ).order_by(GeneratedReport.generated_at.desc()).first()
+    ).order_by(GeneratedReport.created_at.desc()).first()
     
     if not latest_report:
         return {"status": "not_submitted", "label": "Не відправлено", "color": "red"}
@@ -24206,9 +24478,9 @@ def get_report_status(profile_id: int, db: Session) -> dict:
     from datetime import datetime
     now = datetime.now()
     current_quarter = (now.month - 1) // 3 + 1
-    report_quarter = (latest_report.generated_at.month - 1) // 3 + 1
+    report_quarter = (latest_report.created_at.month - 1) // 3 + 1
     
-    if report_quarter == current_quarter and latest_report.generated_at.year == now.year:
+    if report_quarter == current_quarter and latest_report.created_at.year == now.year:
         if latest_report.status == "accepted":
             return {"status": "accepted", "label": f"Прийнято (Кв.{current_quarter})", "color": "green"}
         elif latest_report.status == "pending":
@@ -24278,6 +24550,7 @@ def get_consulting_team(
         
         members.append({
             "id": member.id,
+            "user_id": member.id,
             "email": member.email,
             "phone": member.phone,
             "role": "owner" if member.is_consulting_owner else "manager",
@@ -24299,10 +24572,22 @@ def add_team_member(
     if not user.is_consulting_owner:
         raise HTTPException(status_code=403, detail="Access denied: only owners can add team members")
     
-    # Check if user already exists
-    existing_user = db.query(User).filter(
-        (User.email == email) | (User.phone == phone)
+    # Get consulting company name
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
     ).first()
+    company_name = consulting_company.company_name if consulting_company else "консалтингової компанії"
+    
+    # Check if user already exists
+    conditions = []
+    if email and email.strip():
+        conditions.append(User.email == email)
+    if phone and phone.strip():
+        conditions.append(User.phone == phone)
+        
+    existing_user = None
+    if conditions:
+        existing_user = db.query(User).filter(or_(*conditions)).first()
     
     if existing_user:
         # Update existing user
@@ -24322,6 +24607,26 @@ def add_team_member(
         db.add(new_user)
     
     db.commit()
+    
+    # Send email
+    email_body = f"""Вітаємо!
+
+Вас запрошено приєднатися до консалтингової компанії "{company_name}" в якості бухгалтера на платформі UniTax.
+Будь ласка, перейдіть до кабінету та пройдіть авторизацію за посиланням: https://www.unitax.pro/login
+
+З повагою,
+Команда UniTax"""
+    
+    try:
+        send_email_with_attachments(
+            to_email=email,
+            subject=f"Запрошення до компанії {company_name} на UniTax",
+            body=email_body,
+            attachments=[]
+        )
+    except Exception as e:
+        print(f"[EMAIL ERROR] Failed to send team member invitation email: {e}")
+        
     return {"status": "success"}
 
 
@@ -24528,7 +24833,7 @@ def get_consulting_billing(
     user_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """Get billing information for the consulting company."""
+    """Get billing information for the consulting company with detailed tariff breakdown."""
     user = require_consulting_account(user_id, db)
     
     consulting_company = db.query(ConsultingCompany).filter(
@@ -24537,39 +24842,181 @@ def get_consulting_billing(
     
     if not consulting_company:
         raise HTTPException(status_code=404, detail="Consulting company not found")
-    
-    # Count total clients
-    total_clients = db.query(ConsultingClientAssignment).filter(
-        ConsultingClientAssignment.consulting_company_id == consulting_company.id
-    ).count()
-    
-    # Calculate billing: every 10th client slot is free
-    free_slots = total_clients // 10
-    paid_slots = total_clients - free_slots
+        
     partner_discount = consulting_company.partner_discount_percentage
     
-    # Simple pricing (adjust as needed)
-    base_price_per_slot = 100  # UAH per month
-    discounted_price = base_price_per_slot * (1 - partner_discount / 100)
-    monthly_cost = paid_slots * discounted_price
+    # Query all clients assigned, ordered by assignment date
+    assignments = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.consulting_company_id == consulting_company.id
+    ).order_by(ConsultingClientAssignment.assigned_at.asc()).all()
     
+    # Load all tariffs to quickly map prices
+    tariffs = db.query(TariffPlan).all()
+    tariff_prices = {t.code: t.monthly_price for t in tariffs}
+    
+    # Fallback default prices if tariff_plans empty or missing codes
+    default_prices = {
+        "fop_1_2": 200.0,
+        "fop_3": 450.0,
+        "non_profit": 250.0,
+        "tov_general_vat": 950.0,
+        "tov_ep": 650.0
+    }
+    
+    def get_base_price_and_name(profile):
+        if profile.tax_system == "non_profit":
+            code = "non_profit"
+            name = "Неприбуткова організація"
+        elif profile.type == "company":
+            if profile.tax_system == "zagalna" or profile.is_vat_payer:
+                code = "tov_general_vat"
+                name = "ТОВ (Загальна + ПДВ)"
+            else:
+                code = "tov_ep"
+                name = "ТОВ (Спрощена система)"
+        else:
+            if profile.group in [1, 2]:
+                code = "fop_1_2"
+                name = "ФОП 1-2 група"
+            else:
+                code = "fop_3"
+                name = "ФОП 3 група"
+                
+        price = tariff_prices.get(code) or default_prices.get(code) or 200.0
+        return price, name
+        
+    clients_breakdown = []
+    total_base_cost = 0.0
+    total_final_cost = 0.0
+    
+    active_index = 0
+    for assign in assignments:
+        profile = assign.client_profile
+        if not profile:
+            continue
+            
+        base_price, tariff_name = get_base_price_and_name(profile)
+        
+        if assign.is_suspended:
+            applied_discount = 100.0
+            final_price = 0.0
+            is_tenth = False
+        else:
+            active_index += 1
+            is_tenth = (active_index % 10 == 0)
+            
+            if is_tenth:
+                applied_discount = 50.0
+            else:
+                applied_discount = partner_discount
+                
+            final_price = base_price * (1 - applied_discount / 100)
+            total_base_cost += base_price
+            total_final_cost += final_price
+            
+        clients_breakdown.append({
+            "assignment_id": assign.id,
+            "profile_id": profile.id,
+            "client_name": profile.name,
+            "tax_id": profile.tax_id,
+            "tariff_name": tariff_name,
+            "base_price": base_price,
+            "is_suspended": assign.is_suspended,
+            "is_tenth": is_tenth,
+            "applied_discount_percentage": applied_discount,
+            "final_price": round(final_price, 2)
+        })
+        
     return {
         "consulting_company": {
             "name": consulting_company.company_name,
-            "free_slots": free_slots,
-            "partner_discount": partner_discount
+            "partner_discount": partner_discount,
+            "card_last_four": consulting_company.card_last_four,
+            "card_type": consulting_company.card_type,
+            "card_masked": consulting_company.card_masked,
+            "has_card": consulting_company.card_token is not None
         },
-        "usage": {
-            "total_clients": total_clients,
-            "free_slots_used": free_slots,
-            "free_slots_remaining": 0,
-            "paid_slots": paid_slots
+        "summary": {
+            "total_clients": len(clients_breakdown),
+            "active_clients": active_index,
+            "total_base_cost": round(total_base_cost, 2),
+            "total_discount_amount": round(total_base_cost - total_final_cost, 2),
+            "monthly_cost": round(total_final_cost, 2)
         },
-        "billing": {
-            "base_price_per_slot": base_price_per_slot,
-            "discounted_price": round(discounted_price, 2),
-            "monthly_cost": round(monthly_cost, 2)
-        }
+        "clients": clients_breakdown
+    }
+
+
+@app.post("/api/consulting/billing/card")
+def save_consulting_billing_card(
+    card_number: str = Form(...),
+    expiry_month: str = Form(...),
+    expiry_year: str = Form(...),
+    cvv: str = Form(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Save/link credit card for consulting company automatic billing."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    if not consulting_company:
+        raise HTTPException(status_code=404, detail="Consulting company not found")
+        
+    # Validation/Sanitization of card
+    clean_num = "".join(c for c in card_number if c.isdigit())
+    if len(clean_num) < 13 or len(clean_num) > 19:
+        raise HTTPException(status_code=400, detail="Invalid card number length")
+        
+    last_four = clean_num[-4:]
+    card_type = "visa" if clean_num.startswith("4") else "mastercard" if clean_num.startswith(("5", "2")) else "card"
+    masked = f"•••• •••• •••• {last_four}"
+    
+    consulting_company.card_last_four = last_four
+    consulting_company.card_type = card_type
+    consulting_company.card_masked = masked
+    consulting_company.card_token = f"tok_{last_four}_{clean_num[:6]}"  # Mock token
+    
+    db.commit()
+    return {
+        "status": "success",
+        "card_last_four": last_four,
+        "card_type": card_type,
+        "card_masked": masked
+    }
+
+
+@app.put("/api/consulting/billing/suspension")
+def toggle_client_suspension(
+    assignment_id: int,
+    is_suspended: bool,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Suspend/resume a client profile to halt/resume billing charges."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    assign = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.id == assignment_id,
+        ConsultingClientAssignment.consulting_company_id == user.consulting_company_id
+    ).first()
+    
+    if not assign:
+        raise HTTPException(status_code=404, detail="Client assignment not found")
+        
+    assign.is_suspended = is_suspended
+    db.commit()
+    
+    return {
+        "status": "success",
+        "assignment_id": assign.id,
+        "is_suspended": assign.is_suspended
     }
 
 
@@ -24589,12 +25036,23 @@ def get_marketplace_catalog(db: Session = Depends(get_db)):
     
     catalog = []
     for company in consulting_companies:
-        # Get owner user for marketplace listing info
+        # Find listed user first
         owner = db.query(User).filter(
             User.consulting_company_id == company.id,
-            User.is_consulting_owner == True
+            User.is_listed_in_marketplace == True
         ).first()
         
+        # Fallback to the owner or first user if no listed user matches
+        if not owner:
+            owner = db.query(User).filter(
+                User.consulting_company_id == company.id,
+                User.is_consulting_owner == True
+            ).first()
+            if not owner:
+                owner = db.query(User).filter(
+                    User.consulting_company_id == company.id
+                ).first()
+                
         if not owner or not owner.is_listed_in_marketplace:
             continue
         
@@ -24631,16 +25089,62 @@ def get_marketplace_catalog(db: Session = Depends(get_db)):
     return {"catalog": catalog}
 
 
+@app.get("/api/marketplace/companies/{company_id}/accountants")
+def get_company_accountants(company_id: int, db: Session = Depends(get_db)):
+    """Get the list of active accountants in a company for client selection."""
+    # Find signed agreements
+    signed_agreements = db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == company_id,
+        ConsultingAgreement.agreement_type == "company_accountant",
+        ConsultingAgreement.status == "signed"
+    ).all()
+    signed_party_ids = {a.party_id for a in signed_agreements}
+
+    accountants = db.query(User).filter(
+        User.consulting_company_id == company_id,
+        User.role == "accountant"
+    ).all()
+    
+    active_accountants = [acc for acc in accountants if acc.id in signed_party_ids]
+    
+    result = []
+    for acc in active_accountants:
+        profile = db.query(Profile).filter(Profile.user_id == acc.id).first()
+        name = profile.name if profile else acc.email.split("@")[0].capitalize()
+        if not name:
+            name = "Бухгалтер"
+            
+        result.append({
+            "id": acc.id,
+            "name": name,
+            "email": acc.email,
+            "phone": acc.phone or "",
+            "rating": 4.9
+        })
+        
+    return {"accountants": result}
+
+
+class MarketplaceCheckoutRequest(BaseModel):
+    service_offer_id: int
+    client_profile_id: int
+    user_id: Optional[int] = None
+    requested_accountant_id: Optional[int] = None
+    is_at_company_discretion: Optional[bool] = False
+
 @app.post("/api/marketplace/checkout")
 def create_marketplace_checkout(
-    service_offer_id: int,
-    client_profile_id: int,
-    user_id: Optional[int] = None,
+    req: MarketplaceCheckoutRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Initiate LiqPay checkout for a FOP client buying a service package.
+    Submit a request for a consulting service package. Created order has status 'requested'
+    and awaits approval from the company before payment.
     """
+    service_offer_id = req.service_offer_id
+    client_profile_id = req.client_profile_id
+    user_id = req.user_id
+    
     if user_id is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     
@@ -24657,25 +25161,32 @@ def create_marketplace_checkout(
     
     if not offer:
         raise HTTPException(status_code=404, detail="Service offer not found")
-    
-    # Create pending order
+        
+    # Check if there is an active order or assignment already
+    existing_assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == client_profile_id
+    ).first()
+    if existing_assignment:
+        raise HTTPException(status_code=400, detail="Клієнт вже обслуговується консалтинговою компанією")
+        
+    # Create requested order
     order = ConsultingMarketplaceOrder(
         client_profile_id=client_profile_id,
         service_offer_id=service_offer_id,
         amount=offer.price_uah,
-        status="pending"
+        status="requested",
+        requested_accountant_id=req.requested_accountant_id,
+        is_at_company_discretion=req.is_at_company_discretion
     )
     db.add(order)
     db.commit()
     db.refresh(order)
     
-    # TODO: Integrate with LiqPay API
-    # For now, return mock checkout data
     return {
         "order_id": order.id,
         "amount": offer.price_uah,
-        "liqpay_checkout_url": f"https://liqpay.com/checkout/{order.id}",  # Mock URL
-        "status": "pending"
+        "liqpay_checkout_url": None,
+        "status": "requested"
     }
 
 
@@ -24718,8 +25229,30 @@ def liqpay_callback(
                 db.add(ConsultingClientAssignment(
                     consulting_company_id=offer.consulting_company_id,
                     assigned_profile_id=order.client_profile_id,
+                    assigned_accountant_id=order.confirmed_accountant_id,
                     is_free_slot=False,
                     discount_applied=0.0
+                ))
+            else:
+                existing_assignment.assigned_accountant_id = order.confirmed_accountant_id
+                
+            # Seed client-company welcome message
+            db.add(SupportMessage(
+                profile_id=order.client_profile_id,
+                sender="admin",
+                message="Вітаємо! Ваше замовлення успішно оплачено. Менеджер компанії скоро зв'яжеться з вами тут.",
+                room_type="client_company",
+                recipient_id=offer.consulting_company_id
+            ))
+            
+            # Seed client-accountant welcome message
+            if order.confirmed_accountant_id:
+                db.add(SupportMessage(
+                    profile_id=order.client_profile_id,
+                    sender="admin",
+                    message="Вітаємо! Я ваш персональний бухгалтер. Давайте почнемо роботу. Завантажте, будь ласка, ваші актуальні документи.",
+                    room_type="client_accountant",
+                    recipient_id=order.confirmed_accountant_id
                 ))
         
         db.commit()
@@ -24734,6 +25267,164 @@ def liqpay_callback(
         order.status = "failed"
         db.commit()
         return {"status": "failed", "order_id": order.id}
+
+
+@app.get("/api/consulting/marketplace/requests")
+def get_incoming_requests(
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """List incoming marketplace service requests for the company (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    company_id = user.consulting_company_id
+    if not company_id:
+        raise HTTPException(status_code=404, detail="Consulting company not found")
+        
+    # Get all orders matching this company's service offers
+    orders = db.query(ConsultingMarketplaceOrder).join(ConsultingServiceOffer).filter(
+        ConsultingServiceOffer.consulting_company_id == company_id
+    ).all()
+    
+    result = []
+    for order in orders:
+        req_acc = db.query(User).filter(User.id == order.requested_accountant_id).first() if order.requested_accountant_id else None
+        conf_acc = db.query(User).filter(User.id == order.confirmed_accountant_id).first() if order.confirmed_accountant_id else None
+        client_prof = db.query(Profile).filter(Profile.id == order.client_profile_id).first()
+        
+        result.append({
+            "order_id": order.id,
+            "client_name": client_prof.name if client_prof else f"Профіль #{order.client_profile_id}",
+            "client_profile_id": order.client_profile_id,
+            "offer_title": order.service_offer.title_uk,
+            "amount": order.amount,
+            "status": order.status,
+            "requested_accountant": {
+                "id": req_acc.id,
+                "email": req_acc.email
+            } if req_acc else None,
+            "confirmed_accountant": {
+                "id": conf_acc.id,
+                "email": conf_acc.email
+            } if conf_acc else None,
+            "is_at_company_discretion": order.is_at_company_discretion,
+            "created_at": order.created_at
+        })
+        
+    return {"requests": result}
+
+
+class ApproveRequestSchema(BaseModel):
+    confirmed_accountant_id: Optional[int] = None
+
+@app.post("/api/consulting/marketplace/requests/{order_id}/approve")
+def approve_incoming_request(
+    order_id: int,
+    req: ApproveRequestSchema,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Approve incoming marketplace request and assign accountant (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    order = db.query(ConsultingMarketplaceOrder).filter(
+        ConsultingMarketplaceOrder.id == order_id
+    ).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    # Check if this offer belongs to the owner's company
+    if order.service_offer.consulting_company_id != user.consulting_company_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    # Set status and confirmed accountant
+    order.status = "approved"
+    order.confirmed_accountant_id = req.confirmed_accountant_id
+    
+    # Generate mock checkout URL linking back to the frontend checkout payment success simulation
+    order.liqpay_order_id = f"mkt_{order.id}_{int(datetime.utcnow().timestamp())}"
+    db.commit()
+    
+    return {
+        "status": "success",
+        "order_id": order.id,
+        "liqpay_checkout_url": f"/marketplace?pay_order_id={order.id}"
+    }
+
+
+@app.get("/api/marketplace/client-status")
+def get_client_marketplace_status(
+    client_profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get active marketplace assignment or pending request status for the client."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    # Verify profile ownership
+    profile = db.query(Profile).filter(Profile.id == client_profile_id).first()
+    if not profile or profile.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    # Check active assignment
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.assigned_profile_id == client_profile_id
+    ).first()
+    
+    if assignment:
+        company = assignment.consulting_company
+        owner = db.query(User).filter(User.id == company.owner_user_id).first() if company else None
+        acc = db.query(User).filter(User.id == assignment.assigned_accountant_id).first() if assignment.assigned_accountant_id else None
+        
+        return {
+            "has_active_assignment": True,
+            "has_pending_order": False,
+            "assignment": {
+                "id": assignment.id,
+                "company_name": company.company_name if company else "Консалтингова компанія",
+                "company_id": company.id if company else None,
+                "company_phone": owner.phone if owner else "",
+                "company_email": owner.email if owner else "",
+                "accountant": {
+                    "id": acc.id,
+                    "email": acc.email,
+                    "phone": acc.phone or ""
+                } if acc else None,
+                "is_suspended": assignment.is_suspended
+            }
+        }
+        
+    # Check if there is any pending or approved request order
+    order = db.query(ConsultingMarketplaceOrder).filter(
+        ConsultingMarketplaceOrder.client_profile_id == client_profile_id,
+        ConsultingMarketplaceOrder.status.in_(["requested", "approved"])
+    ).order_by(ConsultingMarketplaceOrder.id.desc()).first()
+    
+    if order:
+        offer = order.service_offer
+        company = offer.consulting_company if offer else None
+        return {
+            "has_active_assignment": False,
+            "has_pending_order": True,
+            "order": {
+                "id": order.id,
+                "status": order.status,
+                "amount": order.amount,
+                "company_name": company.company_name if company else "",
+                "offer_title": offer.title_uk if offer else "",
+                "liqpay_checkout_url": f"/marketplace?pay_order_id={order.id}" if order.status == "approved" else None
+            }
+        }
+        
+    return {
+        "has_active_assignment": False,
+        "has_pending_order": False
+    }
 
 
 # ==================== CONSULTING MARKETPLACE MANAGEMENT API ====================
@@ -25120,6 +25811,256 @@ def update_consulting_marketplace_listing(
         user.public_bio_uk = public_bio_uk
     
     db.commit()
+    return {"status": "success"}
+
+
+@app.delete("/api/consulting/clients/{assignment_id}")
+def delete_client_assignment(
+    assignment_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Delete a client assignment from the consulting company (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.id == assignment_id,
+        ConsultingClientAssignment.consulting_company_id == user.consulting_company_id
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+        
+    db.delete(assignment)
+    db.commit()
+    return {"status": "success"}
+
+
+@app.delete("/api/consulting/team-members/{member_id}")
+def remove_team_member(
+    member_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Remove a team member from the consulting company (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    member = db.query(User).filter(
+        User.id == member_id,
+        User.consulting_company_id == user.consulting_company_id
+    ).first()
+    
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+        
+    if member.id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot remove yourself")
+        
+    # Unlink client assignments
+    db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.consulting_company_id == user.consulting_company_id,
+        ConsultingClientAssignment.assigned_accountant_id == member.id
+    ).update({ConsultingClientAssignment.assigned_accountant_id: None}, synchronize_session=False)
+    
+    # Delete company-accountant agreement
+    db.query(ConsultingAgreement).filter(
+        ConsultingAgreement.consulting_company_id == user.consulting_company_id,
+        ConsultingAgreement.party_id == member.id,
+        ConsultingAgreement.agreement_type == "company_accountant"
+    ).delete(synchronize_session=False)
+    
+    # Delete accountant documents
+    db.query(AccountantDocument).filter(AccountantDocument.user_id == member.id).delete(synchronize_session=False)
+    
+    # Unlink user from company
+    member.consulting_company_id = None
+    member.account_type = "individual"
+    db.commit()
+    return {"status": "success"}
+
+
+@app.post("/api/consulting/clients/{profile_id}/send-invoice")
+def send_client_invoice(
+    profile_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Generate invoice for consulting services and email it to the client (owner only)."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    # Get consulting company
+    company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    
+    # Get client assignment
+    assignment = db.query(ConsultingClientAssignment).filter(
+        ConsultingClientAssignment.client_profile_id == profile_id,
+        ConsultingClientAssignment.consulting_company_id == company.id
+    ).first()
+    if not assignment:
+        # Try finding by assigned_profile_id as fallback
+        assignment = db.query(ConsultingClientAssignment).filter(
+            ConsultingClientAssignment.assigned_profile_id == profile_id,
+            ConsultingClientAssignment.consulting_company_id == company.id
+        ).first()
+        
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Client assignment not found")
+        
+    client_profile = assignment.client_profile
+    if not client_profile:
+        raise HTTPException(status_code=404, detail="Client profile not found")
+        
+    # Get company profile (profile of the owner of the consulting company)
+    owner_profile = db.query(Profile).filter(Profile.user_id == company.owner_user_id).first()
+    if not owner_profile:
+        owner_profile = db.query(Profile).filter(Profile.user_id == user.id).first()
+        
+    if not owner_profile:
+        raise HTTPException(status_code=400, detail="Профіль власника консалтингової компанії не знайдено. Будь ласка, заповніть профіль власника спочатку.")
+        
+    # Get cost
+    from api.main import get_consulting_billing
+    billing_data = get_consulting_billing(user_id=user.id, db=db)
+    client_billing = next((c for c in billing_data.get("clients", []) if c["profile_id"] == profile_id), None)
+    
+    amount = client_billing["final_price"] if client_billing else 450.0
+    
+    from api.main import Invoice
+    import datetime
+    
+    client_email = None
+    client_user = db.query(User).filter(User.id == client_profile.user_id).first()
+    if client_user and client_user.email:
+        client_email = client_user.email
+    if not client_email:
+        client_email = user.email
+        
+    inv_num = f"K-{profile_id}-{datetime.date.today().strftime('%m%d')}"
+    new_invoice = Invoice(
+        profile_id=client_profile.id,
+        client_email=client_email,
+        amount=amount,
+        service_name="Надання бухгалтерських послуг згідно договору",
+        invoice_number=inv_num,
+        send_date=datetime.date.today(),
+        status="sent",
+        client_name=client_profile.name,
+        client_tax_id=client_profile.tax_id,
+        document_type="act",
+        client_address=client_profile.address
+    )
+    db.add(new_invoice)
+    db.commit()
+    db.refresh(new_invoice)
+    
+    pdf_bytes = generate_invoice_pdf(new_invoice, owner_profile, db)
+    
+    email_body = f"""Шановний клієнте!
+
+Вам виставлено рахунок № {inv_num} від компанії "{company.company_name}" за бухгалтерські/консалтингові послуги.
+Сума до сплати: {amount} грн.
+
+Копію рахунку у форматі PDF додано до цього листа. Ви можете сплатити його за реквізитами або за допомогою QR-коду в рахунку.
+
+З повагою,
+{company.company_name}"""
+    
+    try:
+        send_email_with_attachments(
+            to_email=client_email,
+            subject=f"Рахунок № {inv_num} за бухгалтерські послуги від {company.company_name}",
+            body=email_body,
+            attachments=[(f"Invoice_{inv_num}.pdf", pdf_bytes)]
+        )
+    except Exception as e:
+        print(f"[EMAIL ERROR] Failed to send invoice email: {e}")
+        
+    return {"status": "success", "invoice_number": inv_num, "amount": amount}
+
+
+@app.post("/api/consulting/invite-client")
+def invite_client(
+    email: str = Form(...),
+    phone: str = Form(None),
+    client_name: str = Form(...),
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Invite a client to the consulting company. Creates a mock/temporary profile and assignment."""
+    user = require_consulting_account(user_id, db)
+    if not user.is_consulting_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    consulting_company = db.query(ConsultingCompany).filter(
+        ConsultingCompany.id == user.consulting_company_id
+    ).first()
+    
+    # Check or create temporary user for this client by email or phone
+    client_user = db.query(User).filter(
+        (User.email == email) | (User.phone == phone)
+    ).first()
+    
+    if not client_user:
+        client_user = User(
+            email=email,
+            phone=phone,
+            role="user",
+            language="uk"
+        )
+        db.add(client_user)
+        db.commit()
+        db.refresh(client_user)
+        
+    # Create profile linked to the client user
+    from api.main import Profile
+    profile = Profile(
+        user_id=client_user.id,
+        name=client_name,
+        type="FOP",
+        tax_id=None,
+        tax_system="single_tax",
+        group="3",
+        rate=5.0,
+        phone=phone
+    )
+    db.add(profile)
+    db.flush()
+    
+    # Create assignment
+    assignment = ConsultingClientAssignment(
+        consulting_company_id=consulting_company.id,
+        assigned_profile_id=profile.id,
+        is_suspended=False
+    )
+    db.add(assignment)
+    db.commit()
+    
+    email_body = f"""Вітаємо!
+
+Консалтингова компанія "{consulting_company.company_name}" запрошує вас до співпраці на платформі UniTax.
+Будь ласка, перейдіть до кабінету та пройдіть авторизацію за посиланням: https://www.unitax.pro/login
+
+З повагою,
+Команда UniTax"""
+    
+    try:
+        send_email_with_attachments(
+            to_email=email,
+            subject=f"Запрошення від компанії {consulting_company.company_name} на UniTax",
+            body=email_body,
+            attachments=[]
+        )
+    except Exception as e:
+        print(f"[EMAIL ERROR] Failed to send client invitation email: {e}")
+        
     return {"status": "success"}
 
 

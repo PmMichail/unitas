@@ -22,12 +22,13 @@ import {
   Send,
   MessageSquare,
   RefreshCw,
-  Plus
+  Plus,
+  Building
 } from "lucide-react";
 
 export default function AdminDashboard() {
   const [token, setToken] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats" | "support" | "emails">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "payments" | "pricing" | "stats" | "support" | "emails" | "consulting">("users");
   const router = useRouter();
 
   // Data states
@@ -62,6 +63,13 @@ export default function AdminDashboard() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatInputText, setChatInputText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
+
+  // Consulting partner management states
+  const [companies, setCompanies] = useState<any[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [editingCompanyId, setEditingCompanyId] = useState<number | null>(null);
+  const [editDiscount, setEditDiscount] = useState<number>(10);
+  const [editFreeSlots, setEditFreeSlots] = useState<number>(3);
 
   // Search and filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -291,6 +299,50 @@ export default function AdminDashboard() {
     }
   }, [router]);
 
+  const fetchCompanies = async () => {
+    setLoadingCompanies(true);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/admin/consulting`, {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      setCompanies(data || []);
+    } catch (error) {
+      console.error("Failed to load consulting companies:", error);
+    } finally {
+      setLoadingCompanies(false);
+    }
+  };
+
+  const handleUpdateCompanyTerms = async (companyId: number) => {
+    try {
+      const formData = new FormData();
+      formData.append("partner_discount_percentage", editDiscount.toString());
+      formData.append("free_fop_slots_included", editFreeSlots.toString());
+      
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/admin/consulting/${companyId}`, {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
+        body: formData
+      });
+      const resData = await res.json();
+      if (resData.status === "success") {
+        alert("Умови партнерства успішно оновлено!");
+        setEditingCompanyId(null);
+        fetchCompanies();
+      } else {
+        alert("Помилка при оновленні умов: " + (resData.detail || "невідома помилка"));
+      }
+    } catch (error) {
+      console.error("Failed to update company terms:", error);
+      alert("Помилка при з'єднанні з сервером");
+    }
+  };
+
   const fetchTariffs = async () => {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.unitax.pro"}/api/tariffs`);
@@ -398,6 +450,8 @@ export default function AdminDashboard() {
         } else if (activeTab === "emails") {
           await fetchEmailStatus();
           await fetchEmails();
+        } else if (activeTab === "consulting") {
+          await fetchCompanies();
         }
       } catch (err: any) {
         console.error("Admin data loading error:", err);
@@ -767,6 +821,17 @@ export default function AdminDashboard() {
               <Mail className="w-4 h-4" />
               Пошта
             </button>
+            <button
+              onClick={() => setActiveTab("consulting")}
+              className={`w-full flex items-center px-4 py-3 rounded-xl text-xs font-bold transition-all gap-3 ${
+                activeTab === "consulting"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white"
+              }`}
+            >
+              <Building className="w-4 h-4" />
+              Консалтинг
+            </button>
           </nav>
         </div>
 
@@ -793,6 +858,7 @@ export default function AdminDashboard() {
               {activeTab === "stats" && "Аналітика та статистика"}
               {activeTab === "emails" && "Керування системною поштою"}
               {activeTab === "support" && "Чат підтримки клієнтів"}
+              {activeTab === "consulting" && "Партнерський консалтинг"}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {activeTab === "users" && "Переглядайте профілі клієнтів, їхні підписки та змінюйте тарифи вручну."}
@@ -801,6 +867,7 @@ export default function AdminDashboard() {
               {activeTab === "stats" && "Загальний вигляд основних фінансових та кількісних метрик UniTax."}
               {activeTab === "emails" && "OAuth підключення Gmail, відправка тестових листів та перегляд журналу логів."}
               {activeTab === "support" && "Переписка з користувачами та відповіді на повідомлення техпідтримки."}
+              {activeTab === "consulting" && "Керуйте параметрами партнерських компаній, їхнім відсотком знижки та безкоштовними лімітами."}
             </p>
           </div>
         </div>
@@ -1799,6 +1866,101 @@ export default function AdminDashboard() {
                           <tr>
                             <td colSpan={5} className="p-8 text-center text-slate-500 font-semibold italic">
                               Логи надісланих повідомлень відсутні.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* 7. CONSULTING TAB */}
+            {activeTab === "consulting" && (
+              <div className="space-y-6">
+                
+                {/* Companies List */}
+                <div className="p-6 bg-slate-950/40 border border-slate-800 rounded-3xl">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-bold text-white">Консалтингові компанії-партнери</h3>
+                    <button
+                      onClick={fetchCompanies}
+                      disabled={loadingCompanies}
+                      className="px-3.5 py-1.5 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-350 text-xs font-semibold rounded-xl transition flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingCompanies ? 'animate-spin' : ''}`} />
+                      Оновити список
+                    </button>
+                  </div>
+                  
+                  <div className="overflow-x-auto custom-scrollbar">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                          <th className="pb-3 pr-4">ID</th>
+                          <th className="pb-3 pr-4">Назва компанії</th>
+                          <th className="pb-3 pr-4">Власник (Email)</th>
+                          <th className="pb-3 pr-4">Активні клієнти</th>
+                          <th className="pb-3 pr-4">Безкоштовні слоти ФОП</th>
+                          <th className="pb-3 pr-4">Партнерська знижка</th>
+                          <th className="pb-3 text-right">Дії</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/40 text-xs text-slate-350">
+                        {companies.map((c) => (
+                          <tr key={c.id} className="hover:bg-slate-900/10">
+                            <td className="py-3.5 pr-4 font-mono text-[10px]">{c.id}</td>
+                            <td className="py-3.5 pr-4 text-white font-bold">{c.company_name}</td>
+                            <td className="py-3.5 pr-4 font-medium">{c.owner_email || "Немає"}</td>
+                            <td className="py-3.5 pr-4 font-bold text-indigo-400">{c.client_count}</td>
+                            <td className="py-3.5 pr-4 font-semibold">{c.free_fop_slots_included}</td>
+                            <td className="py-3.5 pr-4 font-bold text-emerald-450">{c.partner_discount_percentage}%</td>
+                            <td className="py-3.5 text-right">
+                              {editingCompanyId === c.id ? (
+                                <div className="inline-flex items-center gap-2">
+                                  <div className="w-20">
+                                    <input
+                                      type="number"
+                                      value={editDiscount}
+                                      onChange={(e) => setEditDiscount(parseFloat(e.target.value) || 0)}
+                                      className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-center text-xs font-bold text-white"
+                                      placeholder="Знижка %"
+                                    />
+                                  </div>
+                                  <button
+                                    onClick={() => handleUpdateCompanyTerms(c.id)}
+                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold"
+                                  >
+                                    Зберегти
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingCompanyId(null)}
+                                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded text-[10px] font-bold"
+                                  >
+                                    Скасувати
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setEditingCompanyId(c.id);
+                                    setEditDiscount(c.partner_discount_percentage);
+                                    setEditFreeSlots(c.free_fop_slots_included);
+                                  }}
+                                  className="px-3 py-1.5 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 font-bold rounded-xl transition"
+                                >
+                                  Редагувати умови
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {companies.length === 0 && !loadingCompanies && (
+                          <tr>
+                            <td colSpan={7} className="p-8 text-center text-slate-500 font-semibold italic">
+                              Консалтингові компанії не знайдені в системі.
                             </td>
                           </tr>
                         )}

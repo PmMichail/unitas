@@ -7,12 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt ./requirements.txt
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY telegram_bot/ ./telegram_bot/
-COPY backend/ ./backend/
+COPY bot.py .
 
 ENV PYTHONPATH=/app
 
-CMD ["python", "telegram_bot/bot.py"]
+CMD ["python", "bot.py"]

@@ -453,3 +453,163 @@ During backend startup, FastAPI raised a startup crash `AssertionError: Cannot u
 - **Type Safety**: Verified zero TypeScript errors across Next.js frontend code using `npx tsc --noEmit`.
 - **Fly.io Deployment**: Successfully deployed the updated Next.js app to Fly.io (`unitas-frontend`).
 
+---
+
+## 22. Consulting Partnership Terms, Dynamic Client Pricing, and 50% Discount for Every 10th Client
+
+### 1. Read-Only Partnership Terms Modal
+- **Name Lock Enforcement**: In the consulting company's settings modal inside the partner cabinet (`frontend/app/consulting/dashboard/page.tsx`), we removed all editable input fields (including the company name field) to prevent owners from renaming their company to a fake name. The button was renamed from *"Налаштувати компанію"* to **«Умови співпраці»**.
+- **Transparent Cooperation Display**: The dialog was transformed into a read-only terms view displaying the registered company name, registered owner email address, and the specific rules of cost calculations (describing the 50% discount on every 10th client and the base partner discount percentage).
+
+### 2. Client-Specific Tariff Mapping and 50% Discount for Every 10th Client
+- **Dynamic Pricing Endpoint**: Replaced the flat-rate 100 UAH slot billing logic in `backend/api/main.py` (`/api/consulting/billing` endpoint) with real tariff plan mappings. It now queries the `TariffPlan` table to resolve each client's base price depending on their profile shape:
+  - Non-profit profiles -> `non_profit` tariff (250 UAH/mo).
+  - TOV profiles on General system or VAT -> `tov_general_vat` tariff (950 UAH/mo).
+  - TOV profiles on Single Tax -> `fop_3_tov_ep` tariff (450 UAH/mo).
+  - FOP profiles in Group 1 or 2 -> `fop_1_2` tariff (200 UAH/mo).
+  - FOP profiles in Group 3 -> `fop_3_tov_ep` tariff (450 UAH/mo).
+- **Every 10th Client 50% Discount Rule**: Ordered all assigned clients chronologically by assignment date. For every 10th client added (indices 10, 20, 30, etc.), the billing engine automatically applies a **50% discount** instead of the normal partner discount (e.g. 10%).
+- **Itemized Breakdown Table**: Replaced the summary slots view in the cabinet's billing tab with a detailed grid showing each client's name, registered Tax ID, resolved tax system/tariff, base price, applied discount rate (clearly stating `Кожен 10-й (-50%)` or `Партнерська (-10%)`), and final calculated monthly price.
+- **Developer/Admin Customization**: Administrators can still manage and set custom partner discount percentages for any registered consulting company from the new "Консалтинг" tab in the admin dashboard (`/admin/dashboard`).
+
+### 3. Verification & Deployment
+- **TypeScript**: Verified zero compile errors on Next.js frontend code using `npx tsc --noEmit`.
+- **Python**: Compiled the updated FastAPI backend code successfully.
+- **Production Rollout**: Successfully deployed updated frontend (`unitas-frontend`) and backend (`unitas-backend`) services to Fly.io.
+
+---
+
+## 23. Accountant Assignment controls, Marketplace Toggle fix, and Marketplace Layout redesign
+
+### 1. Accountant Assignment Controls (Web UI)
+- **dropdown selector**: Replaced the read-only accountant text cell in the Client Matrix table (`frontend/app/consulting/dashboard/page.tsx`) with an interactive `<select>` dropdown when the user is the owner.
+- **Pre-fetching Staff Data**: Modified `fetchDashboardData` to automatically pre-load the company's team of accountants (`staffData`) on initial page load, so they are immediately available in the Client Matrix dropdown without needing to visit the "Управління командою" tab first.
+- **Support for Unassignment**: Updated the backend endpoint `assign_accountant_to_client` (`backend/api/main.py`) to support unassigning accountants (setting it to `None`) when `accountant_id <= 0` (e.g. when the user selects "Не призначено").
+
+### 2. Marketplace Toggle Fix
+- **Visibility state mapping**: Resolved a bug where the dashboard endpoint `/api/consulting/dashboard` did not return the `is_listed_in_marketplace` column value, which had caused the toggle button to be stuck on `true` (always hidden in the UI). Added `is_listed_in_marketplace` to the dashboard return payload.
+- **Accountant onboarding fix**: Modified the `/api/auth/register` registration endpoint on the backend. It now check if an existing user was created by invitation (meaning they exist but don't have a `hashed_password` yet), allowing them to complete their registration cleanly instead of throwing a conflict error.
+
+### 3. Premium Marketplace Tab Redesign
+- **Glassmorphic Listing Banner**: Redesigned the "Відображення в маркетплейсі" toggle control into a glassmorphic banner showing active pulsing status indicators and a glowing action button.
+- **Grid Layout for Packages**: Transformed the flat vertical list of tariff packages into a modern grid-based layout of clean cards featuring client target type badges (FOP, TOV, OSBB), high-contrast pricing details, and clean action buttons.
+
+---
+
+## 24. Billing Enhancements: Card Linking, Slot Freeze/Suspension, and Accountant Invitation Fix
+
+### 1. Payment Card Linking integration
+- **Backend Schema & Direct Migrations**: Implemented credit card storage columns (`card_last_four`, `card_type`, `card_masked`, `card_token`) on the `ConsultingCompany` model. Created and executed a direct database migration script (`backend/migrate_billing_columns.py`) to apply these changes directly to the PostgreSQL database.
+- **Card Association API**: Added a `POST /api/consulting/billing/card` endpoint to validate, mask, and store card details.
+- **Premium Card UI & Modal**: Built a card entry form modal on the frontend and added a credit card component that displays the active card brand, masked card number, and allows company owners to swap or add billing methods.
+
+### 2. Client Slot Freeze / Suspension (0 UAH Billing)
+- **Suspension state**: Added the `is_suspended` boolean field to the `ConsultingClientAssignment` table.
+- **Suspension Toggle Endpoint**: Exposed a `PUT /api/consulting/billing/suspension` endpoint allowing owners to freeze/unfreeze billing charges on any assigned client.
+- **Dynamic Billing Exemption**: Updated the billing engine inside `get_consulting_billing` to set the monthly cost of frozen clients to `0 UAH`, exempting them from billing, and excluding them from active slots when calculating the 10th-slot 50% discount sequence.
+- **Interactive UI Badge & Toggle Buttons**: Integrated a status badge in the billing table displaying whether each client slot is "Активний" or "Заморожено (0 грн)" and provided instant freeze/unfreeze action buttons.
+
+### 3. Accountant Invitation Fix
+- **Invitations Search Logic**: Fixed a bug in the `add_team_member` endpoint where searching for existing users by email or phone could match unrelated users who also had `None` or empty phone numbers, hijacking their account mappings. The search now safely ignores empty/null phone inputs.
+
+### 4. Verification & Production Deployment
+- **TypeScript Compliance**: Verified Next.js build compilation with 100% success (`npm run build` completed successfully).
+- **Backend & Frontend Rollout**: Successfully validated the complete slot calculation flow.
+
+---
+
+## 25. Recovery & Restoration of Settings and Card Modal UI
+
+### 1. Settings and Card Modal State Restoration
+- **React Hooks**: Restored all state variables for the Settings modal (`showSettingsModal`, `settingsName`, `settingsFreeSlots`, `settingsDiscount`) and Card Linking modal (`showCardModal`, `cardNumber`, `expiryMonth`, `expiryYear`, `cvv`) in the partner cabinet dashboard page (`frontend/app/consulting/dashboard/page.tsx`).
+- **Helpers**: Restored modal helper handlers (`openSettingsModal`, `handleSaveSettings`, `handleSaveCard`, `handleToggleSuspension`).
+
+### 2. UI Layout Integration & Verification
+- **Settings Toggle**: Re-wired the Settings button click trigger to open the read-only cooperation terms modal, titled **«Умови співпраці»**.
+- **Detailed License Grid & Card Integration**: Integrated the client-specific license pricing breakdown grid, suspension buttons, and Credit Card details box showing automatic status checks.
+- **Next.js Build & Deploy**: Confirmed 100% build validation using `npm run build` producing zero errors, and redeployed the frontend application to Fly.io.
+
+---
+
+## 26. Client Cabinet Context, Deletion, Invoicing, and Chat Fixes
+
+### 1. Client Cabinet Banner & Navigation Links
+- **Global Managed Client Banner**: Fixed an issue where context switching to a client was reset on page load by updating the `/api/profiles` and `/api/profiles/{telegram_id}` endpoints. The API now returns assigned client profiles (with `"is_managed_client": true`) for owners and accountants.
+- **Unified Navigation**: Updated the client cabinet banner in `ClientLayout.tsx` to include the requested navigation buttons (**Звіти**, **Податки**, **Налаштування**).
+
+### 2. Client Freeze/Suspension Toggle Parameters
+- **Query Parameter Mapping**: Aligned the `/api/consulting/billing/suspension` PUT endpoint. It now correctly accepts query parameters (`assignment_id`, `is_suspended`, `user_id`) without `Form` content-type requirements. Updated the frontend page to send `is_suspended` as a boolean query parameter.
+
+### 3. Invoice Generation Corrections
+- **Schema Alignment**: Fixed a crash in the `send_client_invoice` endpoint by matching `Invoice` database model fields (`send_date` instead of `issue_date`, `service_name` instead of `description`).
+- **Profile Email Fallback**: Replaced invalid `client_profile.email` references with a safe fallback to `client_user.email` or the accountant user's email.
+
+### 4. Profile Deletion Cascade Cleanup
+- **Foreign Key Violation Resolution**: Updated the `delete_profile_data_helper` backend function to clean up all referencing records in the `consulting_client_assignments` and `consulting_marketplace_orders` tables before deleting a profile.
+- **Consulting Company Cascade**: Added complete cascade cleanup when deleting a consulting company profile, removing its associated offers, assignments, and setting all member user references to `None`.
+
+### 5. Accountant-Client Chat Line Restoration
+- **Consulting Communication Tab**: Added a brand new **Спілкування** (Chats) tab to the consulting dashboard (`frontend/app/consulting/dashboard/page.tsx`).
+- **Interactive Chat Interface**: Implemented a real-time messaging panel that fetches support messages, lists all company clients, shows badge alerts for new messages, and allows the accountant to send replies directly to their clients in real-time (routed via the client's support widget).
+- **Deployment**: Verified compilation with `npx tsc --noEmit` and successfully redeployed both the frontend and backend applications to Fly.io.
+
+---
+
+## 27. Team Member Deletion and Invitation Email Fixes
+
+### 1. Team Member Deletion Cleanup
+- **Cascading Dependencies**: Updated the `remove_team_member` endpoint (`DELETE /api/consulting/team-members/{member_id}`) to unlink the member's assigned clients in `consulting_client_assignments`, delete the member's `consulting_agreements` of type `company_accountant`, and delete all uploaded documents in `accountant_documents` before unlinking the user. This prevents database constraint violations and successfully completes team member removal.
+- **Account Type Reset**: Standardized the team member's role fallback to the database default `"individual"` (instead of `"personal"`), preserving data integrity.
+
+### 2. Client Invitation Crash Fix
+- **Profile User Association**: Fixed a crash (`500 Internal Server Error`) in the `/api/consulting/invite-client` endpoint caused by instantiating `Profile` with the invalid `email` keyword argument.
+- **Client User Mapping**: Updated the flow to first verify or create a temporary client `User` record with the specified email/phone, then instantiate the client `Profile` linked to that `User` using the valid `user_id` foreign key.
+
+### 3. Email Delivery Diagnostics
+- **Problem**: System-initiated invitation emails (for both clients and accountants) were not arriving due to the lack of system-wide SMTP or Gmail OAuth credentials. Database logs confirmed the warning: `"SMTP credentials are not configured in environment and no Gmail fallback available."`
+- **Resolution**: Both the client and accountant invitation endpoints now successfully validate parameters and attempt to dispatch emails. For the emails to arrive, the administrator must either:
+  1. Set Fly.io environment secrets for SMTP (`SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`).
+  2. Or link the system-wide fallback Google Email via Google OAuth on the admin dashboard page.
+- **Deployment**: Successfully redeployed the updated backend service to production.
+
+---
+
+## 28. Marketplace Selection Flow, Accountant Selection & Restoring Client-Accountant Communication
+
+### 1. Marketplace Accountant Selection & Approval flow
+- **Backend Schema Mapping**: Updated `ConsultingMarketplaceOrder` and `MarketplaceCheckoutRequest` to include `requested_accountant_id: Optional[int] = None` and `is_at_company_discretion: Optional[bool] = False`.
+- **Checkout Approval Flow**: Modified `/api/marketplace/checkout` to create a requested order with status `"requested"` (awaiting approval from the company) instead of `"pending"`, returning `liqpay_checkout_url = None` initially.
+- **Request Approval Endpoint**: Created `GET /api/consulting/marketplace/requests` and `POST /api/consulting/marketplace/requests/{order_id}/approve` endpoints to list and approve orders.
+- **Client Subscription Status**: Created `GET /api/marketplace/client-status` to let clients easily check if they have active assignments or pending requests.
+
+### 2. Multi-Room Chat Isolation
+- **Support Schema Enhancement**: Added `room_type: Optional[str] = "company_support"` and `recipient_id: Optional[int] = None` parameters to `SupportMessage`, `SupportMessageRequest`, and `SupportReplyRequest`.
+- **Message List/Reply Routing**: Updated get and reply endpoints to query and filter support messages by room type and recipient.
+- **Partner Chats Retrieval**: Added `GET /api/support/partner/chats` to list active client chats for a company or accountant.
+
+### 3. Frontend Integration
+- **Support Chat Widget**: Updated client-side `SupportChatWidget` inside `ClientLayout.tsx` to retrieve client marketplace status and render a tab selection bar for UniTax support, consulting company, and accountant chats.
+- **Partner Dashboard UI**: Integrated incoming requests list, accountant assignment dropdowns, and room-aware chat interfaces in `frontend/app/consulting/dashboard/page.tsx`.
+
+### 4. Verification and Live Deployment
+- **TypeScript build verification**: Successfully verified that the entire frontend project builds with `npx tsc --noEmit` and `npm run build` producing zero errors.
+- **FastAPI backend syntax validation**: Confirmed backend syntax compiles cleanly.
+- **Redeployment**: Deployed the updated backend and frontend apps to Fly.io production successfully.
+
+---
+
+## 29. LiqPay Webhook (Callback) Success Updates and Automatic Chat Room Greetings Seeding
+
+### 1. Webhook (Callback) Flow
+- **Order State Update**: When a successful payment is reported to `POST /api/marketplace/liqpay-callback`, the order's status is automatically changed from `approved` to `paid`.
+- **Assignment Creation**: The consulting company is assigned, linking `confirmed_accountant_id` to the final `ConsultingClientAssignment` record in the database.
+
+### 2. Auto-Greeting (Seeding)
+- **Company Chat Welcome Message**: Added automatic creation of a message in the company room (`room_type="client_company"`) saying: `"Вітаємо! Ваше замовлення успішно оплачено. Менеджер компанії скоро зв'яжеться з вами тут."`
+- **Accountant Chat Welcome Message**: Added automatic creation of a message in the accountant room (`room_type="client_accountant"`) saying: `"Вітаємо! Я ваш персональний бухгалтер. Давайте почнемо роботу. Завантажте, будь ласка, ваші актуальні документи."`
+
+### 3. Simulation Tests
+- **Self-Contained Test Suite**: Created a mock database-driven python test script (`scratch/test_callback_direct.py`) utilizing local SQLite session overriding.
+- **FastAPI Client Verification**: Simulated `POST /api/marketplace/liqpay-callback` using `TestClient` and confirmed that all state transitions, assignments, and seeded welcome messages are successfully verified.
+- **Deployment**: Successfully redeployed the updated backend service to Fly.io production.
+

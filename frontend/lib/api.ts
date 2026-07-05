@@ -1064,16 +1064,22 @@ export const api = {
     const response = await client.post(`/api/auth/send-password-to-email`, { email });
     return response.data;
   },
-  getSupportMessages: async (profileId: number) => {
+  getSupportMessages: async (profileId: number, roomType?: string, recipientId?: number) => {
     const response = await client.get(`/api/support/messages/${profileId}`, {
-      params: { _t: Date.now() }
+      params: { 
+        _t: Date.now(),
+        room_type: roomType,
+        recipient_id: recipientId
+      }
     });
     return response.data;
   },
-  postSupportMessage: async (profileId: number, text: string) => {
+  postSupportMessage: async (profileId: number, text: string, roomType?: string, recipientId?: number) => {
     const response = await client.post(`/api/support/message`, {
       profile_id: profileId,
-      text: text
+      text: text,
+      room_type: roomType || "company_support",
+      recipient_id: recipientId
     });
     return response.data;
   },
@@ -1084,12 +1090,35 @@ export const api = {
     });
     return response.data;
   },
-  adminReplySupportMessage: async (profileId: number, text: string, token: string) => {
+  adminReplySupportMessage: async (profileId: number, text: string, token: string, roomType?: string, recipientId?: number) => {
     const response = await client.post(`/api/support/reply`, {
       profile_id: profileId,
-      text: text
+      text: text,
+      room_type: roomType || "company_support",
+      recipient_id: recipientId
     }, {
       headers: { Authorization: `Bearer ${token}` }
+    });
+    return response.data;
+  },
+  getPartnerSupportChats: async (roomType: string, recipientId: number, token: string) => {
+    const response = await client.get(`/api/support/partner/chats`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { 
+        room_type: roomType,
+        recipient_id: recipientId,
+        _t: Date.now()
+      }
+    });
+    return response.data;
+  },
+  getClientMarketplaceStatus: async (clientProfileId: number, userId?: number) => {
+    const response = await client.get(`/api/marketplace/client-status`, {
+      params: { 
+        client_profile_id: clientProfileId,
+        user_id: userId,
+        _t: Date.now()
+      }
     });
     return response.data;
   },

@@ -5,7 +5,12 @@ from datetime import date
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+# Try loading .env from current directory, then fallback to parent directory
 load_dotenv()
+if not os.getenv("TELEGRAM_BOT_TOKEN"):
+    parent_env = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(parent_env):
+        load_dotenv(parent_env)
 from telegram.ext import (
     Application,
     CommandHandler,
